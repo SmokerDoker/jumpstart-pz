@@ -22,8 +22,10 @@ try {
     "downloading $($asset.name)"
     $file = Join-Path $work $asset.name
     Invoke-WebRequest -UseBasicParsing $asset.browser_download_url -OutFile $file
-    $expected = ((Invoke-WebRequest -UseBasicParsing $sums.browser_download_url).Content -split "`n" |
-        Where-Object { $_ -match [regex]::Escape($asset.name) + '\s*$' } | Select-Object -First 1) -replace '\s.*$', ''
+    $sumsFile = Join-Path $work "SHA256SUMS.txt"
+    Invoke-WebRequest -UseBasicParsing $sums.browser_download_url -OutFile $sumsFile
+    $expected = (Get-Content $sumsFile | Where-Object { $_ -match (' ' + [regex]::Escape($asset.name) + '\s*$') } |
+        Select-Object -First 1) -replace '\s.*$', ''
     $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLower()
     if (-not $expected -or $expected.Trim().ToLower() -ne $actual) { throw "SHA-256 does not match: expected $expected, got $actual" }
     "SHA-256 ok: $actual"
