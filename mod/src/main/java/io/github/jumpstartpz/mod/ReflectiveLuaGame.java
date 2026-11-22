@@ -14,8 +14,20 @@ final class ReflectiveLuaGame implements LuaLive.Game {
 
     @Override
     public boolean inGame() {
+        if (isServer()) {
+            return true;
+        }
         try {
             return Class.forName("zombie.characters.IsoPlayer").getMethod("getInstance").invoke(null) != null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public boolean isServer() {
+        try {
+            return Class.forName("zombie.network.GameServer").getField("server").getBoolean(null);
         } catch (ReflectiveOperationException | RuntimeException e) {
             return false;
         }

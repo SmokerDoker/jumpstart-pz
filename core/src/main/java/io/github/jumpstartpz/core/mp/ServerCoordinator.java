@@ -26,6 +26,12 @@ import java.util.Set;
  *       questions) and loads it. Then <b>ready</b>, or <b>failed</b> with a reason.</li>
  *   <li>When everybody is ready, or the deadline passed, clients that are not ready are kicked, the
  *       server loads the same jar itself and everybody gets <b>done</b>.</li>
+ *   <li><b>install</b> (admins only) with a Steam Workshop item: the server downloads it first; then
+ *       the same round as an update with action <i>install</i>: every client gets the item, BiteCheck
+ *       checks a Java part, the mod's Java and Lua parts load live; at the end the server loads it
+ *       too and puts it into its mod list (and .ini), so players who join later get it.</li>
+ *   <li><b>change</b> with action <i>remove</i> (admins only): the mod goes off everywhere (Java
+ *       switched off, Lua event handlers stopped) and out of the server's mod list.</li>
  * </ul>
  *
  * Not thread-safe: the game calls it from its server thread only.
@@ -36,8 +42,26 @@ public final class ServerCoordinator<C> {
     public static final String MODULE = "Jumpstart";
     public static final long DEFAULT_DEADLINE_MS = 180_000;
 
-    /** A Java mod of the server. {@code diskSha256} differs from {@code sha256} when a new version is waiting. */
+    /**
+     * A mod of the server. {@code diskSha256} differs from {@code sha256} when a new version is
+     * waiting. A Lua-only mod has no hashes and the state {@link #LUA}.
+     */
     public record ModInfo(String id, String workshopId, String sha256, String diskSha256, String state) {
+        public boolean lua() {
+            return LUA.equals(state);
+        }
+    }
+
+    public static final String LUA = "lua";
+
+    /**
+     * A Workshop item the server downloaded for an install: the mod in it, the hash of its jar and
+     * BiteCheck's verdict on the server ("" for a Lua-only mod), or what went wrong.
+     */
+    public record Fetched(String error, String modId, String sha256, String verdict, boolean java) {
+        public static Fetched failed(String error) {
+            return new Fetched(error, "", "", "", false);
+        }
     }
 
     /** The jar on the server's disk for a mod: what clients must load. */
@@ -63,15 +87,22 @@ public final class ServerCoordinator<C> {
         Candidate candidate(String modId);
 
         /**
-         * Does the change on the server. For an update, {@code adminConfirmed}: the admin who started
-         * it loaded the same hash on their own computer, after BiteCheck's questions. Null when done.
+         * Does the change on the server. For an update or install, {@code adminConfirmed}: the admin
+         * who started it loaded the same hash on their own computer, after BiteCheck's questions.
+         * Null when done.
          */
         String apply(Action action, String modId, String sha256, boolean adminConfirmed);
+
+        /** Starts downloading a Workshop item on the server; null when it started, else why not. */
+        String fetch(String workshopId);
+
+        /** The downloaded item, or null while Steam is still at it. */
+        Fetched fetched(String workshopId);
     }
 
     /** What an admin can do to a Java mod for everybody. */
     public enum Action {
-        UPDATE, OFF, ON;
+        UPDATE, OFF, ON, INSTALL, REMOVE;
 
         public String wire() {
             return name().toLowerCase(java.util.Locale.ROOT);
@@ -91,11 +122,18 @@ public final class ServerCoordinator<C> {
                           Set<Object> expected, Set<Object> ready, Map<Object, String> failed) {
     }
 
+    /** A Workshop item the server downloads before an install round starts. */
+    private record Download(String workshopId, Object admin, long deadline) {
+    }
+
+    public static final long DOWNLOAD_DEADLINE_MS = 10 * 60_000;
+
     private final Port<C> port;
     private final long deadlineMs;
     private final Map<C, String> tokens = new LinkedHashMap<>();
     private final SecureRandom random = new SecureRandom();
     private Update pending;
+    private Download download;
 
     public ServerCoordinator(Port<C> port, long deadlineMs) {
         this.port = Objects.requireNonNull(port);
@@ -103,7 +141,7 @@ public final class ServerCoordinator<C> {
     }
 
     public boolean updateRunning() {
-        return pending != null;
+        return pending != null || download != null;
     }
 
     /** A Jumpstart command from a client (already filtered to this module by the channel). */
@@ -123,6 +161,7 @@ public final class ServerCoordinator<C> {
                     startChange(c, action, args.getOrDefault("mod", ""), now);
                 }
             }
+            case "install" -> startInstall(c, args.getOrDefault("item", "").strip(), now);
             case "ready" -> {
                 if (pending != null && pending.mod().equals(args.get("mod")) && pending.sha256().equals(args.get("sha"))) {
                     pending.ready().add(c);
@@ -159,17 +198,53 @@ public final class ServerCoordinator<C> {
         port.send(c, "welcome", args);
     }
 
-    private void startChange(C admin, Action action, String mod, long now) {
+    private void startInstall(C admin, String item, long now) {
         if (!port.isAdmin(admin)) {
-            note(admin, "only admins can switch Java mods in multiplayer");
+            note(admin, "only admins can install mods in multiplayer");
             return;
         }
+        if (busy(admin)) {
+            return;
+        }
+        if (!item.matches("\\d{1,20}")) {
+            note(admin, "not a Workshop item: " + item);
+            return;
+        }
+        String problem = port.fetch(item);
+        if (problem != null) {
+            note(admin, "the server cannot download " + item + ": " + problem);
+            return;
+        }
+        download = new Download(item, admin, now + DOWNLOAD_DEADLINE_MS);
+        note(admin, "the server downloads Workshop item " + item + " ...");
+    }
+
+    private boolean busy(C admin) {
         if (pending != null) {
             note(admin, "a change of " + pending.mod() + " is running");
+            return true;
+        }
+        if (download != null) {
+            note(admin, "the server is downloading Workshop item " + download.workshopId());
+            return true;
+        }
+        return false;
+    }
+
+    private void startChange(C admin, Action action, String mod, long now) {
+        if (!port.isAdmin(admin)) {
+            note(admin, "only admins can switch mods in multiplayer");
             return;
+        }
+        if (busy(admin)) {
+            return;
+        }
+        if (action == Action.INSTALL) {
+            return; // installs start with the Workshop item (command install)
         }
         String sha;
         String workshop;
+        boolean java = true;
         if (action == Action.UPDATE) {
             Candidate candidate = port.candidate(mod);
             if (candidate == null) {
@@ -185,12 +260,21 @@ public final class ServerCoordinator<C> {
         } else {
             ModInfo info = port.manifest().stream().filter(m -> m.id().equals(mod)).findFirst().orElse(null);
             if (info == null) {
-                note(admin, mod + " is not a Java mod of this server");
+                note(admin, mod + " is not a mod of this server");
+                return;
+            }
+            if (info.lua() && action != Action.REMOVE) {
+                note(admin, mod + " is a Lua mod: it can be installed or removed, not switched");
                 return;
             }
             sha = nz(info.sha256());
             workshop = nz(info.workshopId());
+            java = !info.lua();
         }
+        startRound(admin, action, mod, sha, workshop, java, now);
+    }
+
+    private void startRound(Object admin, Action action, String mod, String sha, String workshop, boolean java, long now) {
         Set<Object> expected = new LinkedHashSet<>(port.connections());
         pending = new Update(action, mod, sha, workshop, admin, now + deadlineMs,
                 expected, new LinkedHashSet<>(), new LinkedHashMap<>());
@@ -200,15 +284,19 @@ public final class ServerCoordinator<C> {
             args.put("mod", mod);
             args.put("sha", sha);
             args.put("workshop", workshop);
+            args.put("java", java ? "1" : "0");
             args.put("seconds", String.valueOf(deadlineMs / 1000));
-            args.put("by", port.name(admin));
+            args.put("by", port.name(cast(admin)));
             args.put("yours", c.equals(admin) ? "1" : "0"); // the admin who started it is not asked again
             port.send(cast(c), "prepare", args);
         }
     }
 
-    /** Every server tick: finishes an update when everybody answered or the deadline passed. */
+    /** Every server tick: follows a download, finishes a round when everybody answered or the deadline passed. */
     public void tick(long now) {
+        if (download != null) {
+            followDownload(now);
+        }
         if (pending == null) {
             return;
         }
@@ -248,6 +336,36 @@ public final class ServerCoordinator<C> {
         for (Object o : u.ready()) {
             port.send(cast(o), "done", args);
         }
+    }
+
+    private void followDownload(long now) {
+        Download d = download;
+        C admin = cast(d.admin());
+        Fetched f = port.fetched(d.workshopId());
+        if (f == null) {
+            if (now >= d.deadline()) {
+                download = null;
+                note(admin, "the server could not download Workshop item " + d.workshopId() + " in time");
+            }
+            return;
+        }
+        download = null;
+        if (f.error() != null) {
+            note(admin, "Workshop item " + d.workshopId() + ": " + f.error());
+            return;
+        }
+        if ("REFUSE".equals(f.verdict())) {
+            note(admin, "BiteCheck blocks " + f.modId() + " on the server");
+            return;
+        }
+        if (port.manifest().stream().anyMatch(m -> m.id().equals(f.modId()))) {
+            note(admin, f.modId() + " is already a mod of this server");
+            return;
+        }
+        if (!port.connections().contains(admin)) {
+            return; // the admin left while the server downloaded
+        }
+        startRound(admin, Action.INSTALL, f.modId(), nz(f.sha256()), d.workshopId(), f.java(), now);
     }
 
     private void note(C c, String text) {

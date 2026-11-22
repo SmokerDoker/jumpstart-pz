@@ -637,6 +637,10 @@ public final class SecureScreen {
         }
         if (p.server()) {
             if (outcome.kind() == LiveInstaller.Kind.DONE) {
+                ClientSession.Update u = session.update;
+                if (u != null && u.action.equals("install")) {
+                    actions.loadLuaForServer(p.mod().id()); // its Lua, which may use the Java part just loaded
+                }
                 session.ready();
                 say(texts.get("mp.waiting"), true);
             } else {
@@ -747,7 +751,13 @@ public final class SecureScreen {
     /** Enter on a library item: subscribe and download it through Steam, then install it. */
     private void startDownload(LibraryClient.Item item, long now) {
         if (session.inMultiplayer()) {
-            say(texts.get("mp.locked"), false);
+            if (session.connected() && session.admin && session.update == null) {
+                // an admin installs for everybody: the server downloads the item, then everybody takes part
+                session.requestInstall(item.id());
+                say(String.format(Locale.ROOT, texts.get("mp.installRequested"), item.title()), true);
+            } else {
+                say(texts.get(session.connected() && !session.admin ? "mp.installAdmin" : "mp.locked"), false);
+            }
             return;
         }
         if (download != null) {
@@ -883,7 +893,7 @@ public final class SecureScreen {
                 say(String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), true);
                 if (u.phase == ClientSession.Phase.CONSENT) {
                     mode = Mode.SERVER_CONSENT;
-                } else if (!u.action.equals("update")) {
+                } else if (!fetches(u)) {
                     switchForServer(u);
                 }
             }
@@ -914,7 +924,11 @@ public final class SecureScreen {
             say(texts.get("mp.tooLate"), false);
             return;
         }
-        if (u.phase != ClientSession.Phase.GETTING || !u.action.equals("update") || lookBusy || now < u.nextLook) {
+        if (u.phase != ClientSession.Phase.GETTING || !fetches(u) || lookBusy || now < u.nextLook) {
+            return;
+        }
+        if (u.action.equals("install")) {
+            followServerInstall(u, now);
             return;
         }
         u.nextLook = now + 2000;
@@ -950,6 +964,66 @@ public final class SecureScreen {
         });
     }
 
+    /**
+     * An install round: get the Workshop item through Steam, then a Java part through BiteCheck
+     * (exactly the server's hash; its Lua follows in run()), or a Lua-only mod straight in.
+     */
+    private void followServerInstall(ClientSession.Update u, long now) {
+        u.nextLook = now + 2000;
+        long item;
+        try {
+            item = Long.parseLong(u.workshopId);
+        } catch (NumberFormatException e) {
+            session.failed("no Workshop item");
+            return;
+        }
+        Workshop ws = actions.workshop();
+        long state = ws.state(item);
+        boolean ready = (state & Workshop.INSTALLED) != 0
+                && (state & (Workshop.DOWNLOADING | Workshop.DOWNLOAD_PENDING | Workshop.NEEDS_UPDATE)) == 0;
+        if (!ready) {
+            if (!u.downloadRequested && ws.unavailableReason() == null) {
+                u.downloadRequested = true;
+                ws.subscribeAndDownload(item);
+            }
+            u.status = texts.get("mp.missing");
+            return;
+        }
+        String folder = ws.installFolder(item);
+        Actions.FolderMod mod = folder == null ? null
+                : actions.modsInFolder(folder).stream().filter(m -> m.id().equals(u.mod)).findFirst().orElse(null);
+        if (mod == null) {
+            u.status = texts.get("mp.missing");
+            return;
+        }
+        if (!u.java || mod.java() == null) {
+            LuaLive.Result r = actions.loadLuaForServer(u.mod);
+            if (r.status() == LuaLive.Status.FAILED) {
+                session.failed("Lua: " + String.join("; ", r.errors()));
+                say(describeLua(mod.name(), r), false);
+                return;
+            }
+            refreshStates();
+            session.ready();
+            say(describeLua(mod.name(), r) + "  " + texts.get("mp.waiting"), true);
+            return;
+        }
+        lookBusy = true;
+        inBackground(() -> actions.check(mod.java().jar()), result -> {
+            lookBusy = false;
+            if (session.update != u || u.phase != ClientSession.Phase.GETTING) {
+                return;
+            }
+            if (result instanceof BiteCheckGate.Check check && check.sha256().equals(u.sha256)) {
+                u.phase = ClientSession.Phase.ASKING;
+                u.status = texts.get("mp.checking");
+                start(mod.java(), frameTime, true);
+            } else {
+                u.status = texts.get("mp.otherVersion");
+            }
+        });
+    }
+
     private void onServer(Set<Integer> pressed) {
         List<ClientSession.ServerMod> list = session.serverMods;
         if (pressed.contains(KEY_UP) && serverSelected > 0) {
@@ -962,12 +1036,17 @@ public final class SecureScreen {
             session.refresh();
         }
         boolean enter = pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
-        if ((enter || pressed.contains(KEY_A)) && !list.isEmpty() && session.update == null) {
+        boolean remove = pressed.contains(KEY_U);
+        if ((enter || pressed.contains(KEY_A) || remove) && !list.isEmpty() && session.update == null) {
             if (!session.admin) {
                 say(texts.get("mp.notAdmin"), false);
             } else {
                 ClientSession.ServerMod mod = list.get(Math.min(serverSelected, list.size() - 1));
-                String action = enter ? "update" : mod.state().equals("off") ? "on" : "off";
+                if (!remove && mod.lua()) {
+                    say(texts.get("mp.luaOnlyRemove"), false);
+                    return;
+                }
+                String action = remove ? "remove" : enter ? "update" : mod.state().equals("off") ? "on" : "off";
                 session.requestChange(action, mod.id());
                 say(String.format(Locale.ROOT, texts.get("mp.requested"), actionText(action), mod.id()), true);
             }
@@ -996,7 +1075,7 @@ public final class SecureScreen {
             return;
         }
         mode = Mode.LIST;
-        if (u.action.equals("update")) {
+        if (fetches(u)) {
             u.phase = ClientSession.Phase.GETTING;
             u.nextLook = 0;
         } else {
@@ -1004,11 +1083,22 @@ public final class SecureScreen {
         }
     }
 
+    /** Update and install need the server's files first; off, on and remove switch right away. */
+    private static boolean fetches(ClientSession.Update u) {
+        return u.action.equals("update") || u.action.equals("install");
+    }
+
     /** Off / on for the server: the same switch as the installed tab, then the answer. */
     private void switchForServer(ClientSession.Update u) {
         String state = actions.stateOf(u.mod);
         String result;
-        if (state.equals("not loaded")) {
+        if (u.action.equals("remove")) {
+            // off here (Java switched off, Lua's event handlers stopped); the files stay
+            result = state.equals("on") ? actions.off(u.mod) : "OK";
+            if (result.startsWith("OK")) {
+                actions.unloadLuaForServer(u.mod);
+            }
+        } else if (state.equals("not loaded")) {
             result = u.action.equals("off") ? "OK" : "FAILED " + u.mod + " is not loaded here";
         } else if (u.action.equals("off")) {
             result = state.equals("off") ? "OK" : actions.off(u.mod);
@@ -1079,6 +1169,13 @@ public final class SecureScreen {
                 game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
             game.text(GameScreen.Font.MEDIUM, x, y, m.id(), 1f, 1f, 1f, 1f);
+            if (m.lua()) {
+                String right = "Lua";
+                int w = game.textWidth(GameScreen.Font.SMALL, right);
+                game.text(GameScreen.Font.SMALL, x + width - w, y + 2, right, 0.55f, 0.8f, 1f, 1f);
+                y += line;
+                continue;
+            }
             ModEntry mine = local.get(m.id());
             BiteCheckGate.Check c = mine == null ? null : checks.computeIfAbsent(mine.jar(), this::checkQuietly);
             String here = mine == null ? texts.get("mp.missingHere")

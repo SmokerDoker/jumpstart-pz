@@ -140,6 +140,71 @@ class ServerCoordinatorTest {
         return port.last(c, "welcome").get("token");
     }
 
+    @Test
+    void anAdminInstallsAWorkshopModForEverybodyAfterTheServerDownloadedIt() {
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "3827957976"), 0);
+        assertEquals(List.of("3827957976"), port.fetching);
+        assertTrue(server.updateRunning(), "busy while the server downloads");
+        server.tick(1000);
+        assertNull(port.last("anna", "prepare"), "nobody is asked before the server has the item");
+        port.fetched = new ServerCoordinator.Fetched(null, "RealLimbs", NEW, "CONFIRM", true);
+        server.tick(2000);
+        Map<String, String> p = port.last("anna", "prepare");
+        assertEquals("install", p.get("action"));
+        assertEquals("RealLimbs", p.get("mod"));
+        assertEquals("3827957976", p.get("workshop"));
+        assertEquals("1", p.get("java"));
+        for (String c : List.of("admin", "anna", "ben")) {
+            server.onCommand(c, "ready", Map.of("token", token(c), "mod", "RealLimbs", "sha", NEW), 3);
+        }
+        server.tick(4000);
+        assertEquals(List.of("INSTALL RealLimbs " + NEW + " admin=true"), port.applied);
+        assertEquals("1", port.last("ben", "done").get("ok"));
+    }
+
+    @Test
+    void aLuaModInstallsWithoutAHash() {
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "456"), 0);
+        port.fetched = new ServerCoordinator.Fetched(null, "Minimap", "", "", false);
+        server.tick(1);
+        assertEquals("0", port.last("anna", "prepare").get("java"));
+        for (String c : List.of("admin", "anna", "ben")) {
+            server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Minimap", "sha", ""), 2);
+        }
+        server.tick(3);
+        assertEquals(List.of("INSTALL Minimap  admin=true"), port.applied);
+    }
+
+    @Test
+    void onlyAdminsInstallAndABlockedJarIsNotOffered() {
+        server.onCommand("anna", "install", Map.of("token", token("anna"), "item", "1"), 0);
+        assertTrue(port.fetching.isEmpty());
+        assertTrue(port.last("anna", "note").get("text").contains("only admins"));
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "not a number"), 0);
+        assertTrue(port.fetching.isEmpty());
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "9"), 0);
+        port.fetched = new ServerCoordinator.Fetched(null, "Evil", NEW, "REFUSE", true);
+        server.tick(1);
+        assertNull(port.last("anna", "prepare"));
+        assertTrue(port.last("admin", "note").get("text").contains("BiteCheck blocks Evil"));
+        assertFalse(server.updateRunning());
+    }
+
+    @Test
+    void anAdminRemovesALuaModForEverybody() {
+        port.withLuaMod = true;
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "off", "mod", "Minimap"), 0);
+        assertNull(port.last("anna", "prepare"), "Lua mods are not switched off and on, only removed");
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "remove", "mod", "Minimap"), 0);
+        assertEquals("remove", port.last("anna", "prepare").get("action"));
+        assertEquals("0", port.last("anna", "prepare").get("java"));
+        for (String c : List.of("admin", "anna", "ben")) {
+            server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Minimap", "sha", ""), 1);
+        }
+        server.tick(2);
+        assertEquals(List.of("REMOVE Minimap  admin=true"), port.applied);
+    }
+
     private void ready(String c) {
         server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Mod", "sha", NEW), 1);
     }
@@ -169,7 +234,12 @@ class ServerCoordinatorTest {
         @Override public List<String> connections() { return List.copyOf(connections); }
         @Override public String name(String c) { return c; }
         @Override public List<ServerCoordinator.ModInfo> manifest() {
-            return List.of(new ServerCoordinator.ModInfo("Mod", "123", "a".repeat(64), NEW, "on"));
+            List<ServerCoordinator.ModInfo> mods = new ArrayList<>();
+            mods.add(new ServerCoordinator.ModInfo("Mod", "123", "a".repeat(64), NEW, "on"));
+            if (withLuaMod) {
+                mods.add(new ServerCoordinator.ModInfo("Minimap", "456", "", "", ServerCoordinator.LUA));
+            }
+            return mods;
         }
         @Override public ServerCoordinator.Candidate candidate(String modId) {
             return modId.equals("Mod") ? new ServerCoordinator.Candidate(NEW, "123", verdict) : null;
@@ -177,6 +247,18 @@ class ServerCoordinatorTest {
         @Override public String apply(ServerCoordinator.Action action, String modId, String sha256, boolean adminConfirmed) {
             applied.add(action + " " + modId + " " + sha256 + " admin=" + adminConfirmed);
             return null;
+        }
+
+        final List<String> fetching = new ArrayList<>();
+        ServerCoordinator.Fetched fetched;
+        boolean withLuaMod;
+
+        @Override public String fetch(String workshopId) {
+            fetching.add(workshopId);
+            return null;
+        }
+        @Override public ServerCoordinator.Fetched fetched(String workshopId) {
+            return fetched;
         }
     }
 }

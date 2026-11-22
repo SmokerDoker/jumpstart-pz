@@ -20,6 +20,11 @@ interface Workshop {
     /** Subscribes to the item and asks Steam to download it now. */
     boolean subscribeAndDownload(long itemId);
 
+    /** Only downloads the item (a server: it has no Steam account to subscribe with). */
+    default boolean download(long itemId) {
+        return subscribeAndDownload(itemId);
+    }
+
     /** The item's folder once it is installed, else null. */
     String installFolder(long itemId);
 }

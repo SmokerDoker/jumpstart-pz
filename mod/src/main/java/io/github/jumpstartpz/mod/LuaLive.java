@@ -32,12 +32,29 @@ final class LuaLive {
         }
     }
 
+    /** Where the Lua runs: each side runs other folders of the mod (as the game does at the start). */
+    enum Side {
+        SINGLE_PLAYER(List.of("shared", "client", "server")),
+        CLIENT(List.of("shared", "client")),
+        SERVER(List.of("shared", "server"));
+
+        final List<String> folders;
+
+        Side(List<String> folders) {
+            this.folders = folders;
+        }
+    }
+
     /** The running game. {@link ReflectiveLuaGame} is PZ; tests use a fake. */
     interface Game {
-        /** A save is loaded (not the main menu). */
+        /** A save is loaded (not the main menu), or this is a running server. */
         boolean inGame();
 
+        /** A multiplayer client. */
         boolean multiplayer();
+
+        /** A server (dedicated or hosted). */
+        boolean isServer();
 
         /** The mod is in the running game's mod list already (its Lua ran at the start). */
         boolean isActive(String modId);
@@ -80,11 +97,21 @@ final class LuaLive {
     private LuaLive() {
     }
 
+    /** A single player game; a multiplayer client only with {@code forServer} (see the other load). */
     static Result load(Game game, String modId, String modDir) {
+        return load(game, modId, modDir, false);
+    }
+
+    /**
+     * @param forServer the server asked everybody to install this mod (Jumpstart's multiplayer round);
+     *                  without it a multiplayer client loads nothing alone
+     */
+    static Result load(Game game, String modId, String modDir, boolean forServer) {
         if (!game.inGame()) {
             return Result.of(Status.NOT_IN_GAME);
         }
-        if (game.multiplayer()) {
+        Side side = game.isServer() ? Side.SERVER : game.multiplayer() ? Side.CLIENT : Side.SINGLE_PLAYER;
+        if (side == Side.CLIENT && !forServer) {
             return Result.of(Status.MULTIPLAYER);
         }
         if (game.isActive(modId)) {
@@ -97,7 +124,7 @@ final class LuaLive {
             return new Result(Status.FAILED, 0, List.of(String.valueOf(e)), List.of());
         }
         List<String> restart = needsRestart(files.keySet());
-        List<String> lua = luaOrder(files, true);
+        List<String> lua = luaOrder(files, side);
         if (lua.isEmpty()) {
             return new Result(Status.NO_LUA, 0, List.of(), restart);
         }
@@ -119,6 +146,9 @@ final class LuaLive {
         }
         Map<String, List<Object>> after = game.handlers(START_EVENTS);
         for (String event : START_EVENTS) {
+            if (side == Side.SERVER && event.equals("OnCreatePlayer")) {
+                continue; // a server has no local player
+            }
             Set<Object> old = Collections.newSetFromMap(new IdentityHashMap<>());
             old.addAll(before.getOrDefault(event, List.of()));
             for (Object handler : after.getOrDefault(event, List.of())) {
@@ -135,10 +165,10 @@ final class LuaLive {
         return new Result(Status.LOADED, lua.size(), errors, restart);
     }
 
-    /** The Lua files to run: shared, client, then server (single player runs all three), each sorted. */
-    static List<String> luaOrder(Map<String, String> files, boolean withServer) {
+    /** The Lua files to run: the side's folders in the game's order (shared, client, server), each sorted. */
+    static List<String> luaOrder(Map<String, String> files, Side side) {
         List<String> order = new ArrayList<>();
-        for (String folder : withServer ? List.of("shared", "client", "server") : List.of("shared", "client")) {
+        for (String folder : side.folders) {
             String prefix = "media/lua/" + folder + "/";
             List<String> keys = new ArrayList<>();
             for (String key : files.keySet()) {

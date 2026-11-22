@@ -67,6 +67,12 @@ interface Actions {
     /** Stops a running mod's Lua: takes its event handlers away (kept for {@link #loadLua}); returns how many. */
     int unloadLua(String modId);
 
+    /** {@link #loadLua} in a multiplayer round the server started (install for everybody). */
+    LuaLive.Result loadLuaForServer(String modId);
+
+    /** {@link #unloadLua} in a multiplayer round the server started (remove for everybody). */
+    int unloadLuaForServer(String modId);
+
     /**
      * Uninstalls a mod after the player's two yeses: off, out of every mod list, then the files go:
      * a Workshop item's Steam page opens to unsubscribe (Steam deletes it), a local mod folder moves

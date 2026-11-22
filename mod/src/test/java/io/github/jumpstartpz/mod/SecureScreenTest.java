@@ -383,7 +383,7 @@ class SecureScreenTest {
         assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode(), "the server opened the screen and the player is asked");
         assertEquals(SecureScreen.Tab.SERVER, screen.tab());
         assertTrue(link.paused);
-        assertTrue(game.drew("Admin admin changes a Java mod for everybody"));
+        assertTrue(game.drew("Admin admin changes a mod for everybody"));
         tap(SecureScreen.KEY_J); // too early
         assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode());
         tap(SecureScreen.KEY_N);
@@ -426,6 +426,91 @@ class SecureScreenTest {
     }
 
     @Test
+    void anAdminInstallsFromTheLibraryForEverybodyAndOthersCannot() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        type("x");
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals("install {item=111, token=T}", link.sent.get(link.sent.size() - 1));
+        assertTrue(actions.workshop.subscribed.isEmpty(), "the server downloads first; nothing here yet");
+        assertTrue(screen.describe().contains("install Java Mod One for everybody"), screen.describe());
+
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
+        link.sent.clear();
+        tap(SecureScreen.KEY_ENTER);
+        assertTrue(link.sent.isEmpty(), "a player who is not an admin installs nothing");
+        assertTrue(screen.describe().contains("only an admin installs"), screen.describe());
+    }
+
+    @Test
+    void aPlayerTakesPartInALuaInstallRound() {
+        actions.folders.put("/workshop/201", List.of(new Actions.FolderMod("LuaMod", "Lua Mod", null)));
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "install", "mod", "LuaMod", "sha", "", "workshop", "201",
+                "java", "0", "seconds", "60", "by", "admin", "yours", "0"));
+        frame();
+        assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode());
+        now += SecureScreen.CONSENT_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        frame();
+        assertEquals(List.of(201L), actions.workshop.subscribed, "Steam brings the item");
+        assertTrue(actions.luaLoaded.isEmpty(), "nothing loads before Steam has it");
+        actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        now += 2500;
+        frame();
+        assertEquals(List.of("server:LuaMod"), actions.luaLoaded, "its Lua joins the running game");
+        assertEquals("ready {mod=LuaMod, sha=, token=T}", link.sent.get(link.sent.size() - 1));
+    }
+
+    @Test
+    void aJavaInstallRoundGoesThroughBiteCheckThenLoadsTheLua() {
+        actions.folders.put("/workshop/111", List.of(new Actions.FolderMod("Unknown", "B unknown mod", UNKNOWN)));
+        actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "install", "mod", "Unknown", "sha", "unknown.jar", "workshop", "111",
+                "java", "1", "seconds", "60", "by", "me", "yours", "1"));
+        frame();
+        frame();
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "BiteCheck asks about the unknown jar");
+        now += SecureScreen.FIRST_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
+        assertEquals(List.of("server:Unknown"), actions.luaLoaded, "then its Lua part");
+        assertEquals("ready {mod=Unknown, sha=unknown.jar, token=T}", link.sent.get(link.sent.size() - 1));
+    }
+
+    @Test
+    void anAdminRemovesAModForEverybody() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", "Minimap\t201\t\t\tlua\n"));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        assertEquals(SecureScreen.Tab.SERVER, screen.tab());
+        tap(SecureScreen.KEY_A);
+        assertTrue(screen.describe().contains("removed with U"), "a Lua mod has no off/on for everybody: " + screen.describe());
+        tap(SecureScreen.KEY_U);
+        assertEquals("change {action=remove, mod=Minimap, token=T}", link.sent.get(link.sent.size() - 1));
+
+        screen.onServerCommand("prepare", Map.of("action", "remove", "mod", "Minimap", "sha", "", "workshop", "201",
+                "java", "0", "seconds", "60", "by", "me", "yours", "1"));
+        frame();
+        assertEquals(List.of("server:Minimap"), actions.unloaded, "its Lua stops here too");
+        assertEquals("ready {mod=Minimap, sha=, token=T}", link.sent.get(link.sent.size() - 1));
+    }
+
+    @Test
     void anAdminSwitchesAModOffForEverybody() {
         actions.states.put("Verified", "on");
         link.connected = true;
@@ -449,7 +534,7 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_ENTER);
         assertEquals("on", actions.states.get("Verified"));
         assertTrue(actions.calls.isEmpty());
-        assertTrue(screen.describe().contains("only an admin switches"), screen.describe());
+        assertTrue(screen.describe().contains("only an admin installs or switches"), screen.describe());
     }
 
     @Test
@@ -566,6 +651,18 @@ class SecureScreenTest {
         public int unloadLua(String modId) {
             unloaded.add(modId);
             return 3;
+        }
+
+        @Override
+        public LuaLive.Result loadLuaForServer(String modId) {
+            luaLoaded.add("server:" + modId);
+            return lua.getOrDefault(modId, new LuaLive.Result(LuaLive.Status.LOADED, 1, List.of(), List.of()));
+        }
+
+        @Override
+        public int unloadLuaForServer(String modId) {
+            unloaded.add("server:" + modId);
+            return 2;
         }
 
         @Override

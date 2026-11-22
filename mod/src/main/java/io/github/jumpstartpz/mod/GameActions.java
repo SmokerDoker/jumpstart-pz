@@ -151,6 +151,31 @@ final class GameActions implements Actions {
         }
     }
 
+    /** The folder of a mod the game knows (Workshop or local), or null. */
+    String modDirOf(String id) {
+        String dir = downloadedModDirs.get(id);
+        if (dir != null) {
+            return dir;
+        }
+        try {
+            Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("getAvailableModDetails", String.class).invoke(null, id);
+            return info == null ? null : (String) info.getClass().getMethod("getDir").invoke(info);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** Tells the game where a mod is (a folder it has not listed yet, for example a fresh download). */
+    void registerModDir(String id, String dir) {
+        downloadedModDirs.put(id, dir);
+        try {
+            Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+            fs.getClass().getMethod("setModIdToDir", String.class, String.class).invoke(fs, id, dir);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot register " + id + ": " + e);
+        }
+    }
+
     /** A mod by id with the jar a client loads (also on a server), or null. */
     FolderMod clientModById(String id) {
         try {
@@ -321,20 +346,38 @@ final class GameActions implements Actions {
 
     @Override
     public LuaLive.Result loadLua(String modId) {
+        return loadLua(modId, false);
+    }
+
+    @Override
+    public LuaLive.Result loadLuaForServer(String modId) {
+        return loadLua(modId, true);
+    }
+
+    private LuaLive.Result loadLua(String modId, boolean forServer) {
         Map<String, List<Object>> parked = parkedLua.remove(modId);
         if (parked != null) {
             luaGame.giveBack(parked);
             return LuaLive.Result.of(LuaLive.Status.RESUMED);
         }
         String dir = downloadedModDirs.get(modId);
-        LuaLive.Result result = LuaLive.load(luaGame, modId, dir);
+        LuaLive.Result result = LuaLive.load(luaGame, modId, dir, forServer);
         System.out.println("[Jumpstart] Lua of " + modId + ": " + result);
         return result;
     }
 
     @Override
     public int unloadLua(String modId) {
-        if (!luaGame.inGame() || luaGame.multiplayer() || !luaGame.isActive(modId) || parkedLua.containsKey(modId)) {
+        return unloadLua(modId, false);
+    }
+
+    @Override
+    public int unloadLuaForServer(String modId) {
+        return unloadLua(modId, true);
+    }
+
+    private int unloadLua(String modId, boolean forServer) {
+        if (!luaGame.inGame() || (luaGame.multiplayer() && !forServer) || !luaGame.isActive(modId) || parkedLua.containsKey(modId)) {
             return 0;
         }
         Map<String, List<Object>> taken = luaGame.takeHandlers(luaGame.modDirs(modId));
@@ -478,18 +521,36 @@ final class GameActions implements Actions {
             }
         }
 
+        private Object callback(Class<?> cb) {
+            if (callback == null) {
+                // Steam reports back through this; Jumpstart polls the item state instead
+                callback = Proxy.newProxyInstance(cb.getClassLoader(), new Class<?>[] {cb}, (proxy, method, args) ->
+                        method.getName().equals("hashCode") ? System.identityHashCode(proxy)
+                                : method.getName().equals("equals") ? proxy == args[0]
+                                : method.getName().equals("toString") ? "Jumpstart" : null);
+            }
+            return callback;
+        }
+
+        @Override
+        public boolean download(long itemId) {
+            try {
+                Object ws = instance();
+                Class<?> cb = Class.forName("zombie.core.znet.ISteamWorkshopCallback");
+                Method download = ws.getClass().getMethod("DownloadItem", long.class, boolean.class, cb);
+                return (Boolean) download.invoke(ws, itemId, true, callback(cb));
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.out.println("[Jumpstart] Steam download failed: " + e);
+                return false;
+            }
+        }
+
         @Override
         public boolean subscribeAndDownload(long itemId) {
             try {
                 Object ws = instance();
                 Class<?> cb = Class.forName("zombie.core.znet.ISteamWorkshopCallback");
-                if (callback == null) {
-                    // Steam reports back through this; Jumpstart polls the item state instead
-                    callback = Proxy.newProxyInstance(cb.getClassLoader(), new Class<?>[] {cb}, (proxy, method, args) ->
-                            method.getName().equals("hashCode") ? System.identityHashCode(proxy)
-                                    : method.getName().equals("equals") ? proxy == args[0]
-                                    : method.getName().equals("toString") ? "Jumpstart" : null);
-                }
+                callback(cb);
                 Method subscribe = ws.getClass().getMethod("SubscribeItem", long.class, cb);
                 Method download = ws.getClass().getMethod("DownloadItem", long.class, boolean.class, cb);
                 boolean ok = (Boolean) subscribe.invoke(ws, itemId, callback);

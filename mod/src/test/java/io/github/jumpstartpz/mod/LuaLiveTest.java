@@ -62,6 +62,24 @@ class LuaLiveTest {
     }
 
     @Test
+    void inMultiplayerOnlyForTheServerAndEachSideRunsItsOwnFolders() {
+        FakeGame client = new FakeGame();
+        client.multiplayer = true;
+        client.files.put("media/lua/shared/a.lua", "/m/shared/a.lua");
+        client.files.put("media/lua/client/b.lua", "/m/client/b.lua");
+        client.files.put("media/lua/server/c.lua", "/m/server/c.lua");
+        assertEquals(LuaLive.Status.MULTIPLAYER, LuaLive.load(client, "M", "/m").status(), "never alone");
+        assertEquals(LuaLive.Status.LOADED, LuaLive.load(client, "M", "/m", true).status());
+        assertEquals(List.of("/m/shared/a.lua", "/m/client/b.lua"), client.ran);
+
+        FakeGame server = new FakeGame();
+        server.server = true;
+        server.files.putAll(client.files);
+        assertEquals(LuaLive.Status.LOADED, LuaLive.load(server, "M", "/m", true).status());
+        assertEquals(List.of("/m/shared/a.lua", "/m/server/c.lua"), server.ran);
+    }
+
+    @Test
     void aBrokenFileDoesNotStopTheOthers() {
         FakeGame game = new FakeGame();
         game.files.put("media/lua/client/a.lua", "/m/a.lua");
@@ -96,6 +114,8 @@ class LuaLiveTest {
 
         @Override public boolean inGame() { return inGame; }
         @Override public boolean multiplayer() { return multiplayer; }
+        boolean server;
+        @Override public boolean isServer() { return server; }
         @Override public boolean isActive(String modId) { return active; }
 
         @Override

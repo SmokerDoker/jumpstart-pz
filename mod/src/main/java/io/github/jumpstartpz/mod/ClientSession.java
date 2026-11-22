@@ -16,6 +16,10 @@ final class ClientSession {
         boolean updateWaiting() {
             return !diskSha256.isEmpty() && !diskSha256.equals(sha256);
         }
+
+        boolean lua() {
+            return "lua".equals(state);
+        }
     }
 
     /** CONSENT: the player has to agree first (everybody except the admin who started it). */
@@ -31,6 +35,8 @@ final class ClientSession {
         final String workshopId;
         final String by;
         final long deadline;
+        /** Install or remove: whether the mod has a Java part (a Lua-only mod has no hash). */
+        boolean java = true;
         Phase phase = Phase.GETTING;
         boolean downloadRequested;
         long nextLook;
@@ -117,6 +123,7 @@ final class ClientSession {
                         args.getOrDefault("mod", ""), args.getOrDefault("sha", ""),
                         args.getOrDefault("workshop", ""), args.getOrDefault("by", "?"), now + seconds * 1000);
                 update.since = now;
+                update.java = !"0".equals(args.get("java"));
                 link.pause(true);
                 return "prepare";
             }
@@ -137,7 +144,14 @@ final class ClientSession {
         }
     }
 
-    /** Admins: "update", "off" or "on" for everybody. */
+    /** Admins: install a Steam Workshop item for everybody (the server downloads it first). */
+    void requestInstall(long workshopId) {
+        if (token != null) {
+            link.send("install", Map.of("token", token, "item", Long.toString(workshopId)));
+        }
+    }
+
+    /** Admins: "update", "off", "on" or "remove" for everybody. */
     void requestChange(String action, String mod) {
         if (token != null) {
             link.send("change", Map.of("token", token, "action", action, "mod", mod));
