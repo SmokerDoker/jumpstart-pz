@@ -624,8 +624,11 @@ public final class SecureScreen {
         luaAfterJava = null;
         if (!p.server() && outcome.kind() == LiveInstaller.Kind.DONE) {
             // the Java part runs: the mod joins the mod list, then its Lua part, which may use the Java part
-            actions.activate(p.mod().id());
-            String title = lua != null && lua[0].equals(p.mod().id()) ? lua[1] : p.mod().name();
+            boolean downloaded = lua != null && lua[0].equals(p.mod().id());
+            if (!downloaded) {
+                actions.activate(p.mod().id()); // a download enabled it already
+            }
+            String title = downloaded ? lua[1] : p.mod().name();
             String note = luaNote(title, actions.loadLua(p.mod().id()));
             if (!note.isEmpty()) {
                 say(outcome.kind() + " " + outcome.message() + "  " + note, true);
