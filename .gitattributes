@@ -1,5 +1,2 @@
-* text=auto
-*.bat text eol=crlf
+# shell scripts must keep LF line endings (the kit is built on Windows, run on macOS/Linux)
 *.sh text eol=lf
-gradlew text eol=lf
-*.jar binary
