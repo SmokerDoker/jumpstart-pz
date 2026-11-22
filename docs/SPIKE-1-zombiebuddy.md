@@ -50,10 +50,12 @@ What the fork adds:
 | Agent option `hotswap=true` | Advice-only jars get one retransformable transformer without class format changes, also for classes that load later. |
 | `Hotswap` (Java and Lua: `ZombieBuddy.Hotswap`) | `off`/`on` per mod, `status`, and `load` for a jar that was not loaded at start. |
 | `Hotswap.load` checks `mod_approvals.json` | A jar loads at runtime only if its SHA-256 is approved there (by ZombieBuddy, BiteCheck or Jumpstart). No prompt at runtime. |
+| `Hotswap.update` | Replaces a loaded mod with a new version: the new classes move to `jsv<n>.<package>`, the old version is switched off first and back on if the new one fails. |
 | No self-update from upstream jars | A Zed-signed ZombieBuddy.jar from the Workshop no longer replaces the fork. |
 
 Tested in the fork's `test_hotswap` task (Java agent with `hotswap=true`): a patch on a class
-loaded after start switched off and on 50 times, and a jar loaded at runtime only after approval.
+loaded after start switched off and on 50 times, a jar loaded at runtime only after approval, and
+a mod updated from version 1 to 2 and back at runtime.
 
 ## What this means for Jumpstart
 
@@ -64,9 +66,8 @@ loaded after start switched off and on 50 times, and a jar loaded at runtime onl
 
 ## Open
 
-- **Updates live:** regular mod jars are defined in ZombieBuddy's own class loader, so a newer
-  version with the same class names cannot be loaded next to the old one. `Hotswap.load` refuses
-  that case today. Fix: load live jars into their own class loader, or rename their classes per
-  version.
+- **Updates live, side effects:** `Hotswap.update` works, but the old version's classes and
+  static state stay in memory, class names built as strings are not moved, and what the old
+  `main()` registered is not undone. Undoing that is the journal's job in Jumpstart.
 - **MethodDelegation patches** stay until restart.
 - **In-game test** with ZBHelloWorld: see `TESTING.md` in the fork.

@@ -54,7 +54,8 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
 - [x] ZombieBuddy fork with a hotswap API:
   [zombiebuddy-jumpstart](https://github.com/SmokerDoker/zombiebuddy-jumpstart), tested with a Java agent
 - [ ] Same in the game with ZBHelloWorld (test guide: `TESTING.md` in the fork)
-- [ ] Live updates of a mod that is already loaded
+- [x] Load new mods and update loaded ones at runtime (fork: `Hotswap.load` / `Hotswap.update`,
+  only with approval in `mod_approvals.json`)
 - [ ] BiteCheck gate
 
 ## Build
