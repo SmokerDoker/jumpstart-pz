@@ -61,8 +61,13 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   unverified asks once, flagged or suspicious asks twice, blocked never loads), with the
   launcher's keys, index, cache and state; tested in the game against the real registry index
   (`tools\gametest.ps1`, 18 of 18 checks)
-- [x] The Jumpstart mod (`mod/`): Lua API `Jumpstart.status/check/install/update/refreshIndex`
-- [ ] In-game UI for installs and confirmations
+- [x] The Jumpstart mod (`mod/`): Lua API `Jumpstart.status/check/install/update/stateOf/off/on/javaModOf/refreshIndex`
+- [x] In-game window: every Java mod in your mod folders with its state and BiteCheck verdict,
+  buttons to load it live, switch it off and on, reload its jar and update the BiteCheck index.
+  Opens with the *Jumpstart* button on the main menu or Ctrl+J in game. Confirmations come from
+  a native window in Java (like ZombieBuddy's approval), never from Lua, so no other mod can
+  click them away. Tested in the game (`tools\gametest.ps1`, 37 of 37 checks; the test answers
+  "no" through `-Djumpstart.autoConsent=no` instead of the window)
 - [ ] Marketplace: Workshop search and updates
 
 ## Build
@@ -72,14 +77,15 @@ git submodule update --init      # BiteCheck, pinned in third_party/
 ./gradlew check :mod:modFolder   # tests, and the mod folder in mod/build/mod/Jumpstart
 ```
 
-Needs JDK 21 or newer. Project Zomboid itself runs on Java 25. In-game test (Windows, Steam
+Needs JDK 21 to 24 with the wrapper (Gradle 8.14); with JDK 25 use Gradle 9. Project Zomboid
+itself runs on Java 25. In-game test (Windows, Steam
 running, the fork built next to this repository): `tools\gametest.ps1`.
 
 ## Repository layout
 
 ```
 core/          BiteCheck gate, LiveInstaller, hotswap engine (planned next to it: market, mp)
-mod/           The Jumpstart mod for Project Zomboid (Lua API)
+mod/           The Jumpstart mod for Project Zomboid (Lua API and window)
 third_party/   BiteCheck (git submodule)
 tools/         In-game test
 docs/          Design notes and spike results

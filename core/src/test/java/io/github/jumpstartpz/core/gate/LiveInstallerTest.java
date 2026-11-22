@@ -114,6 +114,41 @@ class LiveInstallerTest {
     }
 
     @Test
+    void asksThePlayerOnlyWhenBiteCheckWantsIt() throws Exception {
+        LiveInstaller installer = installer(GENERATED);
+        List<BiteCheckGate.Check> asked = new ArrayList<>();
+        LiveInstaller.ConsentSource player = check -> {
+            asked.add(check);
+            return Consent.CONFIRMED;
+        };
+
+        assertEquals(LiveInstaller.Kind.DONE, installer.install(verifiedJar, "pkg", "VerifiedMod", null, player).kind());
+        assertTrue(asked.isEmpty(), "a verified jar needs no question");
+
+        assertEquals(LiveInstaller.Kind.DONE, installer.install(cleanJar, "pkg", "CleanMod", null, player).kind());
+        assertEquals(1, asked.size());
+        assertEquals(BiteCheckGate.Verdict.CONFIRM, asked.get(0).verdict());
+        assertEquals(cleanJar, asked.get(0).jar(), "the player is asked about the jar that gets approved");
+    }
+
+    @Test
+    void aPlayerWhoSaysNoGetsNothingLoadedOrApproved() throws Exception {
+        LiveInstaller.Outcome outcome = installer(GENERATED).install(cleanJar, "pkg", "CleanMod", null,
+                (LiveInstaller.ConsentSource) check -> null);
+        assertEquals(LiveInstaller.Kind.DECLINED, outcome.kind());
+        assertTrue(backend.calls.isEmpty());
+        assertFalse(Files.exists(zombieBuddyDir.resolve("mod_approvals.json")), "nothing recorded");
+    }
+
+    @Test
+    void oneConfirmationIsNotEnoughForASuspiciousJarEvenFromThePlayer() throws Exception {
+        LiveInstaller.Outcome outcome = installer(GENERATED).install(shadyJar, "pkg", "ShadyMod", null,
+                (LiveInstaller.ConsentSource) check -> Consent.CONFIRMED);
+        assertEquals(LiveInstaller.Kind.NEEDS_CONFIRMATION, outcome.kind());
+        assertTrue(backend.calls.isEmpty());
+    }
+
+    @Test
     void asksTwiceForAFlaggedJar() throws Exception {
         LiveInstaller.Outcome outcome = installer(GENERATED).install(flaggedJar, "pkg", "FlaggedMod", null, Consent.CONFIRMED);
         assertEquals(LiveInstaller.Kind.NEEDS_CONFIRMATION, outcome.kind());

@@ -61,6 +61,42 @@ public final class ZombieBuddyFork implements HotswapBackend {
         }
     }
 
+    /** "on", "on, until restart", "off" or "not loaded"; null when this ZombieBuddy cannot tell. */
+    public String stateOf(String modId) {
+        return callStrings("stateOf", modId);
+    }
+
+    /** Switches a live-switchable mod off; returns ZombieBuddy's one-line result. */
+    public String off(String modId) {
+        return callStrings("off", modId);
+    }
+
+    /** Switches a mod back on; returns ZombieBuddy's one-line result. */
+    public String on(String modId) {
+        return callStrings("on", modId);
+    }
+
+    /**
+     * The Java part of a mod folder as ZombieBuddy would load it: "jar path TAB package", "" when
+     * there is none, null when this ZombieBuddy cannot tell.
+     */
+    public String javaModOf(String commonDir, String versionDir) {
+        return callStrings("javaModOf", commonDir, versionDir);
+    }
+
+    private String callStrings(String name, String... args) {
+        try {
+            Class<?>[] types = new Class<?>[args.length];
+            java.util.Arrays.fill(types, String.class);
+            Method method = Class.forName(HOTSWAP, true, loader).getMethod(name, types);
+            return (String) method.invoke(null, (Object[]) args);
+        } catch (InvocationTargetException e) {
+            return "FAILED ZombieBuddy: " + e.getCause();
+        } catch (ReflectiveOperationException e) {
+            return null;
+        }
+    }
+
     private String call(String name, Path jar, String javaPackage, String modId) {
         String unavailable = unavailableReason();
         if (unavailable != null) {

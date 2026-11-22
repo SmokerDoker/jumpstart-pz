@@ -19,6 +19,8 @@ public final class LiveInstaller {
         DONE,
         /** BiteCheck wants the player to confirm (once or twice); nothing was changed. */
         NEEDS_CONFIRMATION,
+        /** The player was asked and said no; nothing was changed. */
+        DECLINED,
         /** BiteCheck refuses the jar; nothing was loaded. */
         REFUSED,
         /** Approved, but the loader could not load it, or the check itself failed. */
@@ -27,6 +29,15 @@ public final class LiveInstaller {
 
     /** {@code check} is null when the jar could not even be checked. */
     public record Outcome(Kind kind, BiteCheckGate.Check check, String message) {
+    }
+
+    /**
+     * Where the player's consent comes from. Asked only when BiteCheck wants a confirmation, with
+     * the exact check (and hash) that will be approved. Returns null when the player said no.
+     */
+    @FunctionalInterface
+    public interface ConsentSource {
+        BiteCheckGate.Consent consentFor(BiteCheckGate.Check check);
     }
 
     private final BiteCheckGate gate;
@@ -57,18 +68,28 @@ public final class LiveInstaller {
         return gate;
     }
 
-    /** A mod that is not loaded yet. */
+    /** A mod that is not loaded yet, with a consent given beforehand. */
     public Outcome install(Path jar, String javaPackage, String modId, String workshopId, BiteCheckGate.Consent consent) {
-        return run(jar, javaPackage, modId, workshopId, consent, false);
+        return run(jar, javaPackage, modId, workshopId, check -> consent, false);
     }
 
-    /** A new version of a mod that is loaded now. */
+    /** A new version of a mod that is loaded now, with a consent given beforehand. */
     public Outcome update(Path jar, String javaPackage, String modId, String workshopId, BiteCheckGate.Consent consent) {
-        return run(jar, javaPackage, modId, workshopId, consent, true);
+        return run(jar, javaPackage, modId, workshopId, check -> consent, true);
+    }
+
+    /** A mod that is not loaded yet; the player is asked only if BiteCheck requires it. */
+    public Outcome install(Path jar, String javaPackage, String modId, String workshopId, ConsentSource player) {
+        return run(jar, javaPackage, modId, workshopId, player, false);
+    }
+
+    /** A new version of a mod that is loaded now; the player is asked only if BiteCheck requires it. */
+    public Outcome update(Path jar, String javaPackage, String modId, String workshopId, ConsentSource player) {
+        return run(jar, javaPackage, modId, workshopId, player, true);
     }
 
     private Outcome run(Path jar, String javaPackage, String modId, String workshopId,
-                        BiteCheckGate.Consent consent, boolean update) {
+                        ConsentSource player, boolean update) {
         String unavailable = backend.unavailableReason();
         if (unavailable != null) {
             return new Outcome(Kind.FAILED, null, unavailable);
@@ -82,6 +103,11 @@ public final class LiveInstaller {
         }
         if (check.verdict() == BiteCheckGate.Verdict.REFUSE) {
             return new Outcome(Kind.REFUSED, check, "BiteCheck: " + check.status() + " (" + check.info() + ")");
+        }
+        BiteCheckGate.Consent consent = check.allows(BiteCheckGate.Consent.NONE)
+                ? BiteCheckGate.Consent.NONE : player.consentFor(check);
+        if (consent == null) {
+            return new Outcome(Kind.DECLINED, check, modId + " not loaded: the player said no");
         }
         if (!check.allows(consent)) {
             String ask = check.verdict() == BiteCheckGate.Verdict.CONFIRM_TWICE ? "confirm twice" : "confirm";
