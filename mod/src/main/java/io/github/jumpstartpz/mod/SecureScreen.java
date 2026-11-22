@@ -1415,7 +1415,7 @@ public final class SecureScreen {
 
     List<String> modIds() {
         List<String> ids = new ArrayList<>();
-        for (ModEntry mod : mods) {
+        for (Actions.InstalledMod mod : mods) {
             ids.add(mod.id());
         }
         return ids;

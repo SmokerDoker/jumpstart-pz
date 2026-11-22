@@ -35,7 +35,7 @@ final class GameActions implements Actions {
     private final ZombieBuddyFork zombieBuddy;
     private final Path biteCheckDir;
     private final Workshop workshop = new SteamWorkshopAccess();
-    private final LuaLive.Game luaGame = new ReflectiveLuaGame();
+    private final ReflectiveLuaGame luaGame = new ReflectiveLuaGame();
     /** Mod id to its folder, for mods found in downloaded Workshop items and the mod folders. */
     private final Map<String, String> downloadedModDirs = new java.util.concurrent.ConcurrentHashMap<>();
     /** Lua event handlers of mods switched off in this session, to give back when they come on again. */
