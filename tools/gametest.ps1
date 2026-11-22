@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  In-game test of Jumpstart's BiteCheck gate with the real BiteCheck registry index.
+  In-game test of Jumpstart: the secure screen, the BiteCheck gate with the real registry index,
+  and that Lua can neither install anything nor open the screen.
 
 .DESCRIPTION
   Isolated like the fork's tools/gametest.ps1: a separate Zomboid data folder (-cachedir), its own
@@ -8,18 +9,17 @@
   signed index is downloaded fresh and nothing of your own setup changes. The game folder is not
   touched: the fork jar is passed with -javaagent.
 
-  At start only ZombieBuddy and Jumpstart are active. The test then, through ZombieBuddy's
-  experimental Lua server on 127.0.0.1:4444:
-    - checks that Jumpstart is ready,
-    - asks BiteCheck about a changed copy of ZBHelloWorld.jar (unverified): install without
-      confirmation is answered "no" (-Djumpstart.autoConsent=no instead of the native window), so
-      nothing may be loaded,
-    - installs the real ZBHelloWorld.jar (verified in the registry) without any confirmation and
-      checks that its patch is in MainScreenState,
-    - switches it off and on, and updates it to ZBHelloWorld-2x.jar (also verified),
-    - drives the window (on the game's main thread): list, verdict, off, on, reload,
-    - checks that mod_approvals.json has the two verified hashes and not the copy's, and that
-      console.txt has no Lua errors from Jumpstart's files.
+  Two switches exist only for this test: -Djumpstart.testInput=true lets the test press the secure
+  screen's keys through Lua (the real screen reads only the physical keyboard), and the ZombieBuddy
+  option hotswap_lua=true allows the bytecode probe that shows whether ZBHelloWorld's patch is in.
+
+  At start only ZombieBuddy and Jumpstart are active; ZBHelloWorld and a changed copy of it (its
+  own mod folder, hashes the registry does not know) are in the mods folder. The test checks that
+  - Lua's Jumpstart API has nothing that installs or switches, Lua cannot reach GLFW, and fake
+    Ctrl+Shift+J events in the game's key queue do not open the screen,
+  - in the screen the changed copy asks, J does nothing before the delay, N cancels, nothing loads,
+  - the verified ZBHelloWorld loads without a question, A switches it off and on, Enter reloads it,
+  - mod_approvals.json has the verified hash and not the copy's.
   Steam must be running. Results: <TestDir>\gametest-result.txt; exit code = failed checks.
 #>
 param(
@@ -48,6 +48,13 @@ function Check($name, $actual, $ok) {
     Log ("{0,-4} {1}: {2}" -f ($(if ($ok) { "OK" } else { "FAIL" })), $name, $actual)
     if (-not $ok) { $script:failures++ }
 }
+function Key($name) { $k = Lua "return Jumpstart.testKey('$name')"; if ($k -ne "OK") { Log "     key $name`: $k" }; Start-Sleep -Milliseconds 800 }
+function Screen() { Lua "return Jumpstart.testScreen()" }
+function SelectMod($id) {
+    1..5 | ForEach-Object { Key pgup }
+    for ($i = 0; $i -lt 60; $i++) { $s = Screen; if ($s -like "* selected=$id *") { return $s }; Key down }
+    return Screen
+}
 function GameProcess() { Get-Process java -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$GameDir*" } }
 function Sha($path) { (Get-FileHash $path -Algorithm SHA256).Hash.ToLower() }
 
@@ -63,15 +70,22 @@ if (Test-Path "$t\mods\Jumpstart") { Remove-Item "$t\mods\Jumpstart" -Recurse -F
 Copy-Item (Resolve-Path $ModFolder) "$t\mods\Jumpstart" -Recurse
 Copy-Item (Resolve-Path $ForkJar) "$t\ZombieBuddy-fork.jar" -Force
 
-$jarDir = "$t\mods\ZBHelloWorld\42\media\java\client"
-$verified = "$jarDir\ZBHelloWorld.jar"
-$verified2x = "$jarDir\ZBHelloWorld-2x.jar"
-# a changed copy: same classes, one extra file, so a hash the registry does not know
-$copy = "$t\ZBHelloWorld-changed.jar"
-Copy-Item $verified $copy -Force
+$verified = "$t\mods\ZBHelloWorld\42\media\java\client\ZBHelloWorld.jar"
+# a changed copy as its own mod folder: same classes, one extra file in each jar, so hashes the
+# registry does not know
+$changedMod = "$t\mods\ZBHelloWorldChanged"
+if (Test-Path $changedMod) { Remove-Item $changedMod -Recurse -Force }
+New-Item -ItemType Directory -Force "$changedMod\common", "$changedMod\42\media\java\client" | Out-Null
+(Get-Content "$t\mods\ZBHelloWorld\common\mod.info") -replace '^name=.*', 'name=ZBHelloWorld (changed copy)' -replace '^id=.*', 'id=ZBHelloWorldChanged' |
+    Set-Content "$changedMod\common\mod.info"
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
-$zip = [IO.Compression.ZipFile]::Open($copy, 'Update')
-$w = New-Object IO.StreamWriter(($zip.CreateEntry("jumpstart-test.txt")).Open()); $w.Write("changed"); $w.Dispose(); $zip.Dispose()
+foreach ($jar in "ZBHelloWorld.jar", "ZBHelloWorld-2x.jar") {
+    $copy = "$changedMod\42\media\java\client\$jar"
+    Copy-Item "$t\mods\ZBHelloWorld\42\media\java\client\$jar" $copy -Force
+    $zip = [IO.Compression.ZipFile]::Open($copy, 'Update')
+    $w = New-Object IO.StreamWriter(($zip.CreateEntry("jumpstart-test.txt")).Open()); $w.Write("changed"); $w.Dispose(); $zip.Dispose()
+}
+$changed = "$changedMod\42\media\java\client\ZBHelloWorld.jar"
 
 # only ZombieBuddy and Jumpstart at start; Jumpstart.jar is our own build, approve it in the test config
 $modsTxt = "VERSION = 1,`r`n`r`nmods`r`n{`r`n    mod = ZombieBuddy,`r`n    mod = Jumpstart,`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n"
@@ -80,8 +94,8 @@ $jumpstartJar = "$t\mods\Jumpstart\42\media\java\client\Jumpstart.jar"
 $approvals = '{"formatVersion": 2, "mods": [{"id": "Jumpstart", "jar_hash": "' + (Sha $jumpstartJar) + '", "decision": true}]}'
 [IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", $approvals)
 
-$agent = "-javaagent:$t\ZombieBuddy-fork.jar=hotswap=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
-$start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.autoConsent=no -Djava.awt.headless=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -Dzomboid.znetlog=1 -XX:-CreateCoredumpOnCrash -XX:-OmitStackTraceInFastThrow -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
+$agent = "-javaagent:$t\ZombieBuddy-fork.jar=hotswap=true,hotswap_lua=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
+$start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true -Djava.awt.headless=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -Dzomboid.znetlog=1 -XX:-CreateCoredumpOnCrash -XX:-OmitStackTraceInFastThrow -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
 [IO.File]::WriteAllText("$t\start-test.cmd", $start)
 
 # --- test -----------------------------------------------------------------------------------------
@@ -101,74 +115,69 @@ do { Start-Sleep 5; $status = Lua "return Jumpstart.status()" } until ($status -
 Check "Jumpstart ready" $status ($status -eq "ready")
 Check "ZBHelloWorld not loaded at start" (Has) ((Has) -eq "false")
 
-$c = $copy.Replace('\', '/'); $v = $verified.Replace('\', '/'); $v2 = $verified2x.Replace('\', '/')
-$r = Lua "return Jumpstart.check('$c')"
+# --- Lua can read, but not change anything or open the secure screen ------------------------------
+$r = Lua "return tostring(Jumpstart.install) .. ' ' .. tostring(Jumpstart.update) .. ' ' .. tostring(Jumpstart.on) .. ' ' .. tostring(Jumpstart.off)"
+Check "Lua API has no install, update, on or off" $r ($r -eq "nil nil nil nil")
+$r = Lua "return tostring(GLFW)"
+Check "Lua cannot reach GLFW (the physical keyboard)" $r ($r -eq "nil")
+$r = Lua "local ok, err = pcall(function() Keyboard.addKeyEvent(29, 1) Keyboard.addKeyEvent(42, 1) Keyboard.addKeyEvent(36, 1) Keyboard.addKeyEvent(36, 0) Keyboard.addKeyEvent(42, 0) Keyboard.addKeyEvent(29, 0) end) return tostring(ok)"
+Log "     (fake Ctrl+Shift+J through the game's key queue from Lua: pcall=$r)"
+Start-Sleep 2
+$r = Screen
+Check "fake keys from Lua do not open the secure screen" $r ($r -like "CLOSED*")
+
+# --- the secure screen, keys pressed through the test hook ------------------------------------------
+$r = Lua "return Jumpstart.check('$($changed.Replace('\', '/'))')"
 Check "changed copy is unverified" $r ($r -like "CONFIRM UNVERIFIED*")
-$r = Lua "return Jumpstart.install('$c', '$pkg', 'ZBHelloWorldChanged')"
-Check "changed copy: the player is asked and says no" $r ($r -like "DECLINED*")
+$r = Lua "return Jumpstart.check('$($verified.Replace('\', '/'))')"
+Check "real jar is verified" $r ($r -like "ALLOW VERIFIED*")
+Check "ZBHelloWorld not loaded" (Lua "return Jumpstart.stateOf('ZBHelloWorld')") ((Lua "return Jumpstart.stateOf('ZBHelloWorld')") -eq "not loaded")
+
+Key open
+$r = Screen
+Check "Ctrl+Shift+J opens the screen" $r ($r -like "LIST*")
+$r = SelectMod "ZBHelloWorldChanged"
+Check "select the changed copy" $r ($r -like "*selected=ZBHelloWorldChanged *")
+Key enter
+$r = Screen
+Check "Enter on the changed copy asks" $r ($r -like "CONFIRM_ONCE*asking=CONFIRM*")
+Key j
+$r = Screen
+Check "J right away does nothing (delay)" $r ($r -like "CONFIRM_ONCE*")
+Key n
+$r = Screen
+Check "N cancels" $r ($r -like "LIST*")
 Check "changed copy not loaded" (Has) ((Has) -eq "false")
 
-$r = Lua "return Jumpstart.check('$v')"
-Check "real jar is verified" $r ($r -like "ALLOW VERIFIED*")
-$r = Lua "return Jumpstart.stateOf('ZBHelloWorld')"
-Check "state before install" $r ($r -eq "not loaded")
-$r = Lua "return Jumpstart.install('$v', '$pkg', 'ZBHelloWorld')"
-Check "real jar installs without asking" $r ($r -like "DONE*")
-Check "patch in after install" (Has) ((Has) -eq "true")
-$r = Lua "return Jumpstart.stateOf('ZBHelloWorld')"
-Check "state after install" $r ($r -eq "on")
-$r = Lua "return Jumpstart.off('ZBHelloWorld')"
-Check "off" $r ($r -eq "OK ZBHelloWorld off")
+$r = SelectMod "ZBHelloWorld"
+Check "select ZBHelloWorld" $r ($r -like "*selected=ZBHelloWorld state=not loaded*")
+Key enter
+$r = Screen
+Check "Enter loads the verified jar without a question" $r ($r -like "LIST*state=on*message=DONE*")
+Check "patch in after loading" (Has) ((Has) -eq "true")
+Key a
+$r = Screen
+Check "A switches it off" $r ($r -like "*state=off*")
 Check "patch out" (Has) ((Has) -eq "false")
-$r = Lua "return Jumpstart.stateOf('ZBHelloWorld')"
-Check "state after off" $r ($r -eq "off")
-$r = Lua "return Jumpstart.on('ZBHelloWorld')"
-Check "on" $r ($r -eq "OK ZBHelloWorld on")
-$r = Lua "return Jumpstart.update('$v2', '$pkg', 'ZBHelloWorld')"
-Check "update to the 2x jar (verified)" $r ($r -like "DONE*")
-Check "patch in after update" (Has) ((Has) -eq "true")
+Key a
+$r = Screen
+Check "A switches it on" $r ($r -like "*state=on*")
+Check "patch in" (Has) ((Has) -eq "true")
+Key enter
+$r = Screen
+Check "Enter on a loaded mod reloads its jar" $r ($r -like "*state=on*message=DONE*updated*")
+Check "patch in after reload" (Has) ((Has) -eq "true")
+Key esc
+Start-Sleep 1
+$r = Screen
+Check "Esc closes" $r ($r -like "CLOSED*")
 
-# --- the window, driven on the game's main thread through JumpstartUI.later --------------------------
-function Ui($code) {
-    Lua "JumpstartUI.result = nil JumpstartUI.later(function() JumpstartUI.result = tostring($code) end) return 1" | Out-Null
-    $deadline = (Get-Date).AddSeconds(30)
-    do { Start-Sleep 1; $res = Lua "return JumpstartUI.result or '__pending'" } until ($res -ne "__pending" -or (Get-Date) -gt $deadline)
-    $res
-}
-$r = Lua "return tostring(JumpstartUI ~= nil and JumpstartUI.menuButton ~= nil)"
-Check "main menu button" $r ($r -eq "true")
-$r = Ui "JumpstartUI.open() ~= nil"
-Check "window opens" $r ($r -eq "true")
-$r = Lua "local n = '' for _, m in ipairs(JumpstartUI.window.mods) do n = n .. m.id .. '=' .. m.state .. ';' end return n"
-Check "window lists ZBHelloWorld as on" $r ($r -like "*ZBHelloWorld=on;*")
-Check "window does not list ZombieBuddy or Jumpstart" $r (-not ($r -match "ZombieBuddy=|Jumpstart="))
-$r = Ui "JumpstartUI.window:select('ZBHelloWorld')"
-Check "select ZBHelloWorld" $r ($r -eq "true")
-$r = Lua "return JumpstartModel.verdict(JumpstartUI.window:selected())"
-Check "window shows the BiteCheck verdict" $r ($r -like "ALLOW VERIFIED*")
-$r = Ui "JumpstartUI.window:run('off')"
-Check "window: switch off" $r ($r -eq "OK ZBHelloWorld off")
-Check "window: patch out" (Has) ((Has) -eq "false")
-$r = Ui "JumpstartUI.window:run('on')"
-Check "window: switch on" $r ($r -eq "OK ZBHelloWorld on")
-Check "window: patch in" (Has) ((Has) -eq "true")
-$r = Ui "JumpstartUI.window:run('update')"
-Check "window: reload jar" $r ($r -like "DONE*")
-Check "window: patch in after reload" (Has) ((Has) -eq "true")
-$r = Ui "JumpstartUI.window:run('install')"
-Check "window: install is not offered for a loaded mod" $r ($r -eq "nil")
-Start-Sleep 3 # a few frames with the window drawn
-$r = Lua "return tostring(JumpstartUI.lastError)"
-Check "no UI errors" $r ($r -eq "nil")
-$r = Ui "(function() JumpstartUI.window:close() return JumpstartUI.window == nil end)()"
-Check "window closes" $r ($r -eq "true")
-$luaErrors = @(Select-String -Path "$t\console.txt" -Pattern 'file: Jumpstart\w*\.lua' -ErrorAction SilentlyContinue)
-Check "no Lua errors from Jumpstart's files in console.txt" $luaErrors.Count ($luaErrors.Count -eq 0)
+$errors = @(Select-String -Path "$t\game-out.txt" -Pattern 'secure screen error|secure screen not available' -ErrorAction SilentlyContinue)
+Check "no secure screen errors" $errors.Count ($errors.Count -eq 0)
 
 $approvalsText = Get-Content "$t\.zombie_buddy\mod_approvals.json" -Raw
 Check "approval for the real jar" "" ($approvalsText -match (Sha $verified))
-Check "approval for the 2x jar" "" ($approvalsText -match (Sha $verified2x))
-Check "no approval for the changed copy" "" (-not ($approvalsText -match (Sha $copy)))
+Check "no approval for the changed copy" "" (-not ($approvalsText -match (Sha $changed)))
 Check "real index downloaded" "" (Test-Path "$t\.bitecheck\cache\index.toml")
 Check "game still running" "" ([bool](GameProcess))
 

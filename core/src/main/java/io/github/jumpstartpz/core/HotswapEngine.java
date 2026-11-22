@@ -12,6 +12,8 @@ import java.util.Set;
 
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.agent.builder.ResettableClassFileTransformer;
+import net.bytebuddy.description.type.TypeDescription;
+import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.utility.JavaModule;
 
@@ -62,7 +64,8 @@ public final class HotswapEngine {
             builder = builder.type(named(target.getKey())).transform((typeBuilder, type, loader, module, domain) -> {
                 var result = typeBuilder;
                 for (PatchSpec spec : specs) {
-                    result = result.visit(Advice.to(spec.advice()).on(named(spec.targetMethod())));
+                    result = result.visit(Advice.to(TypeDescription.ForLoadedType.of(spec.advice()), locatorFor(spec.advice()))
+                            .on(named(spec.targetMethod())));
                 }
                 return result;
             });
@@ -95,6 +98,16 @@ public final class HotswapEngine {
     /** Mods that are on, in the order they were switched on. */
     public synchronized Set<String> enabledMods() {
         return Collections.unmodifiableSet(new LinkedHashSet<>(active.keySet()));
+    }
+
+    /**
+     * Where Byte Buddy reads the advice class file: from its class loader, or, when that loader does
+     * not serve class files (ZombieBuddy injects mod classes without resources), from the JVM itself.
+     */
+    private ClassFileLocator locatorFor(Class<?> advice) {
+        return new ClassFileLocator.Compound(
+                ClassFileLocator.ForClassLoader.of(advice.getClassLoader()),
+                ClassFileLocator.ForInstrumentation.of(instrumentation, advice));
     }
 
     private static Map<String, List<PatchSpec>> byTargetClass(List<PatchSpec> patches) {

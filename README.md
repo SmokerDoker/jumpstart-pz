@@ -61,13 +61,16 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   unverified asks once, flagged or suspicious asks twice, blocked never loads), with the
   launcher's keys, index, cache and state; tested in the game against the real registry index
   (`tools\gametest.ps1`, 18 of 18 checks)
-- [x] The Jumpstart mod (`mod/`): Lua API `Jumpstart.status/check/install/update/stateOf/off/on/javaModOf/refreshIndex`
-- [x] In-game window: every Java mod in your mod folders with its state and BiteCheck verdict,
-  buttons to load it live, switch it off and on, reload its jar and update the BiteCheck index.
-  Opens with the *Jumpstart* button on the main menu or Ctrl+J in game. Confirmations come from
-  a native window in Java (like ZombieBuddy's approval), never from Lua, so no other mod can
-  click them away. Tested in the game (`tools\gametest.ps1`, 37 of 37 checks; the test answers
-  "no" through `-Djumpstart.autoConsent=no` instead of the window)
+- [x] The Jumpstart mod (`mod/`) with a **secure screen** (Ctrl+Shift+J): every Java mod in your
+  mod folders with its state and BiteCheck verdict; Enter loads it live or reloads its jar,
+  A switches it off and on, R updates the BiteCheck index. The screen is drawn by Java after every
+  Lua window, opens only on the physical keys (read from GLFW, not from the game's key queue) and
+  blocks the game's keyboard and UI input while open. BiteCheck's questions appear only there,
+  and their answer key works only after 3 (second question: 5) seconds.
+- [x] Lua mods cannot install, update or switch anything and cannot start a question: the Lua API
+  `Jumpstart` only reads (`status`, `stateOf`, `check`), and the fork lets Lua change mods only with
+  the test option `hotswap_lua=true`. Tested in the game (`tools\gametest.ps1`, 29 of 29 checks,
+  including fake Ctrl+Shift+J events from Lua that must not open the screen)
 - [ ] Marketplace: Workshop search and updates
 
 ## Build
@@ -85,7 +88,7 @@ running, the fork built next to this repository): `tools\gametest.ps1`.
 
 ```
 core/          BiteCheck gate, LiveInstaller, hotswap engine (planned next to it: market, mp)
-mod/           The Jumpstart mod for Project Zomboid (Lua API and window)
+mod/           The Jumpstart mod for Project Zomboid (secure screen, read-only Lua API)
 third_party/   BiteCheck (git submodule)
 tools/         In-game test
 docs/          Design notes and spike results

@@ -1,101 +1,84 @@
 package io.github.jumpstartpz.mod;
 
 import java.nio.file.Path;
+import java.util.Locale;
+import java.util.Map;
 
 import io.github.jumpstartpz.core.LiveInstaller;
 import io.github.jumpstartpz.core.ZombieBuddyFork;
 import io.github.jumpstartpz.core.gate.BiteCheckGate;
 
 /**
- * Jumpstart's Lua API, exposed as {@code Jumpstart}. Results are one line that starts with a word a
- * UI can act on (DONE, DECLINED, NEEDS_CONFIRMATION, REFUSED, FAILED, OK).
+ * Jumpstart's Lua API, exposed as {@code Jumpstart}: read-only. Lua mods are not checked by anyone,
+ * so they can neither install, update nor switch mods, nor start a question to the player; all of
+ * that happens only in the {@link SecureScreen} (Ctrl+Shift+J).
  *
  * <pre>
- *   print(Jumpstart.status())
- *   print(Jumpstart.javaModOf(info:getCommonDir(), info:getVersionDir()))   -- "jar\tpackage" or ""
- *   print(Jumpstart.check("C:/.../MyMod.jar"))
- *   print(Jumpstart.install("C:/.../MyMod.jar", "com.example.mymod", "MyMod"))
- *   print(Jumpstart.update("C:/.../MyMod.jar", "com.example.mymod", "MyMod"))
- *   print(Jumpstart.stateOf("MyMod"), Jumpstart.off("MyMod"), Jumpstart.on("MyMod"))
+ *   print(Jumpstart.status())                  -- "ready" or why not
+ *   print(Jumpstart.stateOf("MyMod"))          -- "on", "off", "not loaded", ...
+ *   print(Jumpstart.check("C:/.../MyMod.jar")) -- BiteCheck's verdict
  * </pre>
  *
- * Lua cannot confirm anything: where BiteCheck wants a confirmation, install and update ask the
- * player in a native window (see {@link PlayerPrompt}).
+ * With the JVM option {@code -Djumpstart.testInput=true} (automated tests only, read once at start)
+ * {@link #testKey} and {@link #testScreen} drive the secure screen.
  */
 public final class JumpstartLua {
     private static LiveInstaller installer;
+    private static ZombieBuddyFork zombieBuddy;
+
+    private static final Map<String, Integer> TEST_KEYS = Map.ofEntries(
+            Map.entry("open", SecureScreen.OPEN), Map.entry("up", SecureScreen.KEY_UP),
+            Map.entry("down", SecureScreen.KEY_DOWN), Map.entry("pgup", SecureScreen.KEY_PAGE_UP),
+            Map.entry("pgdn", SecureScreen.KEY_PAGE_DOWN), Map.entry("enter", SecureScreen.KEY_ENTER),
+            Map.entry("esc", SecureScreen.KEY_ESCAPE), Map.entry("j", SecureScreen.KEY_J),
+            Map.entry("n", SecureScreen.KEY_N), Map.entry("a", SecureScreen.KEY_A), Map.entry("r", SecureScreen.KEY_R));
 
     private JumpstartLua() {
     }
 
-    private static synchronized LiveInstaller installer() {
-        if (installer == null) {
-            installer = LiveInstaller.forGame();
-        }
-        return installer;
-    }
-
-    private static ZombieBuddyFork zombieBuddy() {
-        return ZombieBuddyFork.current();
+    static synchronized void init(LiveInstaller installer, ZombieBuddyFork zombieBuddy) {
+        JumpstartLua.installer = installer;
+        JumpstartLua.zombieBuddy = zombieBuddy;
     }
 
     /** "ready", or "not available: why". */
     public static String status() {
-        String unavailable = zombieBuddy().unavailableReason();
-        return unavailable == null ? "ready" : "not available: " + unavailable;
+        String unavailable = zombieBuddy.unavailableReason();
+        if (unavailable != null) {
+            return "not available: " + unavailable;
+        }
+        return SecureScreen.current() == null ? "not available: the secure screen could not start (see console.txt)" : "ready";
+    }
+
+    /** "on", "on, until restart", "off" or "not loaded". */
+    public static String stateOf(String modId) {
+        String state = zombieBuddy.stateOf(modId);
+        return state == null ? "unknown" : state;
     }
 
     /** BiteCheck's verdict for a jar, without changing anything: "VERDICT STATUS (info) sha256 HASH". */
     public static String check(String jarPath) {
         try {
-            BiteCheckGate.Check c = installer().gate().check(Path.of(jarPath));
+            BiteCheckGate.Check c = installer.gate().check(Path.of(jarPath));
             return c.verdict() + " " + c.status() + " (" + c.info() + ") sha256 " + c.sha256();
         } catch (Exception e) {
             return "FAILED " + e;
         }
     }
 
-    /** Loads a mod that is not loaded yet; asks the player natively if BiteCheck wants that. */
-    public static String install(String jarPath, String javaPackage, String modId) {
-        return format(installer().install(Path.of(jarPath), javaPackage, modId, null, PlayerPrompt.INSTANCE));
+    /** Tests only: presses a key of the secure screen ("open", "up", "down", "pgup", "pgdn", "enter", "esc", "j", "n", "a", "r"). */
+    public static String testKey(String name) {
+        SecureScreen screen = SecureScreen.current();
+        Integer key = name == null ? null : TEST_KEYS.get(name.toLowerCase(Locale.ROOT));
+        if (screen == null || key == null || !screen.inject(key)) {
+            return "FAILED test input is off";
+        }
+        return "OK";
     }
 
-    /** Replaces the loaded version of a mod; asks the player natively if BiteCheck wants that. */
-    public static String update(String jarPath, String javaPackage, String modId) {
-        return format(installer().update(Path.of(jarPath), javaPackage, modId, null, PlayerPrompt.INSTANCE));
-    }
-
-    /** "on", "on, until restart", "off" or "not loaded". */
-    public static String stateOf(String modId) {
-        String state = zombieBuddy().stateOf(modId);
-        return state == null ? "unknown" : state;
-    }
-
-    public static String off(String modId) {
-        return orUpdate(zombieBuddy().off(modId));
-    }
-
-    public static String on(String modId) {
-        return orUpdate(zombieBuddy().on(modId));
-    }
-
-    /** "jar path TAB package" when the mod folder has a Java part for this ZombieBuddy, else "". */
-    public static String javaModOf(String commonDir, String versionDir) {
-        String result = zombieBuddy().javaModOf(commonDir, versionDir);
-        return result == null || result.startsWith("FAILED") ? "" : result;
-    }
-
-    /** Fetches BiteCheck's index again; returns what happened. */
-    public static String refreshIndex() {
-        installer().gate().indexSource().refresh();
-        return String.join("; ", installer().gate().indexSource().notes());
-    }
-
-    private static String orUpdate(String result) {
-        return result != null ? result : "FAILED this ZombieBuddy cannot switch mods; install the Jumpstart fork";
-    }
-
-    private static String format(LiveInstaller.Outcome outcome) {
-        return outcome.kind() + " " + outcome.message();
+    /** Tests only: the secure screen's state in one line. */
+    public static String testScreen() {
+        SecureScreen screen = SecureScreen.current();
+        return screen == null || !Main.TEST_INPUT ? "FAILED test input is off" : screen.describe();
     }
 }
