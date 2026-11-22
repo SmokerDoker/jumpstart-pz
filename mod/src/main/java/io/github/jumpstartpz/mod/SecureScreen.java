@@ -80,6 +80,9 @@ public final class SecureScreen {
 
     enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SERVER }
 
+    /** Jumpstart's own mod id: listed on the installed tab, never switched from in here. */
+    static final String SELF = "Jumpstart";
+
     private static volatile SecureScreen current;
     private static volatile boolean reportedError;
 
@@ -110,6 +113,8 @@ public final class SecureScreen {
     // library tabs
     private final Map<Tab, Library> libraries = new HashMap<>();
     private Download download;
+    /** A downloaded Java mod whose Lua part follows once its Java part loaded: mod id, Workshop title. */
+    private String[] luaAfterJava;
 
     // sharing tab
     private boolean sharing;
@@ -398,6 +403,10 @@ public final class SecureScreen {
             return;
         }
         boolean wantsChange = pressed.contains(KEY_A) || pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
+        if (wantsChange && mod.id().equals(SELF)) {
+            say(texts.get("self.locked"), false); // the screen that switches mods does not switch itself off
+            return;
+        }
         if (wantsChange && session.inMultiplayer()) {
             say(texts.get("mp.locked"), false); // in multiplayer only an admin switches, for everybody
             return;
@@ -488,6 +497,12 @@ public final class SecureScreen {
         checks.remove(p.mod().jar());
         refreshStates();
         say(outcome.kind() + " " + outcome.message(), outcome.kind() == LiveInstaller.Kind.DONE);
+        String[] lua = luaAfterJava;
+        luaAfterJava = null;
+        if (lua != null && !p.server() && lua[0].equals(p.mod().id()) && outcome.kind() == LiveInstaller.Kind.DONE) {
+            // the Java part runs; now the mod's Lua, which may use it
+            say(outcome.kind() + " " + outcome.message() + "  " + describeLua(lua[1], actions.loadLua(lua[0])), true);
+        }
         if (p.server()) {
             if (outcome.kind() == LiveInstaller.Kind.DONE) {
                 session.ready();
@@ -496,6 +511,28 @@ public final class SecureScreen {
                 session.failed(outcome.kind() + " " + outcome.message());
             }
         }
+    }
+
+    /** One line on a mod's Lua part after loading it live (or why it waits for the next load). */
+    private String describeLua(String title, LuaLive.Result r) {
+        String text = switch (r.status()) {
+            case LOADED -> String.format(Locale.ROOT, texts.get("lua.loaded"), title, r.files());
+            case NO_LUA -> String.format(Locale.ROOT, texts.get("lua.none"), title);
+            case ALREADY_ACTIVE -> String.format(Locale.ROOT, texts.get("lua.active"), title);
+            case FAILED -> String.format(Locale.ROOT, texts.get("lua.failed"), title, String.join("; ", r.errors()));
+            case NOT_IN_GAME, MULTIPLAYER -> String.format(Locale.ROOT, texts.get("enabledLua"), title);
+        };
+        if (r.status() == LuaLive.Status.LOADED && !r.errors().isEmpty()) {
+            text += " " + String.format(Locale.ROOT, texts.get("lua.errors"), r.errors().size());
+        }
+        if (!r.needsRestart().isEmpty() && r.status() != LuaLive.Status.NOT_IN_GAME && r.status() != LuaLive.Status.FAILED) {
+            List<String> names = new ArrayList<>();
+            for (String part : r.needsRestart()) {
+                names.add(texts.get("part." + part));
+            }
+            text += " " + String.format(Locale.ROOT, texts.get("lua.restart"), String.join(", ", names));
+        }
+        return text;
     }
 
     private void say(String text, boolean good) {
@@ -623,8 +660,12 @@ public final class SecureScreen {
                 java = mod.java();
             }
         }
+        if (!problems.isEmpty()) {
+            say(String.join("; ", problems), false);
+            return;
+        }
         if (java != null && mode == Mode.LIST) {
-            // Java: straight into BiteCheck's check, on the installed tab
+            // Java: straight into BiteCheck's check, on the installed tab; its Lua part follows
             tab = Tab.INSTALLED;
             reload();
             for (int i = 0; i < mods.size(); i++) {
@@ -633,12 +674,19 @@ public final class SecureScreen {
                 }
             }
             say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
+            luaAfterJava = new String[] {java.id(), d.item().title()};
             start(java, now, false);
         } else if (java != null) {
             say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
         } else {
-            say(problems.isEmpty() ? String.format(Locale.ROOT, texts.get("enabledLua"), d.item().title())
-                    : String.join("; ", problems), problems.isEmpty());
+            List<String> parts = new ArrayList<>();
+            boolean good = true;
+            for (Actions.FolderMod mod : found) {
+                LuaLive.Result r = actions.loadLua(mod.id());
+                good &= r.status() != LuaLive.Status.FAILED && r.errors().isEmpty();
+                parts.add(describeLua(found.size() == 1 ? d.item().title() : mod.name(), r));
+            }
+            say(String.join("  ", parts), good);
         }
     }
 
@@ -987,9 +1035,10 @@ public final class SecureScreen {
                 game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
             game.text(GameScreen.Font.MEDIUM, x, y, mod.name(), 1f, 1f, 1f, 1f);
-            String state = stateOf(mod);
+            String state = mod.id().equals(SELF) ? "self" : stateOf(mod);
             String label = texts.get("state." + state);
             float[] c = switch (state) {
+                case "self" -> new float[] {0.45f, 0.95f, 0.45f};
                 case "on" -> new float[] {0.45f, 0.95f, 0.45f};
                 case "off" -> new float[] {0.95f, 0.7f, 0.3f};
                 case "on, until restart" -> new float[] {0.6f, 0.8f, 0.6f};

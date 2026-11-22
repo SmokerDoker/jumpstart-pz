@@ -28,12 +28,16 @@ import io.github.jumpstartpz.core.market.LibraryClient;
 /** {@link Actions} in the game: BiteCheck's gate, the Jumpstart fork of ZombieBuddy, PZ's mod folders, Steam. */
 final class GameActions implements Actions {
     static final String CLIENT = "jumpstart/0.2";
-    private static final Set<String> SKIP = Set.of("ZombieBuddy", "Jumpstart");
+    /** ZombieBuddy runs as the Java agent, not as a mod; Jumpstart is listed (it cannot be switched). */
+    private static final Set<String> SKIP = Set.of("ZombieBuddy");
 
     private final LiveInstaller installer;
     private final ZombieBuddyFork zombieBuddy;
     private final Path biteCheckDir;
     private final Workshop workshop = new SteamWorkshopAccess();
+    private final LuaLive.Game luaGame = new ReflectiveLuaGame();
+    /** Mod id to its folder, for mods found in downloaded Workshop items. */
+    private final Map<String, String> downloadedModDirs = new java.util.concurrent.ConcurrentHashMap<>();
 
     GameActions(LiveInstaller installer, ZombieBuddyFork zombieBuddy, Path biteCheckDir) {
         this.installer = installer;
@@ -58,7 +62,9 @@ final class GameActions implements Actions {
             System.out.println("[Jumpstart] cannot list the mod folders: " + e);
         }
         List<ModEntry> list = new ArrayList<>(mods.values());
-        list.sort(Comparator.comparing(m -> m.name().toLowerCase(Locale.ROOT)));
+        // Jumpstart itself first, then by name
+        list.sort(Comparator.comparing((ModEntry m) -> !m.id().equals(SecureScreen.SELF))
+                .thenComparing(m -> m.name().toLowerCase(Locale.ROOT)));
         return list;
     }
 
@@ -77,7 +83,8 @@ final class GameActions implements Actions {
             name = name == null || name.isBlank() ? id : name;
             String common = (String) info.getClass().getMethod("getCommonDir").invoke(info);
             String version = (String) info.getClass().getMethod("getVersionDir").invoke(info);
-            String java = common == null || version == null ? null : zombieBuddy.javaModOf(common, version);
+            // either folder may be missing (Staircast has no common folder); ZombieBuddy looks in both
+            String java = common == null && version == null ? null : zombieBuddy.javaModOf(common, version);
             int tab = java == null ? -1 : java.indexOf('\t');
             ModEntry entry = tab < 0 ? null : new ModEntry(id, name, Path.of(java.substring(0, tab)), java.substring(tab + 1));
             return new FolderMod(id, name, entry);
@@ -96,7 +103,7 @@ final class GameActions implements Actions {
             String name = (String) info.getClass().getMethod("getName").invoke(info);
             String common = (String) info.getClass().getMethod("getCommonDir").invoke(info);
             String version = (String) info.getClass().getMethod("getVersionDir").invoke(info);
-            String java = common == null || version == null ? null : zombieBuddy.clientJavaModOf(common, version);
+            String java = common == null && version == null ? null : zombieBuddy.clientJavaModOf(common, version);
             int tab = java == null ? -1 : java.indexOf('\t');
             ModEntry entry = tab < 0 ? null : new ModEntry(id, name == null || name.isBlank() ? id : name,
                     Path.of(java.substring(0, tab)), java.substring(tab + 1));
@@ -178,11 +185,13 @@ final class GameActions implements Actions {
         if (!Files.isDirectory(dir)) {
             return mods;
         }
+        resetModFolders(); // a fresh download: the game lists its mod folders again
         try (Stream<Path> children = Files.list(dir)) {
             for (Path child : children.sorted().toList()) {
                 FolderMod mod = Files.isDirectory(child) ? readMod(child.toString()) : null;
                 if (mod != null) {
                     mods.add(mod);
+                    downloadedModDirs.put(mod.id(), child.toString());
                 }
             }
         } catch (IOException e) {
@@ -195,12 +204,40 @@ final class GameActions implements Actions {
     public String activate(String modId) {
         try {
             Class<?> activeMods = Class.forName("zombie.modding.ActiveMods");
+            if (luaGame.inGame()) {
+                // the running save's own list, written to its mods.txt like the game does when it loads
+                Object mods = activeMods.getMethod("getById", String.class).invoke(null, "currentGame");
+                mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, true);
+                Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+                String file = (String) fs.getClass().getMethod("getFileNameInCurrentSave", String.class).invoke(fs, "mods.txt");
+                Class<?> modsFile = Class.forName("zombie.modding.ActiveModsFile");
+                Object writer = modsFile.getConstructor().newInstance();
+                modsFile.getMethod("write", String.class, activeMods).invoke(writer, file, mods);
+                return null;
+            }
             Object mods = activeMods.getMethod("getById", String.class).invoke(null, "default");
             mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, true);
             Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("saveModsFile").invoke(null);
             return null;
         } catch (ReflectiveOperationException | RuntimeException e) {
             return "cannot enable " + modId + ": " + e;
+        }
+    }
+
+    @Override
+    public LuaLive.Result loadLua(String modId) {
+        String dir = downloadedModDirs.get(modId);
+        LuaLive.Result result = LuaLive.load(luaGame, modId, dir);
+        System.out.println("[Jumpstart] Lua of " + modId + ": " + result);
+        return result;
+    }
+
+    private static void resetModFolders() {
+        try {
+            Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+            fs.getClass().getMethod("resetModFolders").invoke(fs);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot refresh the mod folders: " + e);
         }
     }
 

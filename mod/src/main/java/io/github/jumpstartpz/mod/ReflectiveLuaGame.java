@@ -1,0 +1,152 @@
+package io.github.jumpstartpz.mod;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+/** {@link LuaLive.Game} for Project Zomboid, through reflection (Build 42). Main thread only. */
+final class ReflectiveLuaGame implements LuaLive.Game {
+
+    @Override
+    public boolean inGame() {
+        try {
+            return Class.forName("zombie.characters.IsoPlayer").getMethod("getInstance").invoke(null) != null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public boolean multiplayer() {
+        try {
+            return Class.forName("zombie.network.GameClient").getField("client").getBoolean(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public boolean isActive(String modId) {
+        try {
+            return modIds(fileSystem()).contains(modId);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public Map<String, String> register(String modId, String modDir) throws Exception {
+        Object fs = fileSystem();
+        Class<?> fsClass = fs.getClass();
+        if (modDir != null) {
+            fsClass.getMethod("setModIdToDir", String.class, String.class).invoke(fs, modId, modDir);
+        }
+        Object mod = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("getAvailableModDetails", String.class).invoke(null, modId);
+        if (mod == null) {
+            throw new IllegalStateException("the game does not know the mod " + modId + " (folder " + modDir + ")");
+        }
+        List<String> dirs = new ArrayList<>();
+        for (String getter : List.of("getCommonDir", "getVersionDir")) {
+            String dir = (String) mod.getClass().getMethod(getter).invoke(mod);
+            if (dir != null && !dir.isBlank()) {
+                dirs.add(normalize(new java.io.File(dir).getAbsolutePath()) + "/");
+            }
+        }
+        @SuppressWarnings("unchecked")
+        List<String> ids = (List<String>) modIds(fs);
+        if (!ids.contains(modId)) {
+            ids.add(modId); // the running game's mod list, as if the save had started with it
+        }
+        fsClass.getMethod("loadMod", String.class).invoke(fs, modId);
+        @SuppressWarnings("unchecked")
+        Map<String, String> active = (Map<String, String>) fsClass.getField("activeFileMap").get(fs);
+        Map<String, String> files = new HashMap<>();
+        synchronized (fs) {
+            for (Map.Entry<String, String> e : active.entrySet()) {
+                String absolute = normalize(e.getValue());
+                for (String dir : dirs) {
+                    if (absolute.startsWith(dir)) {
+                        files.put(e.getKey().replace('\\', '/').toLowerCase(Locale.ROOT), e.getValue());
+                        break;
+                    }
+                }
+            }
+        }
+        return files;
+    }
+
+    @Override
+    public void run(String absolutePath) throws Exception {
+        Class.forName("zombie.Lua.LuaManager").getMethod("RunLua", String.class).invoke(null, absolutePath);
+    }
+
+    @Override
+    public Map<String, List<Object>> handlers(Collection<String> events) {
+        Map<String, List<Object>> result = new HashMap<>();
+        try {
+            Field mapField = Class.forName("zombie.Lua.LuaEventManager").getDeclaredField("EventMap");
+            mapField.setAccessible(true);
+            Map<?, ?> eventMap = (Map<?, ?>) mapField.get(null);
+            for (String name : events) {
+                Object event = eventMap.get(name);
+                if (event != null) {
+                    List<?> callbacks = (List<?>) event.getClass().getField("callbacks").get(event);
+                    result.put(name, new ArrayList<>(callbacks));
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot read the Lua events: " + e);
+        }
+        return result;
+    }
+
+    @Override
+    public void call(Object handler, Object[] args) throws Exception {
+        Class<?> lua = Class.forName("zombie.Lua.LuaManager");
+        Object caller = lua.getField("caller").get(null);
+        Object thread = lua.getField("thread").get(null);
+        Method pcall = caller.getClass().getMethod("pcallvoid", Class.forName("se.krka.kahlua.vm.KahluaThread"), Object.class, Object[].class);
+        pcall.invoke(caller, thread, handler, args);
+    }
+
+    @Override
+    public Object[] argsFor(String event) {
+        return switch (event) {
+            case "OnInitGlobalModData" -> new Object[] {Boolean.FALSE};
+            case "OnCreatePlayer" -> new Object[] {0.0, player()};
+            default -> new Object[0];
+        };
+    }
+
+    @Override
+    public void reloadTranslations() throws Exception {
+        Class.forName("zombie.core.Translator").getMethod("loadFiles").invoke(null);
+    }
+
+    private static Object player() {
+        try {
+            return Class.forName("zombie.characters.IsoPlayer").getMethod("getInstance").invoke(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Object fileSystem() throws ReflectiveOperationException {
+        return Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+    }
+
+    private static List<?> modIds(Object fs) throws ReflectiveOperationException {
+        Field field = fs.getClass().getDeclaredField("mods");
+        field.setAccessible(true);
+        return (List<?>) field.get(fs);
+    }
+
+    private static String normalize(String path) {
+        return path.replace('\\', '/').toLowerCase(Locale.ROOT);
+    }
+}

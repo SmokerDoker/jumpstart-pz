@@ -11,7 +11,7 @@ import io.github.jumpstartpz.core.market.LibraryClient;
 
 /** What the secure screen can do. {@link GameActions} is the game; tests use a fake. */
 interface Actions {
-    /** Every Java mod in the mod folders, except ZombieBuddy and Jumpstart. */
+    /** Every Java mod in the mod folders, Jumpstart itself first; not ZombieBuddy (the Java agent). */
     List<ModEntry> javaMods();
 
     /** "on", "on, until restart", "off" or "not loaded". */
@@ -40,8 +40,11 @@ interface Actions {
     /** The mods in a downloaded Workshop item folder, with their Java part (null for Lua-only mods). */
     List<FolderMod> modsInFolder(String itemFolder);
 
-    /** Marks a mod active in the game's mod list (it loads with the next start or save). */
+    /** Marks a mod active: in the running save's mod list, or in the main menu's list. */
     String activate(String modId);
+
+    /** Loads a just enabled mod's Lua part into the running single player game ({@link LuaLive}). */
+    LuaLive.Result loadLua(String modId);
 
     record FolderMod(String id, String name, ModEntry java) {
     }

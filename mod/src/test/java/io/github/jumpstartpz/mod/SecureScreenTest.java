@@ -28,6 +28,7 @@ class SecureScreenTest {
     private static final ModEntry UNKNOWN = new ModEntry("Unknown", "B unknown mod", Path.of("unknown.jar"), "pkg.u");
     private static final ModEntry SHADY = new ModEntry("Shady", "C shady mod", Path.of("shady.jar"), "pkg.s");
     private static final ModEntry BLOCKED = new ModEntry("Blocked", "D blocked mod", Path.of("blocked.jar"), "pkg.b");
+    private static final ModEntry SELF = new ModEntry("Jumpstart", "Jumpstart", Path.of("Jumpstart.jar"), "io.github.jumpstartpz.mod");
 
     private FakeGame game;
     private FakeLink link;
@@ -205,8 +206,74 @@ class SecureScreenTest {
     }
 
     @Test
-    void aLuaModFromTheLibraryIsEnabledForTheNextStart() {
+    void aLuaModFromTheLibraryLoadsLiveInAGame() {
         actions.folders.put("/workshop/201", List.of(new Actions.FolderMod("LuaMod", "Lua Mod", null)));
+        actions.lua.put("LuaMod", new LuaLive.Result(LuaLive.Status.LOADED, 4, List.of(), List.of("scripts")));
+        downloadLuaMod();
+        assertEquals(List.of("LuaMod"), actions.activated);
+        assertEquals(List.of("LuaMod"), actions.luaLoaded, "enabled, then loaded into the running game");
+        assertTrue(actions.calls.isEmpty(), "no Java part, nothing for BiteCheck");
+        assertTrue(screen.describe().contains("loaded live: 4 Lua files"), screen.describe());
+        assertTrue(screen.describe().contains("items and recipes"), "what waits for the next load is named: " + screen.describe());
+    }
+
+    @Test
+    void inTheMainMenuALuaModWaitsForTheSave() {
+        actions.folders.put("/workshop/201", List.of(new Actions.FolderMod("LuaMod", "Lua Mod", null)));
+        actions.lua.put("LuaMod", LuaLive.Result.of(LuaLive.Status.NOT_IN_GAME));
+        downloadLuaMod();
+        assertEquals(List.of("LuaMod"), actions.activated);
+        assertTrue(screen.describe().contains("enabled; it loads with the next game start"), screen.describe());
+    }
+
+    @Test
+    void aJavaModsLuaPartFollowsOnlyAfterItsJavaPartLoaded() {
+        actions.folders.put("/workshop/111", List.of(new Actions.FolderMod("Unknown", "B unknown mod", UNKNOWN)));
+        actions.lua.put("Unknown", new LuaLive.Result(LuaLive.Status.LOADED, 2, List.of(), List.of()));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        type("x");
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_ENTER);
+        actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame();
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "BiteCheck asks about the unknown jar");
+        assertTrue(actions.luaLoaded.isEmpty(), "no Lua before the player said yes and the Java part runs");
+        now += SecureScreen.FIRST_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("install Unknown ONCE"), actions.calls);
+        assertEquals(List.of("Unknown"), actions.luaLoaded);
+        assertTrue(screen.describe().contains("loaded live: 2 Lua files"), screen.describe());
+    }
+
+    @Test
+    void aDeclinedJavaModGetsNoLua() {
+        actions.folders.put("/workshop/111", List.of(new Actions.FolderMod("Unknown", "B unknown mod", UNKNOWN)));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        type("x");
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_ENTER);
+        actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame();
+        tap(SecureScreen.KEY_N);
+        assertTrue(actions.luaLoaded.isEmpty());
+    }
+
+    @Test
+    void jumpstartListsItselfButCannotBeSwitched() {
+        actions.withSelf = true;
+        actions.states.put("Jumpstart", "on, until restart");
+        openScreen();
+        assertTrue(game.drew("on (Jumpstart itself)"), String.valueOf(game.drawn));
+        tap(SecureScreen.KEY_A);
+        tap(SecureScreen.KEY_ENTER);
+        assertTrue(actions.calls.isEmpty(), String.valueOf(actions.calls));
+        assertEquals("on, until restart", actions.states.get("Jumpstart"));
+        assertTrue(screen.describe().contains("This is Jumpstart itself"), screen.describe());
+    }
+
+    private void downloadLuaMod() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
         tap(SecureScreen.KEY_TAB);
@@ -217,9 +284,6 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_ENTER);
         actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
         frame();
-        assertEquals(List.of("LuaMod"), actions.activated);
-        assertTrue(actions.calls.isEmpty());
-        assertTrue(screen.describe().contains("enabled"), screen.describe());
     }
 
     @Test
@@ -393,9 +457,11 @@ class SecureScreenTest {
         final Map<String, String> states = new HashMap<>();
         boolean swapped;
 
+        boolean withSelf;
+
         @Override
         public List<ModEntry> javaMods() {
-            return List.of(VERIFIED, UNKNOWN, SHADY, BLOCKED);
+            return withSelf ? List.of(SELF, VERIFIED, UNKNOWN, SHADY, BLOCKED) : List.of(VERIFIED, UNKNOWN, SHADY, BLOCKED);
         }
 
         @Override
@@ -486,6 +552,15 @@ class SecureScreenTest {
         public String activate(String modId) {
             activated.add(modId);
             return null;
+        }
+
+        final Map<String, LuaLive.Result> lua = new HashMap<>();
+        final List<String> luaLoaded = new ArrayList<>();
+
+        @Override
+        public LuaLive.Result loadLua(String modId) {
+            luaLoaded.add(modId);
+            return lua.getOrDefault(modId, LuaLive.Result.of(LuaLive.Status.NOT_IN_GAME));
         }
 
         // sharing
