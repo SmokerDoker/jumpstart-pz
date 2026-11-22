@@ -273,6 +273,72 @@ class SecureScreenTest {
         assertTrue(screen.describe().contains("This is Jumpstart itself"), screen.describe());
     }
 
+    @Test
+    void aLuaModInTheInstalledTabSwitchesOffAndOnLive() {
+        actions.luaMods.add("Minimap");
+        actions.luaStates.put("Minimap", "on");
+        actions.lua.put("Minimap", LuaLive.Result.of(LuaLive.Status.RESUMED));
+        openScreen();
+        selectInstalled("Minimap");
+        assertTrue(game.drew("Lua"), "the list says which mods are Lua mods");
+        tap(SecureScreen.KEY_A);
+        assertEquals(List.of("Minimap"), actions.deactivated, "out of the mod list");
+        assertEquals(List.of("Minimap"), actions.unloaded, "and its event handlers stopped right away");
+        assertTrue(screen.describe().contains("3 of its event handlers stopped"), screen.describe());
+        tap(SecureScreen.KEY_A);
+        assertEquals(List.of("Minimap"), actions.activated);
+        assertEquals(List.of("Minimap"), actions.luaLoaded);
+        assertTrue(screen.describe().contains("running again"), screen.describe());
+        assertTrue(actions.calls.isEmpty(), "a Lua mod never goes to the Java loader");
+    }
+
+    @Test
+    void uninstallingNeedsTwoDelayedYeses() {
+        actions.luaMods.add("Minimap");
+        openScreen();
+        selectInstalled("Minimap");
+        tap(SecureScreen.KEY_U);
+        assertEquals(SecureScreen.Mode.UNINSTALL_ONCE, screen.mode());
+        tap(SecureScreen.KEY_J);
+        assertEquals(SecureScreen.Mode.UNINSTALL_ONCE, screen.mode(), "J right away does nothing");
+        now += SecureScreen.UNINSTALL_FIRST_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        assertEquals(SecureScreen.Mode.UNINSTALL_TWICE, screen.mode(), "a second question");
+        tap(SecureScreen.KEY_J);
+        assertTrue(actions.uninstalled.isEmpty(), "the second question has its own delay");
+        now += SecureScreen.UNINSTALL_SECOND_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("Minimap"), actions.uninstalled);
+        assertEquals(SecureScreen.Mode.LIST, screen.mode());
+        assertTrue(screen.describe().contains("Unsubscribe"), screen.describe());
+    }
+
+    @Test
+    void noKeepsTheModAndJumpstartCannotBeUninstalled() {
+        actions.luaMods.add("Minimap");
+        actions.withSelf = true;
+        openScreen();
+        selectInstalled("Minimap");
+        tap(SecureScreen.KEY_U);
+        tap(SecureScreen.KEY_N);
+        assertEquals(SecureScreen.Mode.LIST, screen.mode());
+        assertTrue(actions.uninstalled.isEmpty());
+        selectInstalled("Jumpstart");
+        tap(SecureScreen.KEY_U);
+        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "no question for Jumpstart itself");
+        assertTrue(screen.describe().contains("This is Jumpstart itself"), screen.describe());
+    }
+
+    private void selectInstalled(String id) {
+        for (int i = 0; i < 20 && !screen.describe().contains("selected=" + id + " "); i++) {
+            tap(SecureScreen.KEY_UP);
+        }
+        for (int i = 0; i < 20 && !screen.describe().contains("selected=" + id + " "); i++) {
+            tap(SecureScreen.KEY_DOWN);
+        }
+        assertTrue(screen.describe().contains("selected=" + id + " "), screen.describe());
+    }
+
     private void downloadLuaMod() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -458,10 +524,54 @@ class SecureScreenTest {
         boolean swapped;
 
         boolean withSelf;
+        /** Lua-only mods in the mod folders (shown after the Java ones). */
+        final List<String> luaMods = new ArrayList<>();
+        final Map<String, String> luaStates = new HashMap<>();
+        final List<String> deactivated = new ArrayList<>();
+        final List<String> unloaded = new ArrayList<>();
+        final List<String> uninstalled = new ArrayList<>();
 
         @Override
         public List<ModEntry> javaMods() {
             return withSelf ? List.of(SELF, VERIFIED, UNKNOWN, SHADY, BLOCKED) : List.of(VERIFIED, UNKNOWN, SHADY, BLOCKED);
+        }
+
+        @Override
+        public List<InstalledMod> installedMods() {
+            List<InstalledMod> list = new ArrayList<>();
+            for (ModEntry m : javaMods()) {
+                list.add(new InstalledMod(m.id(), m.name(), m, 0));
+            }
+            for (String id : luaMods) {
+                if (!uninstalled.contains(id)) {
+                    list.add(new InstalledMod(id, id + " (Lua)", null, 201));
+                }
+            }
+            return list;
+        }
+
+        @Override
+        public String luaState(String modId) {
+            return luaStates.getOrDefault(modId, "off");
+        }
+
+        @Override
+        public String deactivate(String modId) {
+            deactivated.add(modId);
+            luaStates.put(modId, "off, next load");
+            return null;
+        }
+
+        @Override
+        public int unloadLua(String modId) {
+            unloaded.add(modId);
+            return 3;
+        }
+
+        @Override
+        public String uninstall(String modId) {
+            uninstalled.add(modId);
+            return "OK workshop 201";
         }
 
         @Override
@@ -560,7 +670,11 @@ class SecureScreenTest {
         @Override
         public LuaLive.Result loadLua(String modId) {
             luaLoaded.add(modId);
-            return lua.getOrDefault(modId, LuaLive.Result.of(LuaLive.Status.NOT_IN_GAME));
+            LuaLive.Result r = lua.getOrDefault(modId, LuaLive.Result.of(LuaLive.Status.NOT_IN_GAME));
+            if (r.status() == LuaLive.Status.LOADED || r.status() == LuaLive.Status.RESUMED) {
+                luaStates.put(modId, "on");
+            }
+            return r;
         }
 
         // sharing

@@ -14,8 +14,20 @@ interface Actions {
     /** Every Java mod in the mod folders, Jumpstart itself first; not ZombieBuddy (the Java agent). */
     List<ModEntry> javaMods();
 
+    /**
+     * Every mod in the mod folders this game version can load, Java and Lua: Jumpstart first, then
+     * the enabled ones, then by name; not ZombieBuddy (the Java agent).
+     */
+    List<InstalledMod> installedMods();
+
     /** "on", "on, until restart", "off" or "not loaded". */
     String stateOf(String modId);
+
+    /**
+     * A mod's Lua side: "on" (enabled, running), "off", "on, next load" (enabled, runs with the next
+     * load of the save) or "off, next load" (switched off, gone completely with the next load).
+     */
+    String luaState(String modId);
 
     BiteCheckGate.Check check(Path jar) throws IOException;
 
@@ -43,8 +55,28 @@ interface Actions {
     /** Marks a mod active: in the running save's mod list, or in the main menu's list. */
     String activate(String modId);
 
-    /** Loads a just enabled mod's Lua part into the running single player game ({@link LuaLive}). */
+    /** Takes a mod out of the mod list that counts now (the running save's, else the main menu's). */
+    String deactivate(String modId);
+
+    /**
+     * Loads a just enabled mod's Lua part into the running single player game ({@link LuaLive}), or
+     * gives back the event handlers {@link #unloadLua} took away.
+     */
     LuaLive.Result loadLua(String modId);
+
+    /** Stops a running mod's Lua: takes its event handlers away (kept for {@link #loadLua}); returns how many. */
+    int unloadLua(String modId);
+
+    /**
+     * Uninstalls a mod after the player's two yeses: off, out of every mod list, then the files go:
+     * a Workshop item's Steam page opens to unsubscribe (Steam deletes it), a local mod folder moves
+     * to mods-uninstalled. "OK text" or what went wrong.
+     */
+    String uninstall(String modId);
+
+    /** A mod in the mod folders; {@code java} is null for a Lua-only mod, {@code workshopId} 0 for a local one. */
+    record InstalledMod(String id, String name, ModEntry java, long workshopId) {
+    }
 
     record FolderMod(String id, String name, ModEntry java) {
     }

@@ -128,6 +128,93 @@ final class ReflectiveLuaGame implements LuaLive.Game {
         Class.forName("zombie.core.Translator").getMethod("loadFiles").invoke(null);
     }
 
+    /** The folders a mod's files come from (common and version folder), normalized, ending in '/'. */
+    List<String> modDirs(String modId) {
+        List<String> dirs = new ArrayList<>();
+        try {
+            Object mod = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("getAvailableModDetails", String.class).invoke(null, modId);
+            if (mod != null) {
+                for (String getter : List.of("getCommonDir", "getVersionDir")) {
+                    String dir = (String) mod.getClass().getMethod(getter).invoke(mod);
+                    if (dir != null && !dir.isBlank()) {
+                        dirs.add(normalize(new java.io.File(dir).getAbsolutePath()) + "/");
+                    }
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot find the folders of " + modId + ": " + e);
+        }
+        return dirs;
+    }
+
+    /**
+     * Takes away every Lua event handler defined in the given folders' files and returns them by
+     * event, so {@link #giveBack} can put them back. What the mod changed otherwise (UI it opened,
+     * functions it replaced) stays until the save loads again.
+     */
+    Map<String, List<Object>> takeHandlers(List<String> dirs) {
+        Map<String, List<Object>> taken = new HashMap<>();
+        if (dirs.isEmpty()) {
+            return taken;
+        }
+        try {
+            Field mapField = Class.forName("zombie.Lua.LuaEventManager").getDeclaredField("EventMap");
+            mapField.setAccessible(true);
+            Map<?, ?> eventMap = (Map<?, ?>) mapField.get(null);
+            for (Map.Entry<?, ?> e : eventMap.entrySet()) {
+                @SuppressWarnings("unchecked")
+                List<Object> callbacks = (List<Object>) e.getValue().getClass().getField("callbacks").get(e.getValue());
+                List<Object> mine = new ArrayList<>();
+                for (Object closure : callbacks) {
+                    String file = sourceFile(closure);
+                    if (file != null && dirs.stream().anyMatch(file::startsWith)) {
+                        mine.add(closure);
+                    }
+                }
+                if (!mine.isEmpty()) {
+                    callbacks.removeAll(mine);
+                    taken.put(String.valueOf(e.getKey()), mine);
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot take the Lua event handlers away: " + e);
+        }
+        return taken;
+    }
+
+    void giveBack(Map<String, List<Object>> handlers) {
+        try {
+            Field mapField = Class.forName("zombie.Lua.LuaEventManager").getDeclaredField("EventMap");
+            mapField.setAccessible(true);
+            Map<?, ?> eventMap = (Map<?, ?>) mapField.get(null);
+            for (Map.Entry<String, List<Object>> e : handlers.entrySet()) {
+                Object event = eventMap.get(e.getKey());
+                if (event != null) {
+                    @SuppressWarnings("unchecked")
+                    List<Object> callbacks = (List<Object>) event.getClass().getField("callbacks").get(event);
+                    for (Object closure : e.getValue()) {
+                        if (!callbacks.contains(closure)) {
+                            callbacks.add(closure);
+                        }
+                    }
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot give the Lua event handlers back: " + e);
+        }
+    }
+
+    /** The file a Lua function was compiled from (Kahlua: closure.prototype.filename), normalized. */
+    private static String sourceFile(Object closure) {
+        try {
+            Object prototype = closure.getClass().getField("prototype").get(closure);
+            Object file = prototype.getClass().getField("filename").get(prototype);
+            return file == null ? null : normalize(file.toString());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
     private static Object player() {
         try {
             return Class.forName("zombie.characters.IsoPlayer").getMethod("getInstance").invoke(null);

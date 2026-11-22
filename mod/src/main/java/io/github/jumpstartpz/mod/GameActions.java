@@ -36,8 +36,10 @@ final class GameActions implements Actions {
     private final Path biteCheckDir;
     private final Workshop workshop = new SteamWorkshopAccess();
     private final LuaLive.Game luaGame = new ReflectiveLuaGame();
-    /** Mod id to its folder, for mods found in downloaded Workshop items. */
+    /** Mod id to its folder, for mods found in downloaded Workshop items and the mod folders. */
     private final Map<String, String> downloadedModDirs = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Lua event handlers of mods switched off in this session, to give back when they come on again. */
+    private final Map<String, Map<String, List<Object>>> parkedLua = new java.util.concurrent.ConcurrentHashMap<>();
 
     GameActions(LiveInstaller installer, ZombieBuddyFork zombieBuddy, Path biteCheckDir) {
         this.installer = installer;
@@ -66,6 +68,62 @@ final class GameActions implements Actions {
         list.sort(Comparator.comparing((ModEntry m) -> !m.id().equals(SecureScreen.SELF))
                 .thenComparing(m -> m.name().toLowerCase(Locale.ROOT)));
         return list;
+    }
+
+    @Override
+    public List<InstalledMod> installedMods() {
+        Map<String, InstalledMod> mods = new LinkedHashMap<>();
+        try {
+            Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+            List<String> dirs = new ArrayList<>();
+            fs.getClass().getMethod("getAllModFolders", List.class).invoke(fs, dirs);
+            for (String dir : dirs) {
+                if (!availableHere(dir)) {
+                    continue; // a mod for another game version: it cannot load anyway
+                }
+                FolderMod mod = readMod(dir);
+                if (mod == null || SKIP.contains(mod.id()) || mods.containsKey(mod.id())) {
+                    continue;
+                }
+                downloadedModDirs.putIfAbsent(mod.id(), dir);
+                mods.put(mod.id(), new InstalledMod(mod.id(), mod.name(), mod.java(), workshopIdOf(dir)));
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot list the mod folders: " + e);
+        }
+        List<InstalledMod> list = new ArrayList<>(mods.values());
+        Map<String, Boolean> enabled = new java.util.HashMap<>();
+        for (InstalledMod m : list) {
+            enabled.put(m.id(), isEnabled(m.id()));
+        }
+        list.sort(Comparator.comparing((InstalledMod m) -> !m.id().equals(SecureScreen.SELF))
+                .thenComparing(m -> !enabled.get(m.id()))
+                .thenComparing(m -> m.name().toLowerCase(Locale.ROOT)));
+        return list;
+    }
+
+    private static boolean availableHere(String dir) {
+        try {
+            Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("readModInfo", String.class).invoke(null, dir);
+            return info != null && Boolean.TRUE.equals(info.getClass().getMethod("isAvailable").invoke(info));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return true; // when in doubt, list it
+        }
+    }
+
+    /** The Workshop item of a mod folder (.../108600/ITEM/mods/MOD), 0 for a local mod. */
+    static long workshopIdOf(String dir) {
+        String[] parts = dir.replace('\\', '/').split("/");
+        for (int i = 0; i + 2 < parts.length; i++) {
+            if (parts[i].equals("108600") && parts[i + 2].equals("mods")) {
+                try {
+                    return Long.parseLong(parts[i + 1]);
+                } catch (NumberFormatException e) {
+                    return 0;
+                }
+            }
+        }
+        return 0;
     }
 
     /** A mod folder (with mod.info) as PZ reads it, with its Java part if it has one. */
@@ -202,12 +260,21 @@ final class GameActions implements Actions {
 
     @Override
     public String activate(String modId) {
+        return setActive(modId, true);
+    }
+
+    @Override
+    public String deactivate(String modId) {
+        return setActive(modId, false);
+    }
+
+    /** In a game: the running save's list and its mods.txt; in the main menu: the main menu's list. */
+    private String setActive(String modId, boolean on) {
         try {
             Class<?> activeMods = Class.forName("zombie.modding.ActiveMods");
             if (luaGame.inGame()) {
-                // the running save's own list, written to its mods.txt like the game does when it loads
                 Object mods = activeMods.getMethod("getById", String.class).invoke(null, "currentGame");
-                mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, true);
+                mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, on);
                 Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
                 String file = (String) fs.getClass().getMethod("getFileNameInCurrentSave", String.class).invoke(fs, "mods.txt");
                 Class<?> modsFile = Class.forName("zombie.modding.ActiveModsFile");
@@ -216,20 +283,117 @@ final class GameActions implements Actions {
                 return null;
             }
             Object mods = activeMods.getMethod("getById", String.class).invoke(null, "default");
-            mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, true);
+            mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, on);
             Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("saveModsFile").invoke(null);
             return null;
         } catch (ReflectiveOperationException | RuntimeException e) {
-            return "cannot enable " + modId + ": " + e;
+            return "cannot " + (on ? "enable " : "disable ") + modId + ": " + e;
+        }
+    }
+
+    /** Whether the mod is in the list that counts now (the running save's, else the main menu's). */
+    private boolean isEnabled(String modId) {
+        try {
+            Object mods = Class.forName("zombie.modding.ActiveMods").getMethod("getById", String.class)
+                    .invoke(null, luaGame.inGame() ? "currentGame" : "default");
+            return Boolean.TRUE.equals(mods.getClass().getMethod("isModActive", String.class).invoke(mods, modId));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
         }
     }
 
     @Override
+    public String luaState(String modId) {
+        boolean enabled = isEnabled(modId);
+        if (!luaGame.inGame()) {
+            return enabled ? "on" : "off"; // the main menu: what the next load of a save gets
+        }
+        boolean loaded = luaGame.isActive(modId);
+        boolean parked = parkedLua.containsKey(modId);
+        if (parked || (loaded && !enabled)) {
+            return enabled ? "on, next load" : "off, next load";
+        }
+        if (loaded) {
+            return "on";
+        }
+        return enabled ? "on, next load" : "off";
+    }
+
+    @Override
     public LuaLive.Result loadLua(String modId) {
+        Map<String, List<Object>> parked = parkedLua.remove(modId);
+        if (parked != null) {
+            luaGame.giveBack(parked);
+            return LuaLive.Result.of(LuaLive.Status.RESUMED);
+        }
         String dir = downloadedModDirs.get(modId);
         LuaLive.Result result = LuaLive.load(luaGame, modId, dir);
         System.out.println("[Jumpstart] Lua of " + modId + ": " + result);
         return result;
+    }
+
+    @Override
+    public int unloadLua(String modId) {
+        if (!luaGame.inGame() || luaGame.multiplayer() || !luaGame.isActive(modId) || parkedLua.containsKey(modId)) {
+            return 0;
+        }
+        Map<String, List<Object>> taken = luaGame.takeHandlers(luaGame.modDirs(modId));
+        parkedLua.put(modId, taken);
+        int count = taken.values().stream().mapToInt(List::size).sum();
+        System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet());
+        return count;
+    }
+
+    @Override
+    public String uninstall(String modId) {
+        String dir = downloadedModDirs.get(modId);
+        if (dir == null) {
+            installedMods(); // fills the folders
+            dir = downloadedModDirs.get(modId);
+        }
+        if (dir == null) {
+            return "cannot find the folder of " + modId;
+        }
+        if ("on".equals(stateOf(modId))) {
+            off(modId);
+        }
+        unloadLua(modId);
+        String problem = setActive(modId, false);
+        if (problem != null) {
+            return problem;
+        }
+        try {
+            // also out of the main menu's list when this ran in a game
+            Object mods = Class.forName("zombie.modding.ActiveMods").getMethod("getById", String.class).invoke(null, "default");
+            mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, false);
+            Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("saveModsFile").invoke(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot update the main menu's mod list: " + e);
+        }
+        long item = workshopIdOf(dir);
+        if (item > 0) {
+            try {
+                Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("activateSteamOverlayToWorkshopItem", String.class)
+                        .invoke(null, Long.toString(item));
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return "OK workshop " + item + " (open https://steamcommunity.com/sharedfiles/filedetails/?id=" + item + " to unsubscribe)";
+            }
+            System.out.println("[Jumpstart] uninstalled " + modId + "; Steam page of item " + item + " opened to unsubscribe");
+            return "OK workshop " + item;
+        }
+        try {
+            Path folder = Path.of(dir);
+            Path target = folder.getParent().resolveSibling("mods-uninstalled")
+                    .resolve(folder.getFileName() + "-" + LocalDate.now());
+            Files.createDirectories(target.getParent());
+            Files.move(folder, target);
+            downloadedModDirs.remove(modId);
+            resetModFolders();
+            System.out.println("[Jumpstart] uninstalled " + modId + "; folder moved to " + target);
+            return "OK local " + target;
+        } catch (IOException | RuntimeException e) {
+            return "cannot move " + dir + ": " + e;
+        }
     }
 
     private static void resetModFolders() {

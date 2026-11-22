@@ -22,7 +22,8 @@ import java.util.Set;
  */
 final class LuaLive {
 
-    enum Status { LOADED, NOT_IN_GAME, MULTIPLAYER, ALREADY_ACTIVE, NO_LUA, FAILED }
+    /** RESUMED: a mod switched off in this session got its event handlers back. */
+    enum Status { LOADED, RESUMED, NOT_IN_GAME, MULTIPLAYER, ALREADY_ACTIVE, NO_LUA, FAILED }
 
     /** {@code needsRestart}: keys of {@link #RESTART_PARTS} the mod has. */
     record Result(Status status, int files, List<String> errors, List<String> needsRestart) {

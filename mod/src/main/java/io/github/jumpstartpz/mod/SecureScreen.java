@@ -58,6 +58,7 @@ public final class SecureScreen {
     static final int KEY_J = 74;
     static final int KEY_N = 78;
     static final int KEY_R = 82;
+    static final int KEY_U = 85;
     static final int KEY_Y = 89;
     static final int KEY_LEFT_SHIFT = 340;
     static final int KEY_LEFT_CONTROL = 341;
@@ -73,7 +74,11 @@ public final class SecureScreen {
     /** How long a Workshop download may take. */
     static final long DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
-    enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE, SERVER_CONSENT }
+    enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE, SERVER_CONSENT, UNINSTALL_ONCE, UNINSTALL_TWICE }
+
+    /** How long the answer key does nothing in the two uninstall questions. */
+    static final long UNINSTALL_FIRST_DELAY_MS = 1500;
+    static final long UNINSTALL_SECOND_DELAY_MS = 3000;
 
     /** How long the player's "yes" to an admin's change does nothing. */
     static final long CONSENT_DELAY_MS = 2000;
@@ -104,7 +109,9 @@ public final class SecureScreen {
     private boolean messageGood;
 
     // installed tab
-    private List<ModEntry> mods = List.of();
+    private List<Actions.InstalledMod> mods = List.of();
+    /** The mod the uninstall questions are about. */
+    private Actions.InstalledMod uninstalling;
     private final Map<String, String> states = new HashMap<>();
     private int selected;
     private Pending pending;
@@ -241,6 +248,7 @@ public final class SecureScreen {
             case LIST -> onKeys(pressed, now);
             case CONFIRM_ONCE, CONFIRM_TWICE -> onQuestion(pressed, now);
             case SERVER_CONSENT -> onServerConsent(pressed, now);
+            case UNINSTALL_ONCE, UNINSTALL_TWICE -> onUninstallQuestion(pressed, now);
         }
         if (mode != Mode.CLOSED) {
             draw(now);
@@ -330,7 +338,7 @@ public final class SecureScreen {
     }
 
     private void reload() {
-        mods = actions.javaMods();
+        mods = actions.installedMods();
         refreshStates();
         if (selected >= mods.size()) {
             selected = Math.max(0, mods.size() - 1);
@@ -339,17 +347,21 @@ public final class SecureScreen {
 
     private void refreshStates() {
         states.clear();
-        for (ModEntry mod : mods) {
-            states.put(mod.id(), actions.stateOf(mod.id()));
+        for (Actions.InstalledMod mod : mods) {
+            states.put(mod.id(), mod.java() != null ? actions.stateOf(mod.id()) : "lua:" + actions.luaState(mod.id()));
         }
     }
 
-    private ModEntry selectedMod() {
+    private Actions.InstalledMod selectedMod() {
         return mods.isEmpty() ? null : mods.get(selected);
     }
 
     private String stateOf(ModEntry mod) {
-        return states.getOrDefault(mod.id(), "not loaded");
+        return stateOf(mod.id());
+    }
+
+    private String stateOf(String modId) {
+        return states.getOrDefault(modId, "not loaded");
     }
 
     private void onKeys(Set<Integer> pressed, long now) {
@@ -398,32 +410,143 @@ public final class SecureScreen {
             say(actions.refreshIndex(), true);
             checks.clear();
         }
-        ModEntry mod = selectedMod();
+        Actions.InstalledMod mod = selectedMod();
         if (mod == null) {
             return;
         }
-        boolean wantsChange = pressed.contains(KEY_A) || pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
-        if (wantsChange && mod.id().equals(SELF)) {
+        boolean enter = pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
+        boolean toggle = pressed.contains(KEY_A);
+        boolean remove = pressed.contains(KEY_U);
+        if ((enter || toggle || remove) && mod.id().equals(SELF)) {
             say(texts.get("self.locked"), false); // the screen that switches mods does not switch itself off
             return;
         }
-        if (wantsChange && session.inMultiplayer()) {
+        if ((enter || toggle || remove) && session.inMultiplayer()) {
             say(texts.get("mp.locked"), false); // in multiplayer only an admin switches, for everybody
             return;
         }
-        if (pressed.contains(KEY_A)) {
-            String state = stateOf(mod);
+        if (remove) {
+            uninstalling = mod;
+            mode = Mode.UNINSTALL_ONCE;
+            questionSince = now;
+            return;
+        }
+        if (mod.java() == null) {
+            if (toggle || enter) {
+                toggleLua(mod, enter);
+            }
+            return;
+        }
+        if (toggle) {
+            String state = stateOf(mod.id());
             if (state.equals("on")) {
                 String r = actions.off(mod.id());
-                say(r, r.startsWith("OK"));
+                boolean ok = r.startsWith("OK");
+                if (ok) {
+                    actions.deactivate(mod.id());
+                    actions.unloadLua(mod.id());
+                }
+                say(ok ? String.format(Locale.ROOT, texts.get("java.off"), mod.name()) : r, ok);
             } else if (state.equals("off")) {
                 String r = actions.on(mod.id());
-                say(r, r.startsWith("OK"));
+                boolean ok = r.startsWith("OK");
+                if (ok) {
+                    actions.activate(mod.id());
+                    String lua = luaNote(mod.name(), actions.loadLua(mod.id()));
+                    say(String.format(Locale.ROOT, texts.get("java.on"), mod.name()) + (lua.isEmpty() ? "" : "  " + lua), true);
+                } else {
+                    say(r, false);
+                }
+            } else if (state.equals("not loaded")) {
+                start(mod.java(), now, false);
+            } else {
+                say(texts.get("java.untilRestart"), false); // loaded at start without hotswap: no switch
             }
             refreshStates();
-        } else if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
-            start(mod, now, false);
+        } else if (enter) {
+            start(mod.java(), now, false);
         }
+    }
+
+    /** A (or Enter on a mod that is off): a Lua mod on or off, in the mod list and, in a game, live. */
+    private void toggleLua(Actions.InstalledMod mod, boolean enter) {
+        String state = actions.luaState(mod.id());
+        if (state.startsWith("on")) {
+            if (enter) {
+                say(String.format(Locale.ROOT, texts.get("lua.running"), mod.name()), true);
+                return;
+            }
+            String problem = actions.deactivate(mod.id());
+            if (problem != null) {
+                say(problem, false);
+                return;
+            }
+            int stopped = actions.unloadLua(mod.id());
+            say(String.format(Locale.ROOT, texts.get(stopped > 0 ? "lua.stopped" : "lua.off"), mod.name(), stopped), true);
+        } else {
+            String problem = actions.activate(mod.id());
+            if (problem != null) {
+                say(problem, false);
+                return;
+            }
+            LuaLive.Result r = actions.loadLua(mod.id());
+            say(describeLua(mod.name(), r), r.status() != LuaLive.Status.FAILED && r.errors().isEmpty());
+        }
+        refreshStates();
+    }
+
+    // --- uninstall: two questions, each with a delay -----------------------------------------------
+
+    private void onUninstallQuestion(Set<Integer> pressed, long now) {
+        if (pressed.contains(KEY_ESCAPE) || pressed.contains(KEY_N)) {
+            uninstalling = null;
+            mode = Mode.LIST;
+            say(texts.get("uninstall.cancelled"), false);
+            return;
+        }
+        boolean yes = pressed.contains(KEY_J) || pressed.contains(KEY_Y);
+        long wait = mode == Mode.UNINSTALL_ONCE ? UNINSTALL_FIRST_DELAY_MS : UNINSTALL_SECOND_DELAY_MS;
+        if (!yes || now - questionSince < wait) {
+            return;
+        }
+        if (mode == Mode.UNINSTALL_ONCE) {
+            mode = Mode.UNINSTALL_TWICE;
+            questionSince = now;
+            return;
+        }
+        Actions.InstalledMod mod = uninstalling;
+        uninstalling = null;
+        mode = Mode.LIST;
+        String result = actions.uninstall(mod.id());
+        if (result.startsWith("OK workshop")) {
+            say(String.format(Locale.ROOT, texts.get("uninstalled.workshop"), mod.name()) + result.substring("OK workshop".length()).replaceFirst("^ \\d+", ""), true);
+        } else if (result.startsWith("OK local ")) {
+            say(String.format(Locale.ROOT, texts.get("uninstalled.local"), mod.name(), result.substring("OK local ".length())), true);
+        } else {
+            say(result, false);
+        }
+        checks.clear();
+        reload();
+    }
+
+    private void drawUninstallQuestion(int x, int y, int width, int bottom, long now) {
+        Actions.InstalledMod mod = uninstalling;
+        boolean second = mode == Mode.UNINSTALL_TWICE;
+        float[] c = second ? new float[] {1f, 0.35f, 0.3f} : new float[] {1f, 0.75f, 0.25f};
+        game.rect(x - 6, y - 4, width + 12, 3, c[0], c[1], c[2], 1f);
+        y += 8;
+        game.text(GameScreen.Font.LARGE, x, y, texts.get(second ? "uninstall2.title" : "uninstall1.title"), c[0], c[1], c[2], 1f);
+        y += game.fontHeight(GameScreen.Font.LARGE) + 10;
+        game.text(GameScreen.Font.MEDIUM, x, y, mod.name() + "  [" + mod.id() + "]  " + (mod.java() != null ? "Java" : "Lua"), 1f, 1f, 1f, 1f);
+        y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        String how = mod.workshopId() > 0 ? texts.get("uninstall.workshop") : texts.get("uninstall.local");
+        y = wrapped(GameScreen.Font.MEDIUM, x, y, width, texts.get(second ? "uninstall2.text" : "uninstall1.text") + " " + how, 1f, 1f, 1f);
+        long wait = (second ? UNINSTALL_SECOND_DELAY_MS : UNINSTALL_FIRST_DELAY_MS) - (now - questionSince);
+        String keys = wait > 0
+                ? String.format(Locale.ROOT, texts.get("uninstall.wait"), (wait + 999) / 1000)
+                : texts.get("uninstall.ready");
+        game.text(GameScreen.Font.MEDIUM, x, bottom - game.fontHeight(GameScreen.Font.MEDIUM), keys,
+                wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, 1f);
     }
 
     /** Enter on a mod: load it, or reload its jar when it is loaded already. */
@@ -499,9 +622,15 @@ public final class SecureScreen {
         say(outcome.kind() + " " + outcome.message(), outcome.kind() == LiveInstaller.Kind.DONE);
         String[] lua = luaAfterJava;
         luaAfterJava = null;
-        if (lua != null && !p.server() && lua[0].equals(p.mod().id()) && outcome.kind() == LiveInstaller.Kind.DONE) {
-            // the Java part runs; now the mod's Lua, which may use it
-            say(outcome.kind() + " " + outcome.message() + "  " + describeLua(lua[1], actions.loadLua(lua[0])), true);
+        if (!p.server() && outcome.kind() == LiveInstaller.Kind.DONE) {
+            // the Java part runs: the mod joins the mod list, then its Lua part, which may use the Java part
+            actions.activate(p.mod().id());
+            String title = lua != null && lua[0].equals(p.mod().id()) ? lua[1] : p.mod().name();
+            String note = luaNote(title, actions.loadLua(p.mod().id()));
+            if (!note.isEmpty()) {
+                say(outcome.kind() + " " + outcome.message() + "  " + note, true);
+            }
+            refreshStates();
         }
         if (p.server()) {
             if (outcome.kind() == LiveInstaller.Kind.DONE) {
@@ -513,12 +642,21 @@ public final class SecureScreen {
         }
     }
 
+    /** Like {@link #describeLua}, but empty when there is nothing new to say (no game, already running). */
+    private String luaNote(String title, LuaLive.Result r) {
+        return switch (r.status()) {
+            case NOT_IN_GAME, MULTIPLAYER, ALREADY_ACTIVE -> "";
+            default -> describeLua(title, r);
+        };
+    }
+
     /** One line on a mod's Lua part after loading it live (or why it waits for the next load). */
     private String describeLua(String title, LuaLive.Result r) {
         String text = switch (r.status()) {
             case LOADED -> String.format(Locale.ROOT, texts.get("lua.loaded"), title, r.files());
             case NO_LUA -> String.format(Locale.ROOT, texts.get("lua.none"), title);
             case ALREADY_ACTIVE -> String.format(Locale.ROOT, texts.get("lua.active"), title);
+            case RESUMED -> String.format(Locale.ROOT, texts.get("lua.resumed"), title);
             case FAILED -> String.format(Locale.ROOT, texts.get("lua.failed"), title, String.join("; ", r.errors()));
             case NOT_IN_GAME, MULTIPLAYER -> String.format(Locale.ROOT, texts.get("enabledLua"), title);
         };
@@ -926,8 +1064,10 @@ public final class SecureScreen {
             return;
         }
         Map<String, ModEntry> local = new HashMap<>();
-        for (ModEntry m : mods) {
-            local.put(m.id(), m);
+        for (Actions.InstalledMod m : mods) {
+            if (m.java() != null) {
+                local.put(m.id(), m.java());
+            }
         }
         int line = medium + 8;
         for (int i = 0; i < list.size() && y + line < bottom; i++) {
@@ -980,6 +1120,10 @@ public final class SecureScreen {
             drawServerConsent(x, y, width, bottom, now);
             return;
         }
+        if (mode == Mode.UNINSTALL_ONCE || mode == Mode.UNINSTALL_TWICE) {
+            drawUninstallQuestion(x, y, width, bottom, now);
+            return;
+        }
         if (mode != Mode.LIST) {
             drawQuestion(x, y, width, bottom, now);
             return;
@@ -1028,20 +1172,23 @@ public final class SecureScreen {
         }
         int visible = Math.max(1, (listBottom - top) / line);
         int first = Math.max(0, Math.min(selected - visible / 2, mods.size() - visible));
+        int kindWidth = game.textWidth(GameScreen.Font.SMALL, "Java  ");
         for (int i = first; i < Math.min(mods.size(), first + visible); i++) {
-            ModEntry mod = mods.get(i);
+            Actions.InstalledMod mod = mods.get(i);
             int y = top + (i - first) * line;
             if (i == selected) {
                 game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
-            game.text(GameScreen.Font.MEDIUM, x, y, mod.name(), 1f, 1f, 1f, 1f);
-            String state = mod.id().equals(SELF) ? "self" : stateOf(mod);
+            boolean java = mod.java() != null;
+            game.text(GameScreen.Font.SMALL, x, y + 2, java ? "Java" : "Lua", java ? 0.95f : 0.55f, java ? 0.75f : 0.8f, java ? 0.35f : 1f, 1f);
+            game.text(GameScreen.Font.MEDIUM, x + kindWidth, y, mod.name(), 1f, 1f, 1f, 1f);
+            String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
             String label = texts.get("state." + state);
             float[] c = switch (state) {
-                case "self" -> new float[] {0.45f, 0.95f, 0.45f};
-                case "on" -> new float[] {0.45f, 0.95f, 0.45f};
-                case "off" -> new float[] {0.95f, 0.7f, 0.3f};
-                case "on, until restart" -> new float[] {0.6f, 0.8f, 0.6f};
+                case "self", "on", "lua:on" -> new float[] {0.45f, 0.95f, 0.45f};
+                case "off", "lua:off" -> new float[] {0.95f, 0.7f, 0.3f};
+                case "on, until restart", "lua:on, next load" -> new float[] {0.6f, 0.8f, 0.6f};
+                case "lua:off, next load" -> new float[] {0.85f, 0.75f, 0.5f};
                 default -> new float[] {0.65f, 0.65f, 0.65f};
             };
             int w = game.textWidth(GameScreen.Font.MEDIUM, label);
@@ -1050,9 +1197,12 @@ public final class SecureScreen {
 
         int y = listBottom + 6;
         game.rect(x - 6, y - 4, width + 12, 1, 0.4f, 0.4f, 0.4f, 1f);
-        ModEntry mod = selectedMod();
-        if (mod != null) {
-            BiteCheckGate.Check check = checks.computeIfAbsent(mod.jar(), this::checkQuietly);
+        Actions.InstalledMod mod = selectedMod();
+        if (mod == null) {
+            return;
+        }
+        if (mod.java() != null) {
+            BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
             if (check != null) {
                 String verdict = check.verdict().name();
                 float[] c = verdict.equals("ALLOW") ? new float[] {0.5f, 1f, 0.5f}
@@ -1061,11 +1211,16 @@ public final class SecureScreen {
                         c[0], c[1], c[2], 1f);
             }
             y += small;
-            game.text(GameScreen.Font.SMALL, x, y, texts.get("mod") + mod.id() + "   " + texts.get("file") + shorten(mod.jar().toString(), 110),
+            game.text(GameScreen.Font.SMALL, x, y, texts.get("mod") + mod.id() + "   " + texts.get("file") + shorten(mod.java().jar().toString(), 110),
                     0.65f, 0.65f, 0.65f, 1f);
+        } else {
+            game.text(GameScreen.Font.SMALL, x, y, texts.get("luaMod"), 0.55f, 0.8f, 1f, 1f);
             y += small;
-            game.text(GameScreen.Font.SMALL, x, y, texts.get("luaNote"), 0.55f, 0.55f, 0.55f, 1f);
+            game.text(GameScreen.Font.SMALL, x, y, texts.get("mod") + mod.id()
+                    + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f, 1f);
         }
+        y += small;
+        game.text(GameScreen.Font.SMALL, x, y, texts.get("luaNote"), 0.55f, 0.55f, 0.55f, 1f);
     }
 
     private void drawLibrary(Library lib, int x, int top, int width, int bottom) {
@@ -1226,10 +1381,10 @@ public final class SecureScreen {
                 sb.append(" update=").append(session.update.mod).append(" phase=").append(session.update.phase);
             }
         } else {
-            ModEntry mod = selectedMod();
+            Actions.InstalledMod mod = selectedMod();
             sb.append(" selected=").append(mod == null ? "-" : mod.id());
             if (mod != null) {
-                sb.append(" state=").append(stateOf(mod));
+                sb.append(" state=").append(stateOf(mod.id()));
             }
         }
         if (pending != null) {
