@@ -6,10 +6,24 @@
         powershell -ExecutionPolicy Bypass -File install-windows.ps1      (-Uninstall to undo)
 #>
 param(
-    [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
+    [string]$GameDir = "",
     [switch]$Uninstall
 )
 $ErrorActionPreference = "Stop"
+if (-not $GameDir) { $GameDir = $env:JUMPSTART_GAME_DIR }
+if (-not $GameDir) {
+    # every Steam library (libraryfolders.vdf), the default one first
+    $steam = (Get-ItemProperty "HKCU:\Software\Valve\Steam" -ErrorAction SilentlyContinue).SteamPath
+    if (-not $steam) { $steam = "C:\Program Files (x86)\Steam" }
+    $libraries = @($steam.Replace('/', '\'))
+    $vdf = Join-Path $steam "steamapps\libraryfolders.vdf"
+    if (Test-Path $vdf) {
+        $libraries += (Select-String $vdf -Pattern '"path"\s+"([^"]+)"' -AllMatches).Matches | ForEach-Object { $_.Groups[1].Value.Replace('\\', '\') }
+    }
+    $GameDir = $libraries | ForEach-Object { Join-Path $_ "steamapps\common\ProjectZomboid" } |
+        Where-Object { Test-Path (Join-Path $_ "ProjectZomboid64.json") } | Select-Object -First 1
+    if (-not $GameDir) { throw "Project Zomboid not found in your Steam libraries (use -GameDir <folder>)" }
+}
 $kit = $PSScriptRoot
 $zb = Join-Path $GameDir "ZombieBuddy.jar"
 $json = Join-Path $GameDir "ProjectZomboid64.json"
