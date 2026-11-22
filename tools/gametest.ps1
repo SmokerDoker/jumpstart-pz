@@ -86,12 +86,15 @@ $failures = 0
 Log "gametest $(Get-Date -Format s)"
 Start-Process cmd.exe -ArgumentList '/c', "`"$t\start-test.cmd`"" -WindowStyle Hidden
 $deadline = (Get-Date).AddMinutes(4)
-do { Start-Sleep 5; $status = Lua "return Jumpstart.status()" } until ($status -eq "ready" -or (Get-Date) -gt $deadline)
-if ($status -ne "ready") {
+do { Start-Sleep 5; $ping = Lua "return 'pong'" } until ($ping -eq "pong" -or (Get-Date) -gt $deadline)
+$active = Lua 'return tostring(getActivatedMods():contains("Jumpstart"))'
+if ($active -ne "true") {
+    # a fresh -cachedir does not always pick up default.txt on the first start
+    Log "activating ZombieBuddy and Jumpstart like the mod menu does"
     Lua 'local am = ActiveMods.getById("default") am:setModActive("ZombieBuddy", true) am:setModActive("Jumpstart", true) saveModsFile() getCore():ResetLua("default", "modsChanged") return 1' | Out-Null
-    $deadline = (Get-Date).AddMinutes(2)
-    do { Start-Sleep 5; $status = Lua "return Jumpstart.status()" } until ($status -eq "ready" -or (Get-Date) -gt $deadline)
 }
+$deadline = (Get-Date).AddMinutes(2)
+do { Start-Sleep 5; $status = Lua "return Jumpstart.status()" } until ($status -eq "ready" -or (Get-Date) -gt $deadline)
 Check "Jumpstart ready" $status ($status -eq "ready")
 Check "ZBHelloWorld not loaded at start" (Has) ((Has) -eq "false")
 
