@@ -18,10 +18,14 @@ final class ClientSession {
         }
     }
 
-    enum Phase { GETTING, ASKING, SENT }
+    /** CONSENT: the player has to agree first (everybody except the admin who started it). */
+    enum Phase { CONSENT, GETTING, ASKING, SENT }
 
     /** A server update this client takes part in. */
     static final class Update {
+        final String action;
+        final boolean yours;
+        long since;
         final String mod;
         final String sha256;
         final String workshopId;
@@ -32,7 +36,10 @@ final class ClientSession {
         long nextLook;
         String status = "";
 
-        Update(String mod, String sha256, String workshopId, String by, long deadline) {
+        Update(String action, boolean yours, String mod, String sha256, String workshopId, String by, long deadline) {
+            this.action = action;
+            this.yours = yours;
+            this.phase = yours ? Phase.GETTING : Phase.CONSENT;
             this.mod = mod;
             this.sha256 = sha256;
             this.workshopId = workshopId;
@@ -42,6 +49,11 @@ final class ClientSession {
     }
 
     private final ServerLink link;
+
+    /** In a multiplayer game (with or without Jumpstart on the server): nobody switches mods alone. */
+    boolean inMultiplayer() {
+        return link.connected();
+    }
     private boolean helloSent;
     String token;
     boolean admin;
@@ -101,8 +113,10 @@ final class ClientSession {
             }
             case "prepare" -> {
                 long seconds = parse(args.get("seconds"), 180);
-                update = new Update(args.getOrDefault("mod", ""), args.getOrDefault("sha", ""),
+                update = new Update(args.getOrDefault("action", "update"), "1".equals(args.get("yours")),
+                        args.getOrDefault("mod", ""), args.getOrDefault("sha", ""),
                         args.getOrDefault("workshop", ""), args.getOrDefault("by", "?"), now + seconds * 1000);
+                update.since = now;
                 link.pause(true);
                 return "prepare";
             }
@@ -123,9 +137,10 @@ final class ClientSession {
         }
     }
 
-    void requestUpdate(String mod) {
+    /** Admins: "update", "off" or "on" for everybody. */
+    void requestChange(String action, String mod) {
         if (token != null) {
-            link.send("update", Map.of("token", token, "mod", mod));
+            link.send("change", Map.of("token", token, "action", action, "mod", mod));
         }
     }
 

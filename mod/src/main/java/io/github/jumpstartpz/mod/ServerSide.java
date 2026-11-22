@@ -153,24 +153,39 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
     }
 
     @Override
-    public String apply(String modId, String sha256, boolean adminConfirmed) {
+    public String apply(ServerCoordinator.Action action, String modId, String sha256, boolean adminConfirmed) {
         ModEntry mod = find(modId);
         if (mod == null) {
             return modId + " is gone from the server";
         }
-        if (actions.stateOf(modId).equals("not loaded")) {
-            // a client-only mod: the server does not run it, the clients have it now
-            loadedSha.put(modId, sha256);
+        String state = actions.stateOf(modId);
+        if (state.equals("not loaded")) {
+            // a client-only mod: the server does not run it; the clients have changed it
+            if (action == ServerCoordinator.Action.UPDATE) {
+                loadedSha.put(modId, sha256);
+            }
             return null;
         }
-        BiteCheckGate.Consent consent = adminConfirmed ? BiteCheckGate.Consent.CONFIRMED_TWICE : BiteCheckGate.Consent.NONE;
-        LiveInstaller.ConsentSource answer = check -> check.sha256().equals(sha256) ? consent : null;
-        LiveInstaller.Outcome outcome = actions.update(mod, answer);
-        if (outcome.kind() != LiveInstaller.Kind.DONE) {
-            return outcome.kind() + " " + outcome.message();
+        switch (action) {
+            case OFF -> {
+                String r = state.equals("off") ? "OK" : actions.off(modId);
+                return r.startsWith("OK") ? null : r;
+            }
+            case ON -> {
+                String r = state.equals("on") ? "OK" : actions.on(modId);
+                return r.startsWith("OK") ? null : r;
+            }
+            default -> {
+                BiteCheckGate.Consent consent = adminConfirmed ? BiteCheckGate.Consent.CONFIRMED_TWICE : BiteCheckGate.Consent.NONE;
+                LiveInstaller.ConsentSource answer = check -> check.sha256().equals(sha256) ? consent : null;
+                LiveInstaller.Outcome outcome = actions.update(mod, answer);
+                if (outcome.kind() != LiveInstaller.Kind.DONE) {
+                    return outcome.kind() + " " + outcome.message();
+                }
+                loadedSha.put(modId, sha256);
+                return null;
+            }
         }
-        loadedSha.put(modId, sha256);
-        return null;
     }
 
     private ModEntry find(String modId) {

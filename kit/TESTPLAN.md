@@ -4,6 +4,9 @@ Für 2–4 Spieler auf Windows, macOS und Ubuntu. Dauer: etwa eine Stunde.
 
 ## 1. Einmal pro Person installieren
 
+Download: <https://github.com/SmokerDoker/jumpstart-pz/releases/tag/test-kit> — das Paket für
+dein System (Windows `.zip`, macOS/Linux `.tar.gz`; dedizierte Server `jumpstart-server-….zip`).
+
 Alle brauchen dieselbe Project-Zomboid-Version (Build 42) und ZombieBuddy.
 
 | | Windows | macOS | Ubuntu |
@@ -42,20 +45,27 @@ Jeder öffnet nach dem Beitreten Strg+Umschalt+J → Reiter **Server**:
 - Stehen dort die Java-Mods des Servers mit „gleich wie bei dir“?
 - Der Host sieht zusätzlich „Du bist Admin auf diesem Server“.
 
-## 4. Gemeinsames Update (der eigentliche Test)
+## 4. Nur der Admin schaltet (der eigentliche Test)
 
-Der Host wählt im Reiter **Server** die Java-Mod und drückt **Enter**. Dann bei allen:
+Im Multiplayer kann niemand allein Java-Mods laden, aus- oder einschalten, auch der Admin nicht:
+Im Reiter **Installiert** und in den Bibliotheken kommt dann „Im Multiplayer schaltet nur ein
+Admin…“. Bitte bei jedem einmal ausprobieren.
 
-1. Das Spiel pausiert, der Jumpstart-Bildschirm geht auf und zeigt „Server-Update“ mit Restzeit (3 Minuten).
-2. Jumpstart findet genau die Version des Servers. Ist sie nicht von BiteCheck geprüft, fragt der
-   Bildschirm (J erst nach 3 Sekunden). Antworten:
+Der Host (Admin) wählt im Reiter **Server** die Java-Mod: **Enter** = Version des Servers für alle
+laden, **A** = für alle aus- bzw. einschalten. Dann bei allen anderen:
+
+1. Das Spiel pausiert, der Jumpstart-Bildschirm geht auf: „Admin … ändert eine Java-Mod für alle“
+   mit Restzeit (3 Minuten). **J** (nach 2 Sekunden) = einverstanden, **N** = nein.
+2. Beim Laden findet Jumpstart genau die Version des Servers. Ist sie nicht von BiteCheck geprüft,
+   fragt der Bildschirm zusätzlich (J erst nach 3 Sekunden). Antworten:
    - Spieler A: **J** → lädt, „warte auf die anderen Spieler“.
    - Spieler B: **N** → wird am Ende vom Server getrennt (Grund: „the player said no“).
    - Spieler C: gar nicht antworten → nach 3 Minuten getrennt („not ready in time“).
 3. Wenn alle geantwortet haben (oder die Zeit um ist), lädt der Server die Mod selbst, der
    Bildschirm schließt sich, das Spiel läuft weiter.
 
-Danach einmal ohne N/Warten wiederholen: Alle drücken J → niemand wird getrennt.
+Danach einmal ohne N/Warten wiederholen: Alle drücken J → niemand wird getrennt. Und einmal **A**
+(ausschalten für alle) und wieder **A** (einschalten).
 
 ## 5. Was ihr mir schickt
 

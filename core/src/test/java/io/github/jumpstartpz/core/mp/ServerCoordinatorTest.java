@@ -42,7 +42,7 @@ class ServerCoordinatorTest {
 
     @Test
     void anUpdateWaitsForEverybodyThenTheServerFollows() {
-        server.onCommand("admin", "update", Map.of("token", token("admin"), "mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
         assertTrue(server.updateRunning());
         for (String c : List.of("admin", "anna", "ben")) {
             Map<String, String> p = port.last(c, "prepare");
@@ -55,7 +55,9 @@ class ServerCoordinatorTest {
         assertTrue(port.applied.isEmpty(), "ben is not ready yet");
         ready("ben");
         server.tick(2000);
-        assertEquals(List.of("Mod " + NEW + " admin=true"), port.applied);
+        assertEquals(List.of("UPDATE Mod " + NEW + " admin=true"), port.applied);
+        assertEquals("1", port.last("admin", "prepare").get("yours"), "the admin who started it is not asked again");
+        assertEquals("0", port.last("anna", "prepare").get("yours"));
         assertTrue(port.kicked.isEmpty());
         assertEquals("1", port.last("anna", "done").get("ok"));
         assertFalse(server.updateRunning());
@@ -63,7 +65,7 @@ class ServerCoordinatorTest {
 
     @Test
     void whoIsTooSlowOrSaysNoIsKicked() {
-        server.onCommand("admin", "update", Map.of("token", token("admin"), "mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
         ready("admin");
         server.onCommand("anna", "failed", Map.of("token", token("anna"), "mod", "Mod", "reason", "the player said no"), 10);
         server.tick(59_999);
@@ -78,22 +80,22 @@ class ServerCoordinatorTest {
 
     @Test
     void commandsWithoutTheTokenDoNothing() {
-        server.onCommand("admin", "update", Map.of("token", "guessed", "mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("token", "guessed", "action", "update", "mod", "Mod"), 0);
         assertFalse(server.updateRunning());
-        server.onCommand("admin", "update", Map.of("mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("action", "update", "mod", "Mod"), 0);
         assertFalse(server.updateRunning());
     }
 
     @Test
     void onlyAdminsStartUpdates() {
-        server.onCommand("anna", "update", Map.of("token", token("anna"), "mod", "Mod"), 0);
+        server.onCommand("anna", "change", Map.of("token", token("anna"), "action", "off", "mod", "Mod"), 0);
         assertFalse(server.updateRunning());
-        assertEquals("only admins can start an update", port.last("anna", "note").get("text"));
+        assertEquals("only admins can switch Java mods in multiplayer", port.last("anna", "note").get("text"));
     }
 
     @Test
     void readyForAnotherHashDoesNotCount() {
-        server.onCommand("admin", "update", Map.of("token", token("admin"), "mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
         for (String c : List.of("admin", "anna", "ben")) {
             server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Mod", "sha", "c".repeat(64)), 1);
         }
@@ -103,7 +105,7 @@ class ServerCoordinatorTest {
 
     @Test
     void whoLeavesDoesNotHoldTheOthersUp() {
-        server.onCommand("admin", "update", Map.of("token", token("admin"), "mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
         ready("admin");
         ready("anna");
         port.connections.remove("ben");
@@ -115,9 +117,23 @@ class ServerCoordinatorTest {
     @Test
     void aBlockedJarIsNeverDistributed() {
         port.verdict = "REFUSE";
-        server.onCommand("admin", "update", Map.of("token", token("admin"), "mod", "Mod"), 0);
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
         assertFalse(server.updateRunning());
         assertNull(port.last("anna", "prepare"));
+    }
+
+    @Test
+    void anAdminSwitchesAModOffForEverybody() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "off", "mod", "Mod"), 0);
+        Map<String, String> p = port.last("ben", "prepare");
+        assertEquals("off", p.get("action"));
+        assertEquals("a".repeat(64), p.get("sha"), "off and on name the loaded version");
+        for (String c : List.of("admin", "anna", "ben")) {
+            server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Mod", "sha", "a".repeat(64)), 1);
+        }
+        server.tick(2);
+        assertEquals(List.of("OFF Mod " + "a".repeat(64) + " admin=true"), port.applied);
+        assertEquals("off", port.last("anna", "done").get("action"));
     }
 
     private String token(String c) {
@@ -158,8 +174,8 @@ class ServerCoordinatorTest {
         @Override public ServerCoordinator.Candidate candidate(String modId) {
             return modId.equals("Mod") ? new ServerCoordinator.Candidate(NEW, "123", verdict) : null;
         }
-        @Override public String apply(String modId, String sha256, boolean adminConfirmed) {
-            applied.add(modId + " " + sha256 + " admin=" + adminConfirmed);
+        @Override public String apply(ServerCoordinator.Action action, String modId, String sha256, boolean adminConfirmed) {
+            applied.add(action + " " + modId + " " + sha256 + " admin=" + adminConfirmed);
             return null;
         }
     }

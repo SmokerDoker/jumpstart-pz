@@ -73,7 +73,10 @@ public final class SecureScreen {
     /** How long a Workshop download may take. */
     static final long DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
-    enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE }
+    enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE, SERVER_CONSENT }
+
+    /** How long the player's "yes" to an admin's change does nothing. */
+    static final long CONSENT_DELAY_MS = 2000;
 
     enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SERVER }
 
@@ -232,6 +235,7 @@ public final class SecureScreen {
             }
             case LIST -> onKeys(pressed, now);
             case CONFIRM_ONCE, CONFIRM_TWICE -> onQuestion(pressed, now);
+            case SERVER_CONSENT -> onServerConsent(pressed, now);
         }
         if (mode != Mode.CLOSED) {
             draw(now);
@@ -391,6 +395,11 @@ public final class SecureScreen {
         }
         ModEntry mod = selectedMod();
         if (mod == null) {
+            return;
+        }
+        boolean wantsChange = pressed.contains(KEY_A) || pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
+        if (wantsChange && session.inMultiplayer()) {
+            say(texts.get("mp.locked"), false); // in multiplayer only an admin switches, for everybody
             return;
         }
         if (pressed.contains(KEY_A)) {
@@ -559,6 +568,10 @@ public final class SecureScreen {
 
     /** Enter on a library item: subscribe and download it through Steam, then install it. */
     private void startDownload(LibraryClient.Item item, long now) {
+        if (session.inMultiplayer()) {
+            say(texts.get("mp.locked"), false);
+            return;
+        }
         if (download != null) {
             say(texts.get("downloadBusy"), false);
             return;
@@ -677,7 +690,13 @@ public final class SecureScreen {
                     mode = Mode.LIST;
                 }
                 tab = Tab.SERVER;
-                say(String.format(Locale.ROOT, texts.get("mp.prepare"), session.update.by, session.update.mod), true);
+                ClientSession.Update u = session.update;
+                say(String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), true);
+                if (u.phase == ClientSession.Phase.CONSENT) {
+                    mode = Mode.SERVER_CONSENT;
+                } else if (!u.action.equals("update")) {
+                    switchForServer(u);
+                }
             }
             case "done" -> {
                 say(session.lastNote.isEmpty() ? texts.get("mp.done") : texts.get("mp.done") + " " + session.lastNote, true);
@@ -698,7 +717,7 @@ public final class SecureScreen {
             return;
         }
         if (now > u.deadline) {
-            if (pending != null && pending.server()) {
+            if ((pending != null && pending.server()) || mode == Mode.SERVER_CONSENT) {
                 pending = null;
                 mode = Mode.LIST;
             }
@@ -706,7 +725,7 @@ public final class SecureScreen {
             say(texts.get("mp.tooLate"), false);
             return;
         }
-        if (u.phase != ClientSession.Phase.GETTING || lookBusy || now < u.nextLook) {
+        if (u.phase != ClientSession.Phase.GETTING || !u.action.equals("update") || lookBusy || now < u.nextLook) {
             return;
         }
         u.nextLook = now + 2000;
@@ -753,15 +772,89 @@ public final class SecureScreen {
         if (pressed.contains(KEY_R)) {
             session.refresh();
         }
-        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && !list.isEmpty() && session.update == null) {
+        boolean enter = pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
+        if ((enter || pressed.contains(KEY_A)) && !list.isEmpty() && session.update == null) {
             if (!session.admin) {
                 say(texts.get("mp.notAdmin"), false);
             } else {
                 ClientSession.ServerMod mod = list.get(Math.min(serverSelected, list.size() - 1));
-                session.requestUpdate(mod.id());
-                say(String.format(Locale.ROOT, texts.get("mp.requested"), mod.id()), true);
+                String action = enter ? "update" : mod.state().equals("off") ? "on" : "off";
+                session.requestChange(action, mod.id());
+                say(String.format(Locale.ROOT, texts.get("mp.requested"), actionText(action), mod.id()), true);
             }
         }
+    }
+
+    private String actionText(String action) {
+        return texts.get("mp.action." + action);
+    }
+
+    /** The player answers an admin's change: J agrees (after a short delay), N or Esc refuses. */
+    private void onServerConsent(Set<Integer> pressed, long now) {
+        ClientSession.Update u = session.update;
+        if (u == null) {
+            mode = Mode.LIST;
+            return;
+        }
+        if (pressed.contains(KEY_ESCAPE) || pressed.contains(KEY_N)) {
+            session.failed("the player said no");
+            mode = Mode.LIST;
+            say(texts.get("mp.refused"), false);
+            return;
+        }
+        boolean yes = pressed.contains(KEY_J) || pressed.contains(KEY_Y);
+        if (!yes || now - u.since < CONSENT_DELAY_MS) {
+            return;
+        }
+        mode = Mode.LIST;
+        if (u.action.equals("update")) {
+            u.phase = ClientSession.Phase.GETTING;
+            u.nextLook = 0;
+        } else {
+            switchForServer(u);
+        }
+    }
+
+    /** Off / on for the server: the same switch as the installed tab, then the answer. */
+    private void switchForServer(ClientSession.Update u) {
+        String state = actions.stateOf(u.mod);
+        String result;
+        if (state.equals("not loaded")) {
+            result = u.action.equals("off") ? "OK" : "FAILED " + u.mod + " is not loaded here";
+        } else if (u.action.equals("off")) {
+            result = state.equals("off") ? "OK" : actions.off(u.mod);
+        } else {
+            result = state.equals("on") ? "OK" : actions.on(u.mod);
+        }
+        refreshStates();
+        if (result.startsWith("OK")) {
+            session.ready();
+            say(texts.get("mp.waiting"), true);
+        } else {
+            session.failed(result);
+            say(result, false);
+        }
+    }
+
+    private void drawServerConsent(int x, int y, int width, int bottom, long now) {
+        ClientSession.Update u = session.update;
+        if (u == null) {
+            return;
+        }
+        game.rect(x - 6, y - 4, width + 12, 3, 1f, 0.75f, 0.25f, 1f);
+        y += 8;
+        game.text(GameScreen.Font.LARGE, x, y, String.format(Locale.ROOT, texts.get("mp.consent.title"), u.by), 1f, 0.75f, 0.25f, 1f);
+        y += game.fontHeight(GameScreen.Font.LARGE) + 10;
+        game.text(GameScreen.Font.MEDIUM, x, y, actionText(u.action) + ": " + u.mod, 1f, 1f, 1f, 1f);
+        y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        y = wrapped(GameScreen.Font.MEDIUM, x, y, width, texts.get("mp.consent.text"), 0.9f, 0.9f, 0.9f);
+        y += 6;
+        long secondsLeft = Math.max(0, (u.deadline - now) / 1000);
+        game.text(GameScreen.Font.SMALL, x, y, String.format(Locale.ROOT, texts.get("mp.left"), secondsLeft), 0.8f, 0.8f, 0.8f, 1f);
+        long wait = CONSENT_DELAY_MS - (now - u.since);
+        String keys = wait > 0 ? String.format(Locale.ROOT, texts.get("mp.consent.wait"), (wait + 999) / 1000) : texts.get("mp.consent.keys");
+        game.text(GameScreen.Font.MEDIUM, x, bottom - game.fontHeight(GameScreen.Font.MEDIUM), keys,
+                wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, 1f);
     }
 
     private void drawServer(int x, int y, int width, int bottom) {
@@ -770,7 +863,7 @@ public final class SecureScreen {
         ClientSession.Update u = session.update;
         if (u != null) {
             game.rect(x - 6, y - 4, width + 12, medium * 2 + small + 16, 0.35f, 0.25f, 0.05f, 1f);
-            game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.banner"), u.mod, u.by), 1f, 0.9f, 0.5f, 1f);
+            game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.banner"), actionText(u.action), u.mod, u.by), 1f, 0.9f, 0.5f, 1f);
             long left = Math.max(0, (u.deadline - frameTime) / 1000);
             game.text(GameScreen.Font.MEDIUM, x, y + medium + 4, (u.status.isEmpty() ? texts.get("mp.getting") : u.status)
                     + "   " + String.format(Locale.ROOT, texts.get("mp.left"), left), 1f, 1f, 1f, 1f);
@@ -835,6 +928,10 @@ public final class SecureScreen {
 
         int bottom = py + ph - 18;
         int small = game.fontHeight(GameScreen.Font.SMALL);
+        if (mode == Mode.SERVER_CONSENT) {
+            drawServerConsent(x, y, width, bottom, now);
+            return;
+        }
         if (mode != Mode.LIST) {
             drawQuestion(x, y, width, bottom, now);
             return;

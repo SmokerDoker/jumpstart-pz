@@ -239,7 +239,7 @@ class SecureScreenTest {
     }
 
     @Test
-    void aServerUpdateAsksThePlayerAndReportsBack() {
+    void aServerChangeMustBeAgreedToAndNoIsReported() {
         link.connected = true;
         frame();
         assertEquals(List.of("hello {v=1}"), link.sent, "hello once when the multiplayer game starts");
@@ -247,36 +247,46 @@ class SecureScreenTest {
         frame();
         assertTrue(screen.session().connected());
 
-        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "unknown.jar", "workshop", "", "seconds", "60", "by", "admin"));
+        screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar", "workshop", "",
+                "seconds", "60", "by", "admin", "yours", "0"));
         frame();
-        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "the server opened the screen");
+        assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode(), "the server opened the screen and the player is asked");
         assertEquals(SecureScreen.Tab.SERVER, screen.tab());
         assertTrue(link.paused);
-        frame(); // the jar is found and checked: unknown to BiteCheck, so the player is asked
-        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
-        tap(SecureScreen.KEY_ESCAPE); // Esc in a question is "no" ...
+        assertTrue(game.drew("Admin admin changes a Java mod for everybody"));
+        tap(SecureScreen.KEY_J); // too early
+        assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode());
+        tap(SecureScreen.KEY_N);
         assertEquals("failed {mod=Unknown, reason=the player said no, token=T}", link.sent.get(link.sent.size() - 1));
+        assertTrue(actions.calls.isEmpty());
 
-        screen.onServerCommand("done", Map.of("mod", "Unknown", "ok", "1", "message", ""));
+        screen.onServerCommand("done", Map.of("action", "update", "mod", "Unknown", "ok", "1", "message", ""));
         frame();
         assertFalse(link.paused);
         assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "the screen the server opened closes again");
     }
 
     @Test
-    void aServerUpdateThePlayerAcceptsIsLoadedAndReady() {
+    void anAgreedUpdateGoesThroughBiteCheckAndIsReady() {
         link.connected = true;
         frame();
-        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
-        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "unknown.jar", "workshop", "", "seconds", "60", "by", "me"));
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar", "workshop", "",
+                "seconds", "60", "by", "admin", "yours", "0"));
         frame();
+        now += SecureScreen.CONSENT_DELAY_MS;
+        tap(SecureScreen.KEY_J); // agrees to the admin's change ...
         frame();
-        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
-        tap(SecureScreen.KEY_ESCAPE); // ... and Esc outside a question does not leave during an update
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "... and BiteCheck still asks about the unknown jar");
+        tap(SecureScreen.KEY_ESCAPE);
+        assertEquals("failed {mod=Unknown, reason=the player said no, token=T}", link.sent.get(link.sent.size() - 1));
+
         link.sent.clear();
-        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "unknown.jar", "workshop", "", "seconds", "60", "by", "me"));
+        screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar", "workshop", "",
+                "seconds", "60", "by", "me", "yours", "1"));
         frame();
         frame();
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "the admin who started it is not asked to agree, BiteCheck asks");
         now += SecureScreen.FIRST_DELAY_MS;
         tap(SecureScreen.KEY_J);
         assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
@@ -286,11 +296,39 @@ class SecureScreenTest {
     }
 
     @Test
-    void aWrongVersionIsNeverLoadedForTheServer() {
+    void anAdminSwitchesAModOffForEverybody() {
+        actions.states.put("Verified", "on");
         link.connected = true;
         frame();
         screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
-        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "c".repeat(64), "workshop", "", "seconds", "5", "by", "admin"));
+        screen.onServerCommand("prepare", Map.of("action", "off", "mod", "Verified", "sha", "s", "workshop", "",
+                "seconds", "60", "by", "admin", "yours", "0"));
+        frame();
+        now += SecureScreen.CONSENT_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        assertEquals("off", actions.states.get("Verified"));
+        assertEquals("ready {mod=Verified, sha=s, token=T}", link.sent.get(link.sent.size() - 1));
+    }
+
+    @Test
+    void inMultiplayerNobodySwitchesAlone() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        openScreen();
+        tap(SecureScreen.KEY_A);
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals("on", actions.states.get("Verified"));
+        assertTrue(actions.calls.isEmpty());
+        assertTrue(screen.describe().contains("only an admin switches"), screen.describe());
+    }
+
+    @Test
+    void aWrongVersionIsNeverLoadedForTheServer() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Unknown", "sha", "c".repeat(64), "workshop", "",
+                "seconds", "5", "by", "me", "yours", "1"));
         frame();
         frame();
         assertTrue(actions.calls.isEmpty());

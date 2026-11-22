@@ -1,0 +1,106 @@
+# Builds the four download packages and publishes them:
+#   jumpstart-windows-<v>.zip, jumpstart-macos-<v>.tar.gz, jumpstart-linux-<v>.tar.gz (clients)
+#   jumpstart-server-<v>.zip (dedicated servers)
+# Each holds the ZombieBuddy fork (built here from SmokerDoker/zombiebuddy-jumpstart, branch
+# jumpstart/hotswap, against projectzomboid.jar of the dedicated server, downloaded anonymously from
+# Steam) and the Jumpstart mod.
+#   push to main  -> pre-release "test-kit" (replaced on every push)
+#   tag v*        -> release with that version
+name: Kits
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kits-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - uses: actions/checkout@v7
+        with:
+          repository: SmokerDoker/zombiebuddy-jumpstart
+          ref: jumpstart/hotswap
+          path: fork
+
+      - name: Download projectzomboid.jar (dedicated server, public branch)
+        env:
+          DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+        run: |
+          set -euo pipefail
+          dd="$(bash .github/scripts/depotdownloader.sh)"
+          tool="$(dirname "$dd")"
+          dir="$RUNNER_TEMP/pz-server"
+          mkdir -p "$dir"
+          printf '%s\n' 'java/projectzomboid.jar' 'regex:projectzomboid\.jar$' > "$tool/files.txt"
+          for attempt in 1 2 3; do
+            if "$dd" -app 380870 -os linux -osarch 64 -filelist "$tool/files.txt" -dir "$dir" > "$RUNNER_TEMP/dd.log" 2>&1 \
+               && [ -f "$dir/java/projectzomboid.jar" ]; then
+              break
+            fi
+            tail -n 20 "$RUNNER_TEMP/dd.log"
+            echo "::warning::download attempt $attempt failed, retrying"
+            sleep 15
+          done
+          test -f "$dir/java/projectzomboid.jar"
+          echo "PZ_JAR=$dir/java/projectzomboid.jar" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            21
+            25
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.2"
+
+      - name: Build the ZombieBuddy fork
+        working-directory: fork/java
+        run: |
+          gradle --no-daemon "-PgameClasspath=$PZ_JAR" shadowJar
+          jar="$(ls build/*/libs/zombiebuddy-jumpstart.jar | head -n 1)"
+          echo "FORK_JAR=$PWD/$jar" >> "$GITHUB_ENV"
+
+      - name: Build Jumpstart
+        run: JAVA_HOME="$JAVA_HOME_21_X64" ./gradlew --no-daemon check :mod:modFolder
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="test-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"; fi
+          echo "KIT_VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Build the kits
+        run: bash kit/build-kits.sh "$FORK_JAR" mod/build/mod/Jumpstart dist "$KIT_VERSION"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: jumpstart-kits-${{ env.KIT_VERSION }}
+          path: dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes="Downloads for the online test: one client package per system (Windows, macOS, Linux) and one for dedicated servers. Install and test steps: TESTPLAN.md in each package (servers: SERVER.md). Built from ${GITHUB_SHA::7}; ZombieBuddy fork from SmokerDoker/zombiebuddy-jumpstart (jumpstart/hotswap)."
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            gh release create "$GITHUB_REF_NAME" dist/* --title "Jumpstart $KIT_VERSION" --notes "$notes"
+          else
+            gh release delete test-kit --yes --cleanup-tag 2>/dev/null || true
+            gh release create test-kit dist/* --prerelease --target "$GITHUB_SHA" \
+              --title "Jumpstart test kit ($KIT_VERSION)" --notes "$notes"
+          fi

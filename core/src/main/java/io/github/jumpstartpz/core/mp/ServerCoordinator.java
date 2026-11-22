@@ -18,10 +18,12 @@ import java.util.Set;
  *       the player is an admin, and the server's Java mods (id, Workshop item, loaded hash, the hash
  *       of the jar on disk now, state). The token travels only through Jumpstart's Java channel,
  *       which Lua neither sees nor can fake, so every later command must carry it.</li>
- *   <li><b>update</b> (admin): every connected client gets <b>prepare</b> with the mod, the hash the
- *       server has on disk and a deadline. The game pauses; each client gets exactly that jar
- *       (Steam Workshop), checks it with BiteCheck (the player answers its questions) and loads it,
- *       then sends <b>ready</b>, or <b>failed</b> with a reason.</li>
+ *   <li><b>change</b> (admins only; nobody else switches Java mods in multiplayer): action
+ *       <i>update</i> (load or reload the jar the server has on disk now), <i>off</i> or <i>on</i>.
+ *       Every connected client gets <b>prepare</b> with the action, the mod, the hash and a deadline.
+ *       The game pauses; every player except the admin who started it must agree, and for an update
+ *       the client gets exactly that jar (Steam Workshop), BiteCheck checks it (the player answers its
+ *       questions) and loads it. Then <b>ready</b>, or <b>failed</b> with a reason.</li>
  *   <li>When everybody is ready, or the deadline passed, clients that are not ready are kicked, the
  *       server loads the same jar itself and everybody gets <b>done</b>.</li>
  * </ul>
@@ -61,13 +63,31 @@ public final class ServerCoordinator<C> {
         Candidate candidate(String modId);
 
         /**
-         * Loads the candidate on the server. {@code adminConfirmed}: the admin who started the update
-         * loaded the same hash on their own computer, after BiteCheck's questions. Null when done.
+         * Does the change on the server. For an update, {@code adminConfirmed}: the admin who started
+         * it loaded the same hash on their own computer, after BiteCheck's questions. Null when done.
          */
-        String apply(String modId, String sha256, boolean adminConfirmed);
+        String apply(Action action, String modId, String sha256, boolean adminConfirmed);
     }
 
-    private record Update(String mod, String sha256, String workshopId, Object admin, long deadline,
+    /** What an admin can do to a Java mod for everybody. */
+    public enum Action {
+        UPDATE, OFF, ON;
+
+        public String wire() {
+            return name().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        static Action of(String s) {
+            for (Action a : values()) {
+                if (a.wire().equals(s)) {
+                    return a;
+                }
+            }
+            return null;
+        }
+    }
+
+    private record Update(Action action, String mod, String sha256, String workshopId, Object admin, long deadline,
                           Set<Object> expected, Set<Object> ready, Map<Object, String> failed) {
     }
 
@@ -97,7 +117,12 @@ public final class ServerCoordinator<C> {
             return; // not from Jumpstart's Java side of this connection (for example a Lua mod)
         }
         switch (command) {
-            case "update" -> startUpdate(c, args.getOrDefault("mod", ""), now);
+            case "change" -> {
+                Action action = Action.of(args.getOrDefault("action", ""));
+                if (action != null) {
+                    startChange(c, action, args.getOrDefault("mod", ""), now);
+                }
+            }
             case "ready" -> {
                 if (pending != null && pending.mod().equals(args.get("mod")) && pending.sha256().equals(args.get("sha"))) {
                     pending.ready().add(c);
@@ -134,34 +159,50 @@ public final class ServerCoordinator<C> {
         port.send(c, "welcome", args);
     }
 
-    private void startUpdate(C admin, String mod, long now) {
+    private void startChange(C admin, Action action, String mod, long now) {
         if (!port.isAdmin(admin)) {
-            note(admin, "only admins can start an update");
+            note(admin, "only admins can switch Java mods in multiplayer");
             return;
         }
         if (pending != null) {
-            note(admin, "an update of " + pending.mod() + " is running");
+            note(admin, "a change of " + pending.mod() + " is running");
             return;
         }
-        Candidate candidate = port.candidate(mod);
-        if (candidate == null) {
-            note(admin, mod + " has no Java jar on the server");
-            return;
-        }
-        if ("REFUSE".equals(candidate.verdict())) {
-            note(admin, "BiteCheck blocks " + mod + " on the server");
-            return;
+        String sha;
+        String workshop;
+        if (action == Action.UPDATE) {
+            Candidate candidate = port.candidate(mod);
+            if (candidate == null) {
+                note(admin, mod + " has no Java jar on the server");
+                return;
+            }
+            if ("REFUSE".equals(candidate.verdict())) {
+                note(admin, "BiteCheck blocks " + mod + " on the server");
+                return;
+            }
+            sha = candidate.sha256();
+            workshop = nz(candidate.workshopId());
+        } else {
+            ModInfo info = port.manifest().stream().filter(m -> m.id().equals(mod)).findFirst().orElse(null);
+            if (info == null) {
+                note(admin, mod + " is not a Java mod of this server");
+                return;
+            }
+            sha = nz(info.sha256());
+            workshop = nz(info.workshopId());
         }
         Set<Object> expected = new LinkedHashSet<>(port.connections());
-        pending = new Update(mod, candidate.sha256(), nz(candidate.workshopId()), admin, now + deadlineMs,
+        pending = new Update(action, mod, sha, workshop, admin, now + deadlineMs,
                 expected, new LinkedHashSet<>(), new LinkedHashMap<>());
-        Map<String, String> args = new LinkedHashMap<>();
-        args.put("mod", mod);
-        args.put("sha", candidate.sha256());
-        args.put("workshop", nz(candidate.workshopId()));
-        args.put("seconds", String.valueOf(deadlineMs / 1000));
-        args.put("by", port.name(admin));
         for (Object c : expected) {
+            Map<String, String> args = new LinkedHashMap<>();
+            args.put("action", action.wire());
+            args.put("mod", mod);
+            args.put("sha", sha);
+            args.put("workshop", workshop);
+            args.put("seconds", String.valueOf(deadlineMs / 1000));
+            args.put("by", port.name(admin));
+            args.put("yours", c.equals(admin) ? "1" : "0"); // the admin who started it is not asked again
             port.send(cast(c), "prepare", args);
         }
     }
@@ -194,11 +235,12 @@ public final class ServerCoordinator<C> {
                 C c = cast(o);
                 String why = u.failed().containsKey(o) ? u.failed().get(o) : "not ready in time";
                 kicked.add(port.name(c) + " (" + why + ")");
-                port.kick(c, "Jumpstart: " + u.mod() + " update: " + why);
+                port.kick(c, "Jumpstart: " + u.mod() + " " + u.action().wire() + ": " + why);
             }
         }
-        String problem = port.apply(u.mod(), u.sha256(), u.ready().contains(u.admin()));
+        String problem = port.apply(u.action(), u.mod(), u.sha256(), u.ready().contains(u.admin()));
         Map<String, String> args = new LinkedHashMap<>();
+        args.put("action", u.action().wire());
         args.put("mod", u.mod());
         args.put("ok", problem == null ? "1" : "0");
         args.put("message", problem != null ? "server: " + problem

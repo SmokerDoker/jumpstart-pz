@@ -82,12 +82,20 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
 - [x] Multiplayer (first version, for an online test): the server (dedicated, and hosted games
   through the fork) runs Jumpstart too; a Java channel between server and clients that Lua can
   neither read nor fake; the secure screen's **Server** tab compares the server's Java mods with
-  yours; an admin starts an update for everybody: the game pauses, every client gets exactly the
-  server's jar and checks it with BiteCheck (the player answers its questions), whoever is not
-  ready in time or says no is disconnected, then the server follows. Test kit for Windows, macOS
+  yours. In multiplayer nobody switches Java mods alone, not even an admin: an admin loads/updates
+  (Enter) or switches off/on (A) a mod for everybody at once. The game pauses, every other player
+  has to agree, for an update every client gets exactly the server's jar and BiteCheck checks it
+  (the player answers its questions); whoever says no or is not ready within 3 minutes is
+  disconnected, then the server follows. Test kit for Windows, macOS
   and Ubuntu: [kit/](kit/TESTPLAN.md)
 - [x] The cloud Worker runs at <https://jumpstart-cloud.smokerdoker.workers.dev> (D1 database in
   Western Europe) and is the default for Jumpstart and BiteCheck (`cloud_url` overrides it)
+
+## Downloads
+
+[Releases](https://github.com/SmokerDoker/jumpstart-pz/releases): `test-kit` is rebuilt on every
+push to main (workflow *Kits*): client packages for Windows, macOS and Linux and one for dedicated
+servers, each with the ZombieBuddy fork, the Jumpstart mod, install scripts and the test plan.
 
 ## Build
 
