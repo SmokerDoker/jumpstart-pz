@@ -53,7 +53,8 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   transformer per mod; proven in tests ([spike notes](docs/SPIKE-1-zombiebuddy.md))
 - [x] ZombieBuddy fork with a hotswap API:
   [zombiebuddy-jumpstart](https://github.com/SmokerDoker/zombiebuddy-jumpstart), tested with a Java agent
-- [ ] Same in the game with ZBHelloWorld (test guide: `TESTING.md` in the fork)
+- [x] Same in the game with ZBHelloWorld: off/on five times and a live update, checked through
+  the bytecode the game runs (automated: `tools\gametest.ps1` in the fork, 28 of 28 checks)
 - [x] Load new mods and update loaded ones at runtime (fork: `Hotswap.load` / `Hotswap.update`,
   only with approval in `mod_approvals.json`)
 - [ ] BiteCheck gate

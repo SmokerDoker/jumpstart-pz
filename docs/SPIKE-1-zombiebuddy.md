@@ -70,4 +70,7 @@ a mod updated from version 1 to 2 and back at runtime.
   static state stay in memory, class names built as strings are not moved, and what the old
   `main()` registered is not undone. Undoing that is the journal's job in Jumpstart.
 - **MethodDelegation patches** stay until restart.
-- **In-game test** with ZBHelloWorld: see `TESTING.md` in the fork.
+- **In-game test:** done on Build 42 with ZBHelloWorld (`tools/gametest.ps1` in the fork): patch
+  present after load, gone after `off`, back after `on`, five rounds, then a live update to
+  `ZBHelloWorld-2x.jar` and another round; the game kept running. Checked through the bytecode
+  `MainScreenState` runs (`Hotswap.classHasString`), not on screen.
