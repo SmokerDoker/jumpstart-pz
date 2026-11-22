@@ -1,6 +1,8 @@
 package io.github.jumpstartpz.core;
 
 import java.lang.instrument.Instrumentation;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
@@ -9,7 +11,12 @@ import io.github.jumpstartpz.core.fixtures.CallLog;
 import io.github.jumpstartpz.core.fixtures.Greeter;
 import io.github.jumpstartpz.core.fixtures.ModAAdvice;
 import io.github.jumpstartpz.core.fixtures.ModBAdvice;
+import net.bytebuddy.ByteBuddy;
 import net.bytebuddy.agent.ByteBuddyAgent;
+import net.bytebuddy.description.modifier.Visibility;
+import net.bytebuddy.dynamic.DynamicType;
+import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
+import net.bytebuddy.implementation.FixedValue;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -25,7 +32,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HotswapEngineTest {
     private static final String GREETER = Greeter.class.getName();
-    private static final String LATE_GREETER = "io.github.jumpstartpz.core.fixtures.LateGreeter";
+    // Generated at run time: a class file in the test folder would already be loaded by JUnit's test discovery.
+    private static final String LATE_GREETER = "io.github.jumpstartpz.core.fixtures.GeneratedLateGreeter";
 
     private static Instrumentation instrumentation;
     private static HotswapEngine engine;
@@ -84,8 +92,16 @@ class HotswapEngineTest {
     void patchesAClassThatLoadsAfterTheModWasSwitchedOnAndCanStillRemoveIt() throws Exception {
         assertFalse(isLoaded(LATE_GREETER), "fixture must not be loaded before the mod is on");
 
+        DynamicType.Unloaded<Object> lateType = new ByteBuddy()
+                .subclass(Object.class)
+                .name(LATE_GREETER)
+                .defineMethod("greet", String.class, Visibility.PUBLIC)
+                .intercept(FixedValue.value("late"))
+                .make();
+
         engine.enable("mod-a", List.of(new PatchSpec(LATE_GREETER, "greet", ModAAdvice.class)));
-        Class<?> lateClass = Class.forName(LATE_GREETER);
+        ClassLoader loader = new URLClassLoader(new URL[0], HotswapEngineTest.class.getClassLoader());
+        Class<?> lateClass = lateType.load(loader, ClassLoadingStrategy.Default.INJECTION).getLoaded();
         Object late = lateClass.getConstructor().newInstance();
         var greet = lateClass.getMethod("greet");
 
