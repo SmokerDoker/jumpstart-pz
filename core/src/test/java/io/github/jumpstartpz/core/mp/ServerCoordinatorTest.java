@@ -90,7 +90,7 @@ class ServerCoordinatorTest {
     void onlyAdminsStartUpdates() {
         server.onCommand("anna", "change", Map.of("token", token("anna"), "action", "off", "mod", "Mod"), 0);
         assertFalse(server.updateRunning());
-        assertEquals("only admins can switch Java mods in multiplayer", port.last("anna", "note").get("text"));
+        assertEquals("only admins can switch mods in multiplayer", port.last("anna", "note").get("text"));
     }
 
     @Test
