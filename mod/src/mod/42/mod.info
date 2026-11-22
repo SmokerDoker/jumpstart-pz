@@ -7,5 +7,5 @@ require=\ZombieBuddy
 modversion=0.1.0
 
 javaPkgName=io.github.jumpstartpz.mod
-javaJarFile=media/java/client/Jumpstart.jar
+javaJarFile=media/java/Jumpstart.jar
 ZBVersionMin=3.0.0

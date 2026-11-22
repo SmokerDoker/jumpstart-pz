@@ -79,6 +79,13 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
 - [x] Voluntary sharing (tab *Sharing*, off by default, BiteCheck's `UsageSharing`): once a day the
   SHA-256, Workshop id, mod id and size of unverified jars go to the cloud, so the BiteCheck
   registry reviews the mods people really play first. The tab shows exactly what would be sent.
+- [x] Multiplayer (first version, for an online test): the server (dedicated, and hosted games
+  through the fork) runs Jumpstart too; a Java channel between server and clients that Lua can
+  neither read nor fake; the secure screen's **Server** tab compares the server's Java mods with
+  yours; an admin starts an update for everybody: the game pauses, every client gets exactly the
+  server's jar and checks it with BiteCheck (the player answers its questions), whoever is not
+  ready in time or says no is disconnected, then the server follows. Test kit for Windows, macOS
+  and Ubuntu: [kit/](kit/TESTPLAN.md)
 - [x] The cloud Worker runs at <https://jumpstart-cloud.smokerdoker.workers.dev> (D1 database in
   Western Europe) and is the default for Jumpstart and BiteCheck (`cloud_url` overrides it)
 
@@ -99,7 +106,8 @@ running, the fork built next to this repository): `tools\gametest.ps1`.
 core/          BiteCheck gate, LiveInstaller, hotswap engine, library client (planned: multiplayer)
 mod/           The Jumpstart mod for Project Zomboid (secure screen, read-only Lua API)
 third_party/   BiteCheck (git submodule)
-tools/         In-game test and a stand-in for the cloud
+tools/         In-game tests (single player, dedicated server), a stand-in for the cloud, the kit builder
+kit/           Install scripts and test plan for the online test with friends
 cloud/         Cloudflare Worker: mod libraries (Steam Workshop search) and voluntary reports
 docs/          Design notes and spike results
 ```

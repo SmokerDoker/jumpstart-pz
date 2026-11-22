@@ -45,6 +45,6 @@ val modFolder by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("mod/Jumpstart"))
     from("src/mod")
     from(modJar) {
-        into("42/media/java/client")
+        into("42/media/java") // shared: the client and the server (multiplayer) load it
     }
 }

@@ -30,6 +30,7 @@ class SecureScreenTest {
     private static final ModEntry BLOCKED = new ModEntry("Blocked", "D blocked mod", Path.of("blocked.jar"), "pkg.b");
 
     private FakeGame game;
+    private FakeLink link;
     private FakeActions actions;
     private SecureScreen screen;
     private long now;
@@ -37,8 +38,9 @@ class SecureScreenTest {
     @BeforeEach
     void setUp() {
         game = new FakeGame();
+        link = new FakeLink();
         actions = new FakeActions();
-        screen = new SecureScreen(game, actions, false, Runnable::run);
+        screen = new SecureScreen(game, actions, false, Runnable::run, link);
         SecureScreen.install(screen);
         now = 1_000_000;
     }
@@ -171,7 +173,7 @@ class SecureScreenTest {
 
     @Test
     void injectedKeysWorkInTestMode() {
-        SecureScreen testScreen = new SecureScreen(game, actions, true, Runnable::run);
+        SecureScreen testScreen = new SecureScreen(game, actions, true, Runnable::run, link);
         SecureScreen.install(testScreen);
         assertTrue(testScreen.inject(SecureScreen.OPEN));
         testScreen.frame(now);
@@ -234,6 +236,67 @@ class SecureScreenTest {
         assertEquals(List.of("1 jars"), actions.shared);
         tap(SecureScreen.KEY_ENTER);
         assertFalse(actions.sharing);
+    }
+
+    @Test
+    void aServerUpdateAsksThePlayerAndReportsBack() {
+        link.connected = true;
+        frame();
+        assertEquals(List.of("hello {v=1}"), link.sent, "hello once when the multiplayer game starts");
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", "Unknown\t\told\tunknown.jar\ton\n"));
+        frame();
+        assertTrue(screen.session().connected());
+
+        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "unknown.jar", "workshop", "", "seconds", "60", "by", "admin"));
+        frame();
+        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "the server opened the screen");
+        assertEquals(SecureScreen.Tab.SERVER, screen.tab());
+        assertTrue(link.paused);
+        frame(); // the jar is found and checked: unknown to BiteCheck, so the player is asked
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
+        tap(SecureScreen.KEY_ESCAPE); // Esc in a question is "no" ...
+        assertEquals("failed {mod=Unknown, reason=the player said no, token=T}", link.sent.get(link.sent.size() - 1));
+
+        screen.onServerCommand("done", Map.of("mod", "Unknown", "ok", "1", "message", ""));
+        frame();
+        assertFalse(link.paused);
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "the screen the server opened closes again");
+    }
+
+    @Test
+    void aServerUpdateThePlayerAcceptsIsLoadedAndReady() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "unknown.jar", "workshop", "", "seconds", "60", "by", "me"));
+        frame();
+        frame();
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
+        tap(SecureScreen.KEY_ESCAPE); // ... and Esc outside a question does not leave during an update
+        link.sent.clear();
+        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "unknown.jar", "workshop", "", "seconds", "60", "by", "me"));
+        frame();
+        frame();
+        now += SecureScreen.FIRST_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
+        assertEquals("ready {mod=Unknown, sha=unknown.jar, token=T}", link.sent.get(link.sent.size() - 1));
+        tap(SecureScreen.KEY_ESCAPE);
+        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "stays open until the server says done");
+    }
+
+    @Test
+    void aWrongVersionIsNeverLoadedForTheServer() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("mod", "Unknown", "sha", "c".repeat(64), "workshop", "", "seconds", "5", "by", "admin"));
+        frame();
+        frame();
+        assertTrue(actions.calls.isEmpty());
+        now += 6000;
+        frame();
+        assertEquals("failed {mod=Unknown, reason=not ready in time, token=T}", link.sent.get(link.sent.size() - 1));
     }
 
     // --- helpers ---------------------------------------------------------------------------------
@@ -411,6 +474,18 @@ class SecureScreenTest {
             shared.add(jars.size() + " jars");
             return "OK " + jars.size() + " jars";
         }
+    }
+
+    private static final class FakeLink implements ServerLink {
+        boolean connected;
+        boolean paused;
+        final List<String> sent = new ArrayList<>();
+
+        @Override public boolean connected() { return connected; }
+        @Override public void send(String command, Map<String, String> args) {
+            sent.add(command + " " + new java.util.TreeMap<>(args));
+        }
+        @Override public void pause(boolean paused) { this.paused = paused; }
     }
 
     private static final class FakeWorkshop implements Workshop {

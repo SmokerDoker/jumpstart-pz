@@ -28,8 +28,38 @@ public final class Main {
         ZombieBuddyFork zombieBuddy = ZombieBuddyFork.current();
         LiveInstaller installer = LiveInstaller.forGame();
         JumpstartLua.init(installer, zombieBuddy);
-        startSecureScreen(installer, zombieBuddy);
+        if (isServer()) {
+            startServer(installer, zombieBuddy);
+        } else {
+            startSecureScreen(installer, zombieBuddy);
+        }
         expose();
+    }
+
+    private static boolean isServer() {
+        try {
+            return (Boolean) Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("isServer").invoke(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static Instrumentation instrumentation() throws ReflectiveOperationException {
+        return (Instrumentation) Class.forName("me.zed_0xff.zombie_buddy.Loader", true,
+                Main.class.getClassLoader()).getMethod("getInstrumentation").invoke(null);
+    }
+
+    /** On a server (dedicated or hosted): the multiplayer coordinator and its channel. */
+    private static synchronized void startServer(LiveInstaller installer, ZombieBuddyFork zombieBuddy) {
+        try {
+            ServerSide.start(new GameActions(installer, zombieBuddy, LiveInstaller.biteCheckDir()));
+            if (!patched) {
+                GameHooks.installServer(instrumentation());
+                patched = true;
+            }
+        } catch (Throwable t) {
+            System.out.println("[Jumpstart] multiplayer server side not available: " + t);
+        }
     }
 
     private static void expose() {
@@ -45,14 +75,19 @@ public final class Main {
 
     private static synchronized void startSecureScreen(LiveInstaller installer, ZombieBuddyFork zombieBuddy) {
         try {
-            SecureScreen.install(new SecureScreen(new ReflectiveGameScreen(),
-                    new GameActions(installer, zombieBuddy, LiveInstaller.biteCheckDir()), TEST_INPUT, BACKGROUND));
+            SecureScreen screen = new SecureScreen(new ReflectiveGameScreen(),
+                    new GameActions(installer, zombieBuddy, LiveInstaller.biteCheckDir()), TEST_INPUT, BACKGROUND, new GameLink());
+            SecureScreen.install(screen);
+            io.github.jumpstartpz.mod.net.Net.onClient((command, args) -> {
+                SecureScreen current = SecureScreen.current();
+                if (current != null) {
+                    current.onServerCommand(command, args);
+                }
+            });
             if (patched) {
                 return; // main() ran again (Lua reloaded); the game is patched already
             }
-            Instrumentation instrumentation = (Instrumentation) Class.forName("me.zed_0xff.zombie_buddy.Loader", true,
-                    Main.class.getClassLoader()).getMethod("getInstrumentation").invoke(null);
-            GameHooks.install(instrumentation);
+            GameHooks.install(instrumentation());
             patched = true;
             System.out.println("[Jumpstart] secure screen ready: Ctrl+Shift+J"
                     + (TEST_INPUT ? " (TEST MODE: Lua may press its keys, -Djumpstart.testInput)" : ""));

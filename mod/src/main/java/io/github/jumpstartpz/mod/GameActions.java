@@ -86,6 +86,26 @@ final class GameActions implements Actions {
         }
     }
 
+    /** A mod by id with the jar a client loads (also on a server), or null. */
+    FolderMod clientModById(String id) {
+        try {
+            Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("getAvailableModDetails", String.class).invoke(null, id);
+            if (info == null) {
+                return null;
+            }
+            String name = (String) info.getClass().getMethod("getName").invoke(info);
+            String common = (String) info.getClass().getMethod("getCommonDir").invoke(info);
+            String version = (String) info.getClass().getMethod("getVersionDir").invoke(info);
+            String java = common == null || version == null ? null : zombieBuddy.clientJavaModOf(common, version);
+            int tab = java == null ? -1 : java.indexOf('\t');
+            ModEntry entry = tab < 0 ? null : new ModEntry(id, name == null || name.isBlank() ? id : name,
+                    Path.of(java.substring(0, tab)), java.substring(tab + 1));
+            return new FolderMod(id, name, entry);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
     @Override
     public String stateOf(String modId) {
         String state = zombieBuddy.stateOf(modId);

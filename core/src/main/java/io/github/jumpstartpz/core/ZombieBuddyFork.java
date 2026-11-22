@@ -84,6 +84,11 @@ public final class ZombieBuddyFork implements HotswapBackend {
         return callStrings("javaModOf", commonDir, versionDir);
     }
 
+    /** Like {@link #javaModOf}, but the jar a game client loads, also when asked on a server. */
+    public String clientJavaModOf(String commonDir, String versionDir) {
+        return callStrings("clientJavaModOf", commonDir, versionDir);
+    }
+
     private String callStrings(String name, String... args) {
         try {
             Class<?>[] types = new Class<?>[args.length];

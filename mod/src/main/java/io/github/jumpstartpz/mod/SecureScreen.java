@@ -75,7 +75,7 @@ public final class SecureScreen {
 
     enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE }
 
-    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING }
+    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SERVER }
 
     private static volatile SecureScreen current;
     private static volatile boolean reportedError;
@@ -84,6 +84,7 @@ public final class SecureScreen {
     private final Actions actions;
     private final boolean testInput;
     private final Executor background;
+    private final ClientSession session;
     private final Set<Integer> held = new HashSet<>();
     private final Deque<Integer> injected = new ArrayDeque<>();
     private final Deque<Runnable> toMainThread = new ArrayDeque<>();
@@ -112,8 +113,16 @@ public final class SecureScreen {
     private String sharingPreview = "";
     private boolean sharingStarted;
 
-    private record Pending(ModEntry mod, BiteCheckGate.Check check, boolean update) {
+    /** {@code server}: the server asked for this mod (multiplayer update); the answer goes back to it. */
+    private record Pending(ModEntry mod, BiteCheckGate.Check check, boolean update, boolean server) {
     }
+
+    // multiplayer
+    private int serverSelected;
+    private boolean openedByServer;
+    private boolean lookBusy;
+    /** The time of the current frame, for work handed over from other threads. */
+    private long frameTime;
 
     /** One library tab: the search text, the results and where the next page starts. */
     private static final class Library {
@@ -140,11 +149,12 @@ public final class SecureScreen {
      *                   for automated tests; read once at start, so Lua cannot turn it on)
      * @param background runs network and hashing work off the main thread
      */
-    SecureScreen(GameScreen game, Actions actions, boolean testInput, Executor background) {
+    SecureScreen(GameScreen game, Actions actions, boolean testInput, Executor background, ServerLink link) {
         this.game = game;
         this.actions = actions;
         this.testInput = testInput;
         this.background = background;
+        this.session = new ClientSession(link);
         libraries.put(Tab.JAVA_LIBRARY, new Library(LibraryClient.Kind.JAVA));
         libraries.put(Tab.LUA_LIBRARY, new Library(LibraryClient.Kind.LUA));
     }
@@ -199,10 +209,15 @@ public final class SecureScreen {
         if (texts == null) {
             texts = new Texts(game.language());
         }
+        frameTime = now;
         runMainThreadWork();
+        session.tick();
         Set<Integer> pressed = poll();
         if (download != null) {
             followDownload(now);
+        }
+        if (session.update != null) {
+            followServerUpdate(now);
         }
         switch (mode) {
             case CLOSED -> {
@@ -329,12 +344,18 @@ public final class SecureScreen {
     }
 
     private void onKeys(Set<Integer> pressed, long now) {
-        if (pressed.contains(KEY_ESCAPE)) {
+        if (pressed.contains(KEY_ESCAPE) && session.update == null) {
             close();
             return;
         }
         if (pressed.contains(KEY_TAB)) {
             tab = Tab.values()[(tab.ordinal() + 1) % Tab.values().length];
+            if (tab == Tab.SERVER && !session.connected()) {
+                tab = Tab.INSTALLED; // the server tab exists only in multiplayer
+            }
+            if (tab == Tab.SERVER) {
+                session.refresh();
+            }
             message = "";
             if (tab == Tab.SHARING) {
                 showSharing();
@@ -345,6 +366,7 @@ public final class SecureScreen {
             case INSTALLED -> onInstalled(pressed, now);
             case JAVA_LIBRARY, LUA_LIBRARY -> onLibrary(libraries.get(tab), pressed, now);
             case SHARING -> onSharing(pressed);
+            case SERVER -> onServer(pressed);
         }
     }
 
@@ -382,25 +404,31 @@ public final class SecureScreen {
             }
             refreshStates();
         } else if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
-            start(mod, now);
+            start(mod, now, false);
         }
     }
 
     /** Enter on a mod: load it, or reload its jar when it is loaded already. */
-    private void start(ModEntry mod, long now) {
+    private void start(ModEntry mod, long now, boolean server) {
         BiteCheckGate.Check check;
         try {
             check = actions.check(mod.jar());
         } catch (IOException e) {
             say(texts.get("cannotCheck") + e.getMessage(), false);
+            if (server) {
+                session.failed("cannot check the jar: " + e.getMessage());
+            }
             return;
         }
         checks.put(mod.jar(), check);
-        pending = new Pending(mod, check, !stateOf(mod).equals("not loaded"));
+        pending = new Pending(mod, check, !stateOf(mod).equals("not loaded"), server);
         switch (check.verdict()) {
             case REFUSE -> {
                 pending = null;
                 say(texts.get("refused"), false);
+                if (server) {
+                    session.failed("BiteCheck blocks the jar");
+                }
             }
             case ALLOW -> run(BiteCheckGate.Consent.NONE);
             case CONFIRM, CONFIRM_TWICE -> {
@@ -412,6 +440,9 @@ public final class SecureScreen {
 
     private void onQuestion(Set<Integer> pressed, long now) {
         if (pressed.contains(KEY_ESCAPE) || pressed.contains(KEY_N)) {
+            if (pending.server()) {
+                session.failed("the player said no");
+            }
             pending = null;
             mode = Mode.LIST;
             say(texts.get("cancelled"), false);
@@ -448,6 +479,14 @@ public final class SecureScreen {
         checks.remove(p.mod().jar());
         refreshStates();
         say(outcome.kind() + " " + outcome.message(), outcome.kind() == LiveInstaller.Kind.DONE);
+        if (p.server()) {
+            if (outcome.kind() == LiveInstaller.Kind.DONE) {
+                session.ready();
+                say(texts.get("mp.waiting"), true);
+            } else {
+                session.failed(outcome.kind() + " " + outcome.message());
+            }
+        }
     }
 
     private void say(String text, boolean good) {
@@ -581,7 +620,7 @@ public final class SecureScreen {
                 }
             }
             say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
-            start(java, now);
+            start(java, now, false);
         } else if (java != null) {
             say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
         } else {
@@ -611,6 +650,159 @@ public final class SecureScreen {
             } catch (IOException e) {
                 say(e.getMessage(), false);
             }
+        }
+    }
+
+    // --- multiplayer ---------------------------------------------------------------------------------
+
+    /** Called by Jumpstart's Java channel (net.Net) with a command from the server. */
+    void onServerCommand(String command, java.util.Map<String, String> args) {
+        synchronized (toMainThread) {
+            toMainThread.add(() -> handleServerCommand(command, args, frameTime));
+        }
+    }
+
+    private void handleServerCommand(String command, java.util.Map<String, String> args, long now) {
+        String what = session.onCommand(command, args, now);
+        if (what == null) {
+            return;
+        }
+        switch (what) {
+            case "prepare" -> {
+                if (mode == Mode.CLOSED) {
+                    open();
+                    openedByServer = true;
+                } else if (mode != Mode.LIST) {
+                    pending = null; // a question of the player's own is dropped for the server's
+                    mode = Mode.LIST;
+                }
+                tab = Tab.SERVER;
+                say(String.format(Locale.ROOT, texts.get("mp.prepare"), session.update.by, session.update.mod), true);
+            }
+            case "done" -> {
+                say(session.lastNote.isEmpty() ? texts.get("mp.done") : texts.get("mp.done") + " " + session.lastNote, true);
+                refreshStates();
+                if (openedByServer && mode == Mode.LIST) {
+                    close();
+                }
+                openedByServer = false;
+            }
+            default -> say(session.lastNote, false);
+        }
+    }
+
+    /** Every frame during a server update: get the exact jar the server wants, then BiteCheck. */
+    private void followServerUpdate(long now) {
+        ClientSession.Update u = session.update;
+        if (u.phase == ClientSession.Phase.SENT) {
+            return;
+        }
+        if (now > u.deadline) {
+            if (pending != null && pending.server()) {
+                pending = null;
+                mode = Mode.LIST;
+            }
+            session.failed("not ready in time");
+            say(texts.get("mp.tooLate"), false);
+            return;
+        }
+        if (u.phase != ClientSession.Phase.GETTING || lookBusy || now < u.nextLook) {
+            return;
+        }
+        u.nextLook = now + 2000;
+        lookBusy = true;
+        inBackground(() -> {
+            for (ModEntry mod : actions.javaMods()) {
+                if (mod.id().equals(u.mod)) {
+                    return new Object[] {mod, actions.check(mod.jar())};
+                }
+            }
+            return null;
+        }, result -> {
+            lookBusy = false;
+            if (session.update != u || u.phase != ClientSession.Phase.GETTING) {
+                return;
+            }
+            if (result instanceof Object[] found && ((BiteCheckGate.Check) found[1]).sha256().equals(u.sha256)) {
+                u.phase = ClientSession.Phase.ASKING;
+                u.status = texts.get("mp.checking");
+                reload();
+                start((ModEntry) found[0], frameTime, true);
+                return;
+            }
+            if (!u.downloadRequested && !u.workshopId.isEmpty() && actions.workshop().unavailableReason() == null) {
+                u.downloadRequested = true;
+                try {
+                    actions.workshop().subscribeAndDownload(Long.parseLong(u.workshopId));
+                } catch (NumberFormatException e) {
+                    // no Workshop item: wait for the files
+                }
+            }
+            u.status = result == null ? texts.get("mp.missing") : texts.get("mp.otherVersion");
+        });
+    }
+
+    private void onServer(Set<Integer> pressed) {
+        List<ClientSession.ServerMod> list = session.serverMods;
+        if (pressed.contains(KEY_UP) && serverSelected > 0) {
+            serverSelected--;
+        }
+        if (pressed.contains(KEY_DOWN) && serverSelected < list.size() - 1) {
+            serverSelected++;
+        }
+        if (pressed.contains(KEY_R)) {
+            session.refresh();
+        }
+        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && !list.isEmpty() && session.update == null) {
+            if (!session.admin) {
+                say(texts.get("mp.notAdmin"), false);
+            } else {
+                ClientSession.ServerMod mod = list.get(Math.min(serverSelected, list.size() - 1));
+                session.requestUpdate(mod.id());
+                say(String.format(Locale.ROOT, texts.get("mp.requested"), mod.id()), true);
+            }
+        }
+    }
+
+    private void drawServer(int x, int y, int width, int bottom) {
+        int medium = game.fontHeight(GameScreen.Font.MEDIUM);
+        int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
+        ClientSession.Update u = session.update;
+        if (u != null) {
+            game.rect(x - 6, y - 4, width + 12, medium * 2 + small + 16, 0.35f, 0.25f, 0.05f, 1f);
+            game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.banner"), u.mod, u.by), 1f, 0.9f, 0.5f, 1f);
+            long left = Math.max(0, (u.deadline - frameTime) / 1000);
+            game.text(GameScreen.Font.MEDIUM, x, y + medium + 4, (u.status.isEmpty() ? texts.get("mp.getting") : u.status)
+                    + "   " + String.format(Locale.ROOT, texts.get("mp.left"), left), 1f, 1f, 1f, 1f);
+            game.text(GameScreen.Font.SMALL, x, y + medium * 2 + 8, texts.get("mp.paused"), 0.85f, 0.85f, 0.85f, 1f);
+            y += medium * 2 + small + 24;
+        }
+        game.text(GameScreen.Font.SMALL, x, y, texts.get(session.admin ? "mp.youAdmin" : "mp.youPlayer"), 0.7f, 0.7f, 0.7f, 1f);
+        y += small + 4;
+        List<ClientSession.ServerMod> list = session.serverMods;
+        if (list.isEmpty()) {
+            game.text(GameScreen.Font.MEDIUM, x, y, texts.get("mp.noMods"), 0.8f, 0.8f, 0.8f, 1f);
+            return;
+        }
+        Map<String, ModEntry> local = new HashMap<>();
+        for (ModEntry m : mods) {
+            local.put(m.id(), m);
+        }
+        int line = medium + 8;
+        for (int i = 0; i < list.size() && y + line < bottom; i++) {
+            ClientSession.ServerMod m = list.get(i);
+            if (i == serverSelected) {
+                game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
+            }
+            game.text(GameScreen.Font.MEDIUM, x, y, m.id(), 1f, 1f, 1f, 1f);
+            ModEntry mine = local.get(m.id());
+            BiteCheckGate.Check c = mine == null ? null : checks.computeIfAbsent(mine.jar(), this::checkQuietly);
+            String here = mine == null ? texts.get("mp.missingHere")
+                    : c != null && c.sha256().equals(m.sha256()) ? texts.get("mp.same") : texts.get("mp.different");
+            String right = here + (m.updateWaiting() ? "   " + texts.get("mp.updateWaiting") : "") + "   " + texts.get("state." + m.state());
+            int w = game.textWidth(GameScreen.Font.SMALL, right);
+            game.text(GameScreen.Font.SMALL, x + width - w, y + 2, right, 0.7f, 0.85f, 0.7f, 1f);
+            y += line;
         }
     }
 
@@ -660,6 +852,7 @@ public final class SecureScreen {
             case INSTALLED -> drawList(x, y, width, contentBottom);
             case JAVA_LIBRARY, LUA_LIBRARY -> drawLibrary(libraries.get(tab), x, y, width, contentBottom);
             case SHARING -> drawSharing(x, y, width, contentBottom);
+            case SERVER -> drawServer(x, y, width, contentBottom);
         }
     }
 
@@ -667,6 +860,9 @@ public final class SecureScreen {
         int cx = x;
         int h = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         for (Tab t : Tab.values()) {
+            if (t == Tab.SERVER && !session.connected()) {
+                continue;
+            }
             String label = texts.get("tab." + t.name());
             int w = game.textWidth(GameScreen.Font.MEDIUM, label) + 24;
             boolean active = t == tab;
@@ -878,6 +1074,11 @@ public final class SecureScreen {
             sb.append(" status=").append(lib.status);
         } else if (tab == Tab.SHARING) {
             sb.append(" sharing=").append(sharing);
+        } else if (tab == Tab.SERVER) {
+            sb.append(" admin=").append(session.admin).append(" serverMods=").append(session.serverMods.size());
+            if (session.update != null) {
+                sb.append(" update=").append(session.update.mod).append(" phase=").append(session.update.phase);
+            }
         } else {
             ModEntry mod = selectedMod();
             sb.append(" selected=").append(mod == null ? "-" : mod.id());
@@ -901,6 +1102,10 @@ public final class SecureScreen {
 
     Tab tab() {
         return tab;
+    }
+
+    ClientSession session() {
+        return session;
     }
 
     String sharingPreview() {

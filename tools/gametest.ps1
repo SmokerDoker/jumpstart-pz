@@ -62,6 +62,7 @@ if (GameProcess) { throw "Project Zomboid is already running; close it first" }
 
 # --- test environment ---------------------------------------------------------------------------
 Remove-Item $result -ErrorAction SilentlyContinue
+Remove-Item "$t\.bitecheck\usage.toml" -ErrorAction SilentlyContinue # sharing: start off, nothing sent today
 New-Item -ItemType Directory -Force "$t\mods", "$t\.zombie_buddy", "$t\.bitecheck" | Out-Null
 if (-not (Test-Path "$t\mods\ZBHelloWorld")) {
     git clone -q --depth 1 https://github.com/zed-0xff/ZBHelloWorld "$t\mods\ZBHelloWorld"
@@ -90,7 +91,7 @@ $changed = "$changedMod\42\media\java\client\ZBHelloWorld.jar"
 # only ZombieBuddy and Jumpstart at start; Jumpstart.jar is our own build, approve it in the test config
 $modsTxt = "VERSION = 1,`r`n`r`nmods`r`n{`r`n    mod = ZombieBuddy,`r`n    mod = Jumpstart,`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n"
 [IO.File]::WriteAllText("$t\mods\default.txt", $modsTxt)
-$jumpstartJar = "$t\mods\Jumpstart\42\media\java\client\Jumpstart.jar"
+$jumpstartJar = "$t\mods\Jumpstart\42\media\java\Jumpstart.jar"
 $approvals = '{"formatVersion": 2, "mods": [{"id": "Jumpstart", "jar_hash": "' + (Sha $jumpstartJar) + '", "decision": true}]}'
 [IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", $approvals)
 
@@ -139,7 +140,7 @@ Check "real jar is verified" $r ($r -like "ALLOW VERIFIED*")
 Check "ZBHelloWorld not loaded" (Lua "return Jumpstart.stateOf('ZBHelloWorld')") ((Lua "return Jumpstart.stateOf('ZBHelloWorld')") -eq "not loaded")
 
 Key open
-$r = Screen
+$i = 0; do { $r = Screen; if ($r -notlike "LIST*") { Start-Sleep 1 }; $i++ } until ($r -like "LIST*" -or $i -gt 10)
 Check "Ctrl+Shift+J opens the screen" $r ($r -like "LIST*")
 $r = SelectMod "ZBHelloWorldChanged"
 Check "select the changed copy" $r ($r -like "*selected=ZBHelloWorldChanged *")
