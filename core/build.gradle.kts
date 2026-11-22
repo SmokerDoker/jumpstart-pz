@@ -9,8 +9,8 @@ val junitVersion = "6.1.3"
 
 dependencies {
     // BiteCheck from the submodule in third_party/ (see settings.gradle.kts); the version is ignored.
-    implementation("io.github.bitecheckpz:core:0")
-    implementation("io.github.bitecheckpz:launcher:0")
+    api("io.github.bitecheckpz:core:0")
+    api("io.github.bitecheckpz:launcher:0")
 
     compileOnly("net.bytebuddy:byte-buddy:$byteBuddyVersion")
     // Byte Buddy's class files refer to JSR-305 and SpotBugs annotations; without them javac

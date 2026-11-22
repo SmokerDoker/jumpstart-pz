@@ -38,15 +38,23 @@ public final class LiveInstaller {
     }
 
     /**
-     * The installer the game uses: BiteCheck's index and state from {@code ~/.bitecheck}, approvals
+     * The installer the game uses: BiteCheck's index and state from {@code ~/.bitecheck} (or the
+     * folder in the system property {@code jumpstart.bitecheckDir}), approvals
      * in ZombieBuddy's config dir, mods loaded by the Jumpstart fork of ZombieBuddy.
      */
     public static LiveInstaller forGame() {
         HotswapBackend backend = ZombieBuddyFork.current();
-        Path biteCheckDir = Path.of(System.getProperty("user.home"), ".bitecheck");
+        // -Djumpstart.bitecheckDir=... points it at another BiteCheck folder (tests)
+        String dir = System.getProperty("jumpstart.bitecheckDir");
+        Path biteCheckDir = dir != null && !dir.isBlank() ? Path.of(dir)
+                : Path.of(System.getProperty("user.home"), ".bitecheck");
         BiteCheckGate gate = new BiteCheckGate(new io.github.jumpstartpz.core.gate.BiteCheckIndex(biteCheckDir, java.time.Instant::now),
                 backend.approvalsDir(), biteCheckDir, java.time.Instant::now);
         return new LiveInstaller(gate, backend);
+    }
+
+    public BiteCheckGate gate() {
+        return gate;
     }
 
     /** A mod that is not loaded yet. */

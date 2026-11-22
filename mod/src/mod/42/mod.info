@@ -1,0 +1,11 @@
+name=Jumpstart
+id=Jumpstart
+description=Install, update and switch Java mods while the game runs, checked by BiteCheck. Needs the Jumpstart fork of ZombieBuddy, started with hotswap=true.
+author=SmokerDoker
+url=https://github.com/SmokerDoker/jumpstart-pz
+require=\ZombieBuddy
+modversion=0.1.0
+
+javaPkgName=io.github.jumpstartpz.mod
+javaJarFile=media/java/client/Jumpstart.jar
+ZBVersionMin=3.0.0

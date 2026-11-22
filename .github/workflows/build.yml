@@ -19,4 +19,9 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Build and test
-        run: ./gradlew --no-daemon check
+        run: ./gradlew --no-daemon check :mod:modFolder
+      - name: Upload the mod folder
+        uses: actions/upload-artifact@v7
+        with:
+          name: Jumpstart-mod
+          path: mod/build/mod
