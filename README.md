@@ -57,21 +57,32 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   the bytecode the game runs (automated: `tools\gametest.ps1` in the fork, 28 of 28 checks)
 - [x] Load new mods and update loaded ones at runtime (fork: `Hotswap.load` / `Hotswap.update`,
   only with approval in `mod_approvals.json`)
-- [ ] BiteCheck gate
+- [x] BiteCheck gate: every live install and update goes through BiteCheck (verified loads,
+  unverified asks once, flagged or suspicious asks twice, blocked never loads), with the
+  launcher's keys, index, cache and state; tested in the game against the real registry index
+  (`tools\gametest.ps1`, 18 of 18 checks)
+- [x] The Jumpstart mod (`mod/`): Lua API `Jumpstart.status/check/install/update/refreshIndex`
+- [ ] In-game UI for installs and confirmations
+- [ ] Marketplace: Workshop search and updates
 
 ## Build
 
 ```sh
-./gradlew check
+git submodule update --init      # BiteCheck, pinned in third_party/
+./gradlew check :mod:modFolder   # tests, and the mod folder in mod/build/mod/Jumpstart
 ```
 
-Needs JDK 21 or newer. Project Zomboid itself runs on Java 25.
+Needs JDK 21 or newer. Project Zomboid itself runs on Java 25. In-game test (Windows, Steam
+running, the fork built next to this repository): `tools\gametest.ps1`.
 
 ## Repository layout
 
 ```
-core/     Hotswap engine (planned next to it: bootstrap, market, mp)
-docs/     Design notes and spike results
+core/          BiteCheck gate, LiveInstaller, hotswap engine (planned next to it: market, mp)
+mod/           The Jumpstart mod for Project Zomboid (Lua API)
+third_party/   BiteCheck (git submodule)
+tools/         In-game test
+docs/          Design notes and spike results
 ```
 
 ## License
