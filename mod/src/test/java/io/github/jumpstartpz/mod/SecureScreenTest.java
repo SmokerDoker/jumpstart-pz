@@ -241,7 +241,7 @@ class SecureScreenTest {
         assertTrue(actions.luaLoaded.isEmpty(), "no Lua before the player said yes and the Java part runs");
         now += SecureScreen.FIRST_DELAY_MS;
         tap(SecureScreen.KEY_J);
-        assertEquals(List.of("install Unknown ONCE"), actions.calls);
+        assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
         assertEquals(List.of("Unknown"), actions.luaLoaded);
         assertTrue(screen.describe().contains("loaded live: 2 Lua files"), screen.describe());
     }
