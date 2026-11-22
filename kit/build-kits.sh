@@ -34,7 +34,10 @@ rm -rf "$stage"
 (cd "$out" && sha256sum jumpstart-* > SHA256SUMS.txt && ls -l)
 for f in "$out"/jumpstart-*; do # every package must have both parts
   case "$f" in
-    *.zip) unzip -l "$f" | grep -q 'ZombieBuddy.jar' && unzip -l "$f" | grep -q 'Jumpstart.jar' ;;
-    *.tar.gz) tar -tzf "$f" | grep -q 'ZombieBuddy.jar' && tar -tzf "$f" | grep -q 'Jumpstart.jar' ;;
-  esac || { echo "incomplete package: $f"; exit 1; }
+    *.zip) list="$(unzip -l "$f")" ;;
+    *.tar.gz) list="$(tar -tzf "$f")" ;;
+    *) continue ;;
+  esac
+  # a listing in a variable, not a pipe into grep -q: that would end tar early (pipefail)
+  [[ "$list" == *ZombieBuddy.jar* && "$list" == *Jumpstart.jar* ]] || { echo "incomplete package: $f"; exit 1; }
 done
