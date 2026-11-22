@@ -14,8 +14,9 @@ Indie Stone. "Project Zomboid" is a trademark of The Indie Stone.
 ## Idea
 
 Hotwire showed for Minecraft that mods can be added, updated and toggled live. Jumpstart does
-the same for Project Zomboid, on top of [ZombieBuddy](https://github.com/zed-0xff/ZombieBuddy),
-which loads Java mods, and goes further where Project Zomboid needs it:
+the same for Project Zomboid, on top of
+[our fork of ZombieBuddy](https://github.com/SmokerDoker/zombiebuddy-jumpstart), which loads Java
+mods, and goes further where Project Zomboid needs it:
 
 - **Live switching.** A mod is never "unloaded": every class it changed is rebuilt from its
   original bytes with all other mods' patches and without its own.
@@ -50,8 +51,10 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
 
 - [x] `core`: `HotswapEngine` switches Advice patches on and off with one retransformable
   transformer per mod; proven in tests ([spike notes](docs/SPIKE-1-zombiebuddy.md))
-- [ ] Same in the game with zb-hello-world
-- [ ] ZombieBuddy integration (upstream API or reflection, see the spike notes)
+- [x] ZombieBuddy fork with a hotswap API:
+  [zombiebuddy-jumpstart](https://github.com/SmokerDoker/zombiebuddy-jumpstart), tested with a Java agent
+- [ ] Same in the game with ZBHelloWorld (test guide: `TESTING.md` in the fork)
+- [ ] Live updates of a mod that is already loaded
 - [ ] BiteCheck gate
 
 ## Build

@@ -32,23 +32,41 @@ The tests show:
 | Each mod jar gets its own class loader (`g_mod_loaders`) and is transformed first (`g_transformed_jars`, `transformAndLoadJar`) | `Loader.java`, package-private | Jumpstart must load live mods through the same transformation, or `@Patch` annotations will not mean the same thing. |
 | MethodDelegation patches (`isAdvice = false`) replace method implementations and change the class format | `PatchEngine.applyPatches` | Not switchable live. They need the side-class technique from the concept, or a restart. |
 
-## Two ways forward
+## Decision: our own fork
 
-**A: Upstream API in ZombieBuddy (preferred).** A small change in ZombieBuddy keeps the
-transformer per mod jar and offers `unload(jar)` / `load(jar)` at runtime. Patches for
-not-yet-loaded classes would be installed as retransformable with `disableClassFormatChanges()`
-when a mod declares it is hot-swappable. Every Java mod then works with Jumpstart without
-changes, and Jumpstart stays small. Needs a conversation with Zed first.
+ZombieBuddy's author did not answer when asked about a deeper integration, so Jumpstart does not
+wait for upstream changes. The changes live in a fork,
+[SmokerDoker/zombiebuddy-jumpstart](https://github.com/SmokerDoker/zombiebuddy-jumpstart)
+(branch `jumpstart/hotswap`, details in its `FORK.md`). It stays a drop-in replacement for
+`ZombieBuddy.jar`: same packages, same mod API, same `mod_approvals.json`, so every existing Java
+mod and BiteCheck keep working. The changes are small separate commits, so they can still be
+offered upstream as a pull request.
 
-**B: Jumpstart owns live mods (fallback).** Mods present at start stay with ZombieBuddy. Mods
-added, updated or toggled live are loaded by Jumpstart: ZombieBuddy's `transformAndLoadJar` is
-called by reflection, then `HotswapEngine` applies the resulting patch classes. Works without
-upstream changes, but depends on package-private internals that can change with any release.
+What the fork adds:
 
-## Next step
+| Change | Effect |
+| --- | --- |
+| `PatchEngine.applyPatches` returns a `PatchHandle` | The transformers are kept per mod jar instead of discarded. |
+| Agent option `hotswap=true` | Advice-only jars get one retransformable transformer without class format changes, also for classes that load later. |
+| `Hotswap` (Java and Lua: `ZombieBuddy.Hotswap`) | `off`/`on` per mod, `status`, and `load` for a jar that was not loaded at start. |
+| `Hotswap.load` checks `mod_approvals.json` | A jar loads at runtime only if its SHA-256 is approved there (by ZombieBuddy, BiteCheck or Jumpstart). No prompt at runtime. |
+| No self-update from upstream jars | A Zed-signed ZombieBuddy.jar from the Workshop no longer replaces the fork. |
 
-Try it in the game with [zb-hello-world](https://github.com/zed-0xff/ZBHelloWorld): one Advice
-patch on the main menu render method that draws "Hello World from ZBHelloWorld!". Remove it
-from the normal mod list, load it through Jumpstart (way B), and switch it on and off from the
-debug console. When the text appears and disappears without a restart, gate 1 of the roadmap is
-met.
+Tested in the fork's `test_hotswap` task (Java agent with `hotswap=true`): a patch on a class
+loaded after start switched off and on 50 times, and a jar loaded at runtime only after approval.
+
+## What this means for Jumpstart
+
+- `HotswapEngine` in this repository stays as the reference test of the mechanism; in the game,
+  Jumpstart calls the fork's `Hotswap` API instead of installing its own transformers.
+- Jumpstart is an ordinary Java mod on top of the fork; it writes approvals to
+  `mod_approvals.json` after its BiteCheck check and then calls `Hotswap.load`.
+
+## Open
+
+- **Updates live:** regular mod jars are defined in ZombieBuddy's own class loader, so a newer
+  version with the same class names cannot be loaded next to the old one. `Hotswap.load` refuses
+  that case today. Fix: load live jars into their own class loader, or rename their classes per
+  version.
+- **MethodDelegation patches** stay until restart.
+- **In-game test** with ZBHelloWorld: see `TESTING.md` in the fork.
