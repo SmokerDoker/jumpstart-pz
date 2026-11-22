@@ -79,8 +79,8 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
 - [x] Voluntary sharing (tab *Sharing*, off by default, BiteCheck's `UsageSharing`): once a day the
   SHA-256, Workshop id, mod id and size of unverified jars go to the cloud, so the BiteCheck
   registry reviews the mods people really play first. The tab shows exactly what would be sent.
-- [ ] Deploy the cloud Worker (needs your Cloudflare account and a Steam Web API key, see
-  [cloud/README.md](cloud/README.md)), then make its address the default
+- [x] The cloud Worker runs at <https://jumpstart-cloud.smokerdoker.workers.dev> (D1 database in
+  Western Europe) and is the default for Jumpstart and BiteCheck (`cloud_url` overrides it)
 
 ## Build
 

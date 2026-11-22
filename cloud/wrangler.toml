@@ -15,7 +15,7 @@ MIN_INSTALLS_PUBLIC = "3"
 [[d1_databases]]
 binding = "DB"
 database_name = "jumpstart-cloud"
-database_id = "REPLACE_WITH_THE_ID_FROM_wrangler_d1_create"
+database_id = "5ed9d8eb-66c4-4920-bcd5-3fe97606e132"
 migrations_dir = "migrations"
 
 [triggers]

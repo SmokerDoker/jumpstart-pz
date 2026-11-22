@@ -1,5 +1,8 @@
 # Jumpstart cloud
 
+Live at <https://jumpstart-cloud.smokerdoker.workers.dev> (Cloudflare account of SmokerDoker, D1
+database `jumpstart-cloud` in Western Europe).
+
 One free Cloudflare Worker with one D1 database, separate from any of your own servers. It does
 two things:
 
@@ -52,7 +55,7 @@ You need a free Cloudflare account and a Steam Web API key.
    ```sh
    npm install
    npx wrangler login                        # opens the browser, log in to Cloudflare
-   npx wrangler d1 create jumpstart-cloud    # prints a database_id
+   npx wrangler d1 create jumpstart-cloud --location weur   # prints a database_id
    ```
 
 3. Put that `database_id` into `wrangler.toml`, then:
