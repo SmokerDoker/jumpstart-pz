@@ -72,7 +72,10 @@ jobs:
         working-directory: fork/java
         run: |
           gradle --no-daemon "-PgameClasspath=$PZ_JAR" shadowJar
-          jar="$(ls build/*/libs/zombiebuddy-jumpstart.jar | head -n 1)"
+          ls -l build/*/libs/
+          # the shadow jar is named after the checkout folder; it is the biggest jar there
+          jar="$(ls -S build/*/libs/*.jar | head -n 1)"
+          unzip -l "$jar" | grep -q 'me/zed_0xff/zombie_buddy/HostServer.class'
           echo "FORK_JAR=$PWD/$jar" >> "$GITHUB_ENV"
 
       - name: Build Jumpstart
