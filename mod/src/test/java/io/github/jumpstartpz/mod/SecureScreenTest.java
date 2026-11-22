@@ -13,10 +13,12 @@ import java.util.Map;
 import java.util.Set;
 
 import io.github.bitecheckpz.core.Verifier;
+import io.github.bitecheckpz.launcher.UsageSharing;
 import io.github.jumpstartpz.core.LiveInstaller;
 import io.github.jumpstartpz.core.gate.BiteCheckGate;
 import io.github.jumpstartpz.core.gate.BiteCheckGate.Consent;
 import io.github.jumpstartpz.core.gate.BiteCheckGate.Verdict;
+import io.github.jumpstartpz.core.market.LibraryClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +38,7 @@ class SecureScreenTest {
     void setUp() {
         game = new FakeGame();
         actions = new FakeActions();
-        screen = new SecureScreen(game, actions, false);
+        screen = new SecureScreen(game, actions, false, Runnable::run);
         SecureScreen.install(screen);
         now = 1_000_000;
     }
@@ -169,11 +171,69 @@ class SecureScreenTest {
 
     @Test
     void injectedKeysWorkInTestMode() {
-        SecureScreen testScreen = new SecureScreen(game, actions, true);
+        SecureScreen testScreen = new SecureScreen(game, actions, true, Runnable::run);
         SecureScreen.install(testScreen);
         assertTrue(testScreen.inject(SecureScreen.OPEN));
         testScreen.frame(now);
         assertEquals(SecureScreen.Mode.LIST, testScreen.mode());
+    }
+
+    @Test
+    void theJavaLibrarySearchesDownloadsAndLoadsThroughBiteCheck() {
+        actions.folders.put("/workshop/111", List.of(new Actions.FolderMod("Verified", "A verified mod", VERIFIED)));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        assertEquals(SecureScreen.Tab.JAVA_LIBRARY, screen.tab());
+        type("fps");
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals(List.of("JAVA 'fps' null"), actions.searches);
+        assertTrue(screen.describe().contains("results=2 selected=111"), screen.describe());
+
+        tap(SecureScreen.KEY_ENTER); // same words again: install the selected item
+        assertEquals(List.of(111L), actions.workshop.subscribed);
+        assertTrue(screen.describe().contains("downloading=111"), screen.describe());
+        frame();
+        assertTrue(actions.calls.isEmpty(), "nothing loads while Steam downloads");
+
+        actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame();
+        assertEquals(List.of("Verified"), actions.activated);
+        assertEquals(List.of("install Verified NONE"), actions.calls, "verified: loaded without a question");
+        assertEquals(SecureScreen.Tab.INSTALLED, screen.tab());
+    }
+
+    @Test
+    void aLuaModFromTheLibraryIsEnabledForTheNextStart() {
+        actions.folders.put("/workshop/201", List.of(new Actions.FolderMod("LuaMod", "Lua Mod", null)));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        assertEquals(SecureScreen.Tab.LUA_LIBRARY, screen.tab());
+        tap(SecureScreen.KEY_ENTER); // empty search: the most popular mods
+        assertEquals(List.of("LUA '' null"), actions.searches);
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame();
+        assertEquals(List.of("LuaMod"), actions.activated);
+        assertTrue(actions.calls.isEmpty());
+        assertTrue(screen.describe().contains("enabled"), screen.describe());
+    }
+
+    @Test
+    void sharingIsOffUntilThePlayerTurnsItOnAndShowsWhatItSends() {
+        openScreen();
+        for (int i = 0; i < 3; i++) {
+            tap(SecureScreen.KEY_TAB);
+        }
+        assertEquals(SecureScreen.Tab.SHARING, screen.tab());
+        assertTrue(actions.shared.isEmpty(), "nothing is sent while it is off");
+        assertTrue(screen.sharingPreview().contains("jar\t" + "ab".repeat(32) + "\t201\tUnknown\t42"), screen.sharingPreview());
+        tap(SecureScreen.KEY_ENTER);
+        assertTrue(actions.sharing);
+        assertEquals(List.of("1 jars"), actions.shared);
+        tap(SecureScreen.KEY_ENTER);
+        assertFalse(actions.sharing);
     }
 
     // --- helpers ---------------------------------------------------------------------------------
@@ -189,6 +249,12 @@ class SecureScreenTest {
         frame();
         game.down.remove(key);
         frame();
+    }
+
+    private void type(String text) {
+        for (char c : text.toUpperCase(java.util.Locale.ROOT).toCharArray()) {
+            tap(c);
+        }
     }
 
     private void openScreen() {
@@ -215,6 +281,7 @@ class SecureScreenTest {
         @Override public void text(Font font, int x, int y, String text, float r, float g, float b, float a) { drawn.add(text); }
         @Override public void rect(int x, int y, int w, int h, float r, float g, float b, float a) { }
         @Override public boolean physicalKeyDown(int glfwKey) { return down.contains(glfwKey); }
+        @Override public String keyName(int glfwKey) { return String.valueOf((char) Character.toLowerCase(glfwKey)); }
         @Override public boolean inGame() { return false; }
         @Override public void pause(boolean paused) { this.paused = paused; }
         @Override public String language() { return "EN"; }
@@ -289,5 +356,77 @@ class SecureScreenTest {
         public String refreshIndex() {
             return "refreshed";
         }
+
+        // marketplace
+        final List<String> searches = new ArrayList<>();
+        final FakeWorkshop workshop = new FakeWorkshop();
+        final Map<String, List<FolderMod>> folders = new HashMap<>();
+        final List<String> activated = new ArrayList<>();
+
+        @Override
+        public LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) {
+            searches.add(kind + " '" + query + "' " + cursor);
+            return new LibraryClient.Page(2, "", List.of(
+                    new LibraryClient.Item(111, "Java Mod One", 500, 0, true, List.of("Build 42"), "java"),
+                    new LibraryClient.Item(201, "Lua Mod", 7, 0, false, List.of(), "lua")));
+        }
+
+        @Override
+        public Workshop workshop() {
+            return workshop;
+        }
+
+        @Override
+        public List<FolderMod> modsInFolder(String itemFolder) {
+            return folders.getOrDefault(itemFolder, List.of());
+        }
+
+        @Override
+        public String activate(String modId) {
+            activated.add(modId);
+            return null;
+        }
+
+        // sharing
+        boolean sharing;
+        final List<String> shared = new ArrayList<>();
+
+        @Override
+        public boolean sharingEnabled() {
+            return sharing;
+        }
+
+        @Override
+        public void setSharing(boolean enabled) {
+            sharing = enabled;
+        }
+
+        @Override
+        public List<UsageSharing.Jar> unverifiedJars() {
+            return List.of(new UsageSharing.Jar("ab".repeat(32), "201", "Unknown", 42));
+        }
+
+        @Override
+        public String shareIfDue(List<UsageSharing.Jar> jars) {
+            shared.add(jars.size() + " jars");
+            return "OK " + jars.size() + " jars";
+        }
+    }
+
+    private static final class FakeWorkshop implements Workshop {
+        final Map<Long, Long> states = new HashMap<>();
+        final List<Long> subscribed = new ArrayList<>();
+
+        @Override public String unavailableReason() { return null; }
+        @Override public long state(long itemId) { return states.getOrDefault(itemId, 0L); }
+
+        @Override
+        public boolean subscribeAndDownload(long itemId) {
+            subscribed.add(itemId);
+            states.put(itemId, SUBSCRIBED | DOWNLOADING);
+            return true;
+        }
+
+        @Override public String installFolder(long itemId) { return "/workshop/" + itemId; }
     }
 }

@@ -2,29 +2,43 @@ package io.github.jumpstartpz.mod;
 
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 
+import io.github.bitecheckpz.core.Verifier;
+import io.github.bitecheckpz.launcher.Config;
+import io.github.bitecheckpz.launcher.UsageSharing;
 import io.github.jumpstartpz.core.LiveInstaller;
 import io.github.jumpstartpz.core.ZombieBuddyFork;
 import io.github.jumpstartpz.core.gate.BiteCheckGate;
+import io.github.jumpstartpz.core.market.LibraryClient;
 
-/** {@link Actions} in the game: BiteCheck's gate, the Jumpstart fork of ZombieBuddy, PZ's mod folders. */
+/** {@link Actions} in the game: BiteCheck's gate, the Jumpstart fork of ZombieBuddy, PZ's mod folders, Steam. */
 final class GameActions implements Actions {
+    static final String CLIENT = "jumpstart/0.2";
     private static final Set<String> SKIP = Set.of("ZombieBuddy", "Jumpstart");
 
     private final LiveInstaller installer;
     private final ZombieBuddyFork zombieBuddy;
+    private final Path biteCheckDir;
+    private final Workshop workshop = new SteamWorkshopAccess();
 
-    GameActions(LiveInstaller installer, ZombieBuddyFork zombieBuddy) {
+    GameActions(LiveInstaller installer, ZombieBuddyFork zombieBuddy, Path biteCheckDir) {
         this.installer = installer;
         this.zombieBuddy = zombieBuddy;
+        this.biteCheckDir = biteCheckDir;
     }
 
     @Override
@@ -34,31 +48,11 @@ final class GameActions implements Actions {
             Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
             List<String> dirs = new ArrayList<>();
             fs.getClass().getMethod("getAllModFolders", List.class).invoke(fs, dirs);
-            Method readModInfo = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("readModInfo", String.class);
             for (String dir : dirs) {
-                Object info;
-                try {
-                    info = readModInfo.invoke(null, dir);
-                } catch (ReflectiveOperationException | RuntimeException e) {
-                    continue;
+                FolderMod mod = readMod(dir);
+                if (mod != null && mod.java() != null && !SKIP.contains(mod.id()) && !mods.containsKey(mod.id())) {
+                    mods.put(mod.id(), mod.java());
                 }
-                if (info == null) {
-                    continue;
-                }
-                String id = (String) info.getClass().getMethod("getId").invoke(info);
-                if (id == null || SKIP.contains(id) || mods.containsKey(id)) {
-                    continue;
-                }
-                String common = (String) info.getClass().getMethod("getCommonDir").invoke(info);
-                String version = (String) info.getClass().getMethod("getVersionDir").invoke(info);
-                String java = common == null || version == null ? null : zombieBuddy.javaModOf(common, version);
-                int tab = java == null ? -1 : java.indexOf('\t');
-                if (tab < 0) {
-                    continue;
-                }
-                String name = (String) info.getClass().getMethod("getName").invoke(info);
-                mods.put(id, new ModEntry(id, name == null || name.isBlank() ? id : name,
-                        Path.of(java.substring(0, tab)), java.substring(tab + 1)));
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.out.println("[Jumpstart] cannot list the mod folders: " + e);
@@ -66,6 +60,30 @@ final class GameActions implements Actions {
         List<ModEntry> list = new ArrayList<>(mods.values());
         list.sort(Comparator.comparing(m -> m.name().toLowerCase(Locale.ROOT)));
         return list;
+    }
+
+    /** A mod folder (with mod.info) as PZ reads it, with its Java part if it has one. */
+    private FolderMod readMod(String dir) {
+        try {
+            Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("readModInfo", String.class).invoke(null, dir);
+            if (info == null) {
+                return null;
+            }
+            String id = (String) info.getClass().getMethod("getId").invoke(info);
+            if (id == null) {
+                return null;
+            }
+            String name = (String) info.getClass().getMethod("getName").invoke(info);
+            name = name == null || name.isBlank() ? id : name;
+            String common = (String) info.getClass().getMethod("getCommonDir").invoke(info);
+            String version = (String) info.getClass().getMethod("getVersionDir").invoke(info);
+            String java = common == null || version == null ? null : zombieBuddy.javaModOf(common, version);
+            int tab = java == null ? -1 : java.indexOf('\t');
+            ModEntry entry = tab < 0 ? null : new ModEntry(id, name, Path.of(java.substring(0, tab)), java.substring(tab + 1));
+            return new FolderMod(id, name, entry);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
     }
 
     @Override
@@ -81,12 +99,12 @@ final class GameActions implements Actions {
 
     @Override
     public LiveInstaller.Outcome install(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return installer.install(mod.jar(), mod.javaPackage(), mod.id(), null, player);
+        return installer.install(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player);
     }
 
     @Override
     public LiveInstaller.Outcome update(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return installer.update(mod.jar(), mod.javaPackage(), mod.id(), null, player);
+        return installer.update(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player);
     }
 
     @Override
@@ -105,5 +123,170 @@ final class GameActions implements Actions {
     public String refreshIndex() {
         installer.gate().indexSource().refresh();
         return String.join("; ", installer.gate().indexSource().notes());
+    }
+
+    // --- marketplace ---------------------------------------------------------------------------------
+
+    /** -Djumpstart.cloudUrl, else cloud_url in BiteCheck's config.toml, else BiteCheck's default. */
+    Optional<URI> cloudUrl() {
+        String property = System.getProperty("jumpstart.cloudUrl");
+        if (property != null && !property.isBlank()) {
+            return Optional.of(URI.create(property.strip()));
+        }
+        try {
+            return UsageSharing.url(Config.load(biteCheckDir.resolve("config.toml")));
+        } catch (IOException | RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    @Override
+    public LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) throws IOException {
+        URI url = cloudUrl().orElseThrow(() -> new IOException("no Jumpstart cloud set up yet (cloud_url)"));
+        return new LibraryClient(url).search(kind, query, LibraryClient.Sort.POPULAR, cursor);
+    }
+
+    @Override
+    public Workshop workshop() {
+        return workshop;
+    }
+
+    @Override
+    public List<FolderMod> modsInFolder(String itemFolder) {
+        List<FolderMod> mods = new ArrayList<>();
+        Path dir = Path.of(itemFolder, "mods");
+        if (!Files.isDirectory(dir)) {
+            return mods;
+        }
+        try (Stream<Path> children = Files.list(dir)) {
+            for (Path child : children.sorted().toList()) {
+                FolderMod mod = Files.isDirectory(child) ? readMod(child.toString()) : null;
+                if (mod != null) {
+                    mods.add(mod);
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("[Jumpstart] cannot list " + dir + ": " + e);
+        }
+        return mods;
+    }
+
+    @Override
+    public String activate(String modId) {
+        try {
+            Class<?> activeMods = Class.forName("zombie.modding.ActiveMods");
+            Object mods = activeMods.getMethod("getById", String.class).invoke(null, "default");
+            mods.getClass().getMethod("setModActive", String.class, boolean.class).invoke(mods, modId, true);
+            Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("saveModsFile").invoke(null);
+            return null;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return "cannot enable " + modId + ": " + e;
+        }
+    }
+
+    // --- voluntary sharing ---------------------------------------------------------------------------
+
+    @Override
+    public boolean sharingEnabled() {
+        try {
+            return UsageSharing.load(biteCheckDir).enabled();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public void setSharing(boolean enabled) throws IOException {
+        UsageSharing.load(biteCheckDir).setEnabled(enabled);
+    }
+
+    @Override
+    public List<UsageSharing.Jar> unverifiedJars() {
+        List<UsageSharing.Jar> jars = new ArrayList<>();
+        for (ModEntry mod : javaMods()) {
+            try {
+                BiteCheckGate.Check c = check(mod.jar());
+                if (c.status() == Verifier.Status.UNVERIFIED) {
+                    jars.add(new UsageSharing.Jar(c.sha256(), UsageSharing.Jar.workshopIdOf(mod.jar()), mod.id(), Files.size(mod.jar())));
+                }
+            } catch (IOException | RuntimeException e) {
+                // a jar that cannot be read is not reported
+            }
+        }
+        return jars;
+    }
+
+    @Override
+    public String shareIfDue(List<UsageSharing.Jar> jars) {
+        try {
+            UsageSharing sharing = UsageSharing.load(biteCheckDir);
+            return sharing.sendIfDue(cloudUrl().orElse(null), CLIENT, jars, LocalDate.now(), UsageSharing.httpSender());
+        } catch (IOException | RuntimeException e) {
+            return "not sent: " + e.getMessage();
+        }
+    }
+
+    /** {@link Workshop} on PZ's zombie.core.znet.SteamWorkshop, by reflection. */
+    private static final class SteamWorkshopAccess implements Workshop {
+        private Object callback;
+
+        private Object instance() throws ReflectiveOperationException {
+            return Class.forName("zombie.core.znet.SteamWorkshop").getField("instance").get(null);
+        }
+
+        @Override
+        public String unavailableReason() {
+            try {
+                boolean steam = (Boolean) Class.forName("zombie.core.znet.SteamUtils").getMethod("isSteamModeEnabled").invoke(null);
+                if (!steam || instance() == null) {
+                    return "the game runs without Steam";
+                }
+                return null;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return "no Steam Workshop access: " + e;
+            }
+        }
+
+        @Override
+        public long state(long itemId) {
+            try {
+                Object ws = instance();
+                return (Long) ws.getClass().getMethod("GetItemState", long.class).invoke(ws, itemId);
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return 0;
+            }
+        }
+
+        @Override
+        public boolean subscribeAndDownload(long itemId) {
+            try {
+                Object ws = instance();
+                Class<?> cb = Class.forName("zombie.core.znet.ISteamWorkshopCallback");
+                if (callback == null) {
+                    // Steam reports back through this; Jumpstart polls the item state instead
+                    callback = Proxy.newProxyInstance(cb.getClassLoader(), new Class<?>[] {cb}, (proxy, method, args) ->
+                            method.getName().equals("hashCode") ? System.identityHashCode(proxy)
+                                    : method.getName().equals("equals") ? proxy == args[0]
+                                    : method.getName().equals("toString") ? "Jumpstart" : null);
+                }
+                Method subscribe = ws.getClass().getMethod("SubscribeItem", long.class, cb);
+                Method download = ws.getClass().getMethod("DownloadItem", long.class, boolean.class, cb);
+                boolean ok = (Boolean) subscribe.invoke(ws, itemId, callback);
+                return (Boolean) download.invoke(ws, itemId, true, callback) || ok;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.out.println("[Jumpstart] Steam subscribe failed: " + e);
+                return false;
+            }
+        }
+
+        @Override
+        public String installFolder(long itemId) {
+            try {
+                Object ws = instance();
+                return (String) ws.getClass().getMethod("GetItemInstallFolder", long.class).invoke(ws, itemId);
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return null;
+            }
+        }
     }
 }

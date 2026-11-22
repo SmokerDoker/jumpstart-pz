@@ -9,7 +9,7 @@
   signed index is downloaded fresh and nothing of your own setup changes. The game folder is not
   touched: the fork jar is passed with -javaagent.
 
-  Two switches exist only for this test: -Djumpstart.testInput=true lets the test press the secure
+  Two switches exist only for this test: -Djumpstart.testInput=true -Djumpstart.cloudUrl=http://localhost:8787 lets the test press the secure
   screen's keys through Lua (the real screen reads only the physical keyboard), and the ZombieBuddy
   option hotswap_lua=true allows the bytecode probe that shows whether ZBHelloWorld's patch is in.
 
@@ -95,8 +95,13 @@ $approvals = '{"formatVersion": 2, "mods": [{"id": "Jumpstart", "jar_hash": "' +
 [IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", $approvals)
 
 $agent = "-javaagent:$t\ZombieBuddy-fork.jar=hotswap=true,hotswap_lua=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
-$start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true -Djava.awt.headless=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -Dzomboid.znetlog=1 -XX:-CreateCoredumpOnCrash -XX:-OmitStackTraceInFastThrow -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
+$start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true -Djumpstart.cloudUrl=http://localhost:8787 -Djava.awt.headless=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -Dzomboid.znetlog=1 -XX:-CreateCoredumpOnCrash -XX:-OmitStackTraceInFastThrow -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
 [IO.File]::WriteAllText("$t\start-test.cmd", $start)
+
+# a stand-in for the Jumpstart cloud on localhost:8787 (library answers, usage reports to files)
+$mock = "$t\mock-cloud"
+Start-Process powershell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSScriptRoot\mock-cloud.ps1`"", '-OutDir', "`"$mock`"" -WindowStyle Hidden
+$i = 0; while (-not (Test-Path "$mock\ready") -and $i -lt 20) { Start-Sleep 1; $i++ }
 
 # --- test -----------------------------------------------------------------------------------------
 $failures = 0
@@ -172,6 +177,48 @@ Start-Sleep 1
 $r = Screen
 Check "Esc closes" $r ($r -like "CLOSED*")
 
+# --- marketplace and sharing, against the stand-in cloud (nothing is subscribed on Steam) ---------
+Key open
+Key tab
+$r = Screen
+Check "Tab: Java library" $r ($r -like "LIST tab=JAVA_LIBRARY*")
+Lua "return Jumpstart.testType('fps')" | Out-Null
+Start-Sleep 1
+Key enter
+Start-Sleep 2
+$r = Screen
+Check "search in the Java library" $r ($r -like "*query=fps results=2 selected=900001*")
+Check "the request asked for Java mods" "" ((Get-Content "$mock\requests.txt" -Raw) -match "kind=java&sort=popular&q=fps")
+Key down
+$r = Screen
+Check "select the second result" $r ($r -like "*selected=900002*")
+Key tab
+Key enter
+Start-Sleep 2
+$r = Screen
+Check "Lua library shows the most popular" $r ($r -like "LIST tab=LUA_LIBRARY*results=1 selected=900101*")
+Key tab
+Start-Sleep 3
+$r = Screen
+Check "sharing is off by default" $r ($r -like "LIST tab=SHARING sharing=false*")
+Check "nothing sent while off" "" (-not (Test-Path "$mock\usage-1.txt"))
+Key enter
+Start-Sleep 4
+$r = Screen
+Check "Enter turns sharing on" $r ($r -like "*sharing=true*")
+$sent = Get-Content "$mock\usage-1.txt" -Raw -ErrorAction SilentlyContinue
+Check "a report was sent" $sent ($sent -like "jumpstart-usage 1*")
+$changedSha = Sha $changed
+Check "the report lists the unverified changed copy" "" ($sent -match "jar\t$changedSha\t\tZBHelloWorldChanged\t\d+")
+Check "the report does not list the verified jar" "" (-not ($sent -match (Sha $verified)))
+Check "the report has no paths or names" "" (-not ($sent -match [regex]::Escape($env:USERNAME)) -and -not ($sent -match ':\\'))
+Key enter
+Start-Sleep 1
+$r = Screen
+Check "Enter turns sharing off again" $r ($r -like "*sharing=false*")
+Key esc
+Start-Sleep 1
+
 $errors = @(Select-String -Path "$t\game-out.txt" -Pattern 'secure screen error|secure screen not available' -ErrorAction SilentlyContinue)
 Check "no secure screen errors" $errors.Count ($errors.Count -eq 0)
 
@@ -184,6 +231,8 @@ Check "game still running" "" ([bool](GameProcess))
 Log "Jumpstart log lines:"
 Select-String -Path "$t\game-out.txt" -Pattern 'Jumpstart|hotswap:' | ForEach-Object { Log ("  " + $_.Line) }
 Log "failures: $failures"
+
+New-Item -ItemType File -Force "$mock\stop" | Out-Null
 
 if (-not $KeepRunning) {
     Lua 'getCore():quit() return 1' | Out-Null

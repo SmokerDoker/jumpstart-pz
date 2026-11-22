@@ -7,18 +7,24 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
 import io.github.bitecheckpz.core.Verifier;
+import io.github.bitecheckpz.launcher.UsageSharing;
 import io.github.jumpstartpz.core.LiveInstaller;
 import io.github.jumpstartpz.core.gate.BiteCheckGate;
+import io.github.jumpstartpz.core.market.LibraryClient;
 
 /**
- * Jumpstart's secure screen: the only place where Java mods are loaded, updated or switched, and
- * where the player answers BiteCheck's questions.
+ * Jumpstart's secure screen: the only place where Java mods are loaded, updated or switched, where
+ * mods are installed from the marketplace, and where the player answers BiteCheck's questions.
  *
  * <p>Lua mods are not checked by anyone and draw everything else the player sees, so none of this
  * may depend on Lua. The screen is drawn by Java at the very end of the game's UI pass (after
@@ -28,13 +34,21 @@ import io.github.jumpstartpz.core.gate.BiteCheckGate;
  * player opened the screen and pressed Enter on a mod there, and the answer key works only after a
  * few seconds, so a reflex cannot confirm it.
  *
+ * <p>Tabs: installed Java mods, the Java and the Lua library (Steam Workshop, searched through the
+ * Jumpstart cloud), and voluntary sharing of unverified mods with BiteCheck.
+ *
  * <p>The game calls {@link #onRender()} and {@link #blocksInput()} through {@link GameHooks};
- * everything runs on the game's main thread.
+ * everything runs on the game's main thread except network and hashing, which run on the
+ * background executor and hand their results back to the next frame.
  */
 public final class SecureScreen {
     // GLFW key codes
+    static final int KEY_SPACE = 32;
+    static final int KEY_MINUS = 45;
     static final int KEY_ESCAPE = 256;
     static final int KEY_ENTER = 257;
+    static final int KEY_TAB = 258;
+    static final int KEY_BACKSPACE = 259;
     static final int KEY_KP_ENTER = 335;
     static final int KEY_UP = 265;
     static final int KEY_DOWN = 264;
@@ -49,17 +63,19 @@ public final class SecureScreen {
     static final int KEY_LEFT_CONTROL = 341;
     static final int KEY_RIGHT_SHIFT = 344;
     static final int KEY_RIGHT_CONTROL = 345;
-    private static final int[] WATCHED = {KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_UP, KEY_DOWN, KEY_PAGE_UP,
-        KEY_PAGE_DOWN, KEY_A, KEY_J, KEY_N, KEY_R, KEY_Y, KEY_LEFT_SHIFT, KEY_LEFT_CONTROL, KEY_RIGHT_SHIFT,
-        KEY_RIGHT_CONTROL};
+    private static final int[] WATCHED = watched();
     /** A pretend key for tests: the Ctrl+Shift+J combination. */
     static final int OPEN = -1;
 
     /** How long the answer key does nothing after a question comes up. */
     static final long FIRST_DELAY_MS = 3000;
     static final long SECOND_DELAY_MS = 5000;
+    /** How long a Workshop download may take. */
+    static final long DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
     enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE }
+
+    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING }
 
     private static volatile SecureScreen current;
     private static volatile boolean reportedError;
@@ -67,32 +83,83 @@ public final class SecureScreen {
     private final GameScreen game;
     private final Actions actions;
     private final boolean testInput;
+    private final Executor background;
     private final Set<Integer> held = new HashSet<>();
     private final Deque<Integer> injected = new ArrayDeque<>();
+    private final Deque<Runnable> toMainThread = new ArrayDeque<>();
     private final Map<Path, BiteCheckGate.Check> checks = new HashMap<>();
     private Texts texts;
 
     private Mode mode = Mode.CLOSED;
+    private Tab tab = Tab.INSTALLED;
     private boolean waitForRelease;
+    private String message = "";
+    private boolean messageGood;
+
+    // installed tab
     private List<ModEntry> mods = List.of();
     private final Map<String, String> states = new HashMap<>();
     private int selected;
-    private String message = "";
-    private boolean messageGood;
     private Pending pending;
     private long questionSince;
+
+    // library tabs
+    private final Map<Tab, Library> libraries = new HashMap<>();
+    private Download download;
+
+    // sharing tab
+    private boolean sharing;
+    private String sharingPreview = "";
+    private boolean sharingStarted;
 
     private record Pending(ModEntry mod, BiteCheckGate.Check check, boolean update) {
     }
 
+    /** One library tab: the search text, the results and where the next page starts. */
+    private static final class Library {
+        final LibraryClient.Kind kind;
+        final StringBuilder query = new StringBuilder();
+        String searched; // the query of the shown results, null before the first search
+        List<LibraryClient.Item> items = new ArrayList<>();
+        String next = "";
+        int selected;
+        boolean busy;
+        String status = "";
+
+        Library(LibraryClient.Kind kind) {
+            this.kind = kind;
+        }
+    }
+
+    /** A Workshop item being subscribed and downloaded. */
+    private record Download(LibraryClient.Item item, long since) {
+    }
+
     /**
-     * @param testInput whether {@link #inject} works (JVM option -Djumpstart.testInput=true, only
-     *                  for automated tests; read once at start, so Lua cannot turn it on)
+     * @param testInput  whether {@link #inject} works (JVM option -Djumpstart.testInput=true, only
+     *                   for automated tests; read once at start, so Lua cannot turn it on)
+     * @param background runs network and hashing work off the main thread
      */
-    SecureScreen(GameScreen game, Actions actions, boolean testInput) {
+    SecureScreen(GameScreen game, Actions actions, boolean testInput, Executor background) {
         this.game = game;
         this.actions = actions;
         this.testInput = testInput;
+        this.background = background;
+        libraries.put(Tab.JAVA_LIBRARY, new Library(LibraryClient.Kind.JAVA));
+        libraries.put(Tab.LUA_LIBRARY, new Library(LibraryClient.Kind.LUA));
+    }
+
+    private static int[] watched() {
+        List<Integer> keys = new ArrayList<>(List.of(KEY_SPACE, KEY_MINUS, KEY_ESCAPE, KEY_ENTER, KEY_TAB, KEY_BACKSPACE,
+                KEY_KP_ENTER, KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_LEFT_SHIFT, KEY_LEFT_CONTROL,
+                KEY_RIGHT_SHIFT, KEY_RIGHT_CONTROL));
+        for (int k = '0'; k <= '9'; k++) {
+            keys.add(k);
+        }
+        for (int k = 'A'; k <= 'Z'; k++) {
+            keys.add(k);
+        }
+        return keys.stream().mapToInt(Integer::intValue).toArray();
     }
 
     static void install(SecureScreen screen) {
@@ -132,7 +199,11 @@ public final class SecureScreen {
         if (texts == null) {
             texts = new Texts(game.language());
         }
+        runMainThreadWork();
         Set<Integer> pressed = poll();
+        if (download != null) {
+            followDownload(now);
+        }
         switch (mode) {
             case CLOSED -> {
                 if (waitForRelease && held.isEmpty()) {
@@ -144,7 +215,7 @@ public final class SecureScreen {
                     drawHint();
                 }
             }
-            case LIST -> onList(pressed, now);
+            case LIST -> onKeys(pressed, now);
             case CONFIRM_ONCE, CONFIRM_TWICE -> onQuestion(pressed, now);
         }
         if (mode != Mode.CLOSED) {
@@ -152,9 +223,34 @@ public final class SecureScreen {
         }
     }
 
+    private void runMainThreadWork() {
+        List<Runnable> work;
+        synchronized (toMainThread) {
+            work = new ArrayList<>(toMainThread);
+            toMainThread.clear();
+        }
+        work.forEach(Runnable::run);
+    }
+
+    /** Runs work in the background and its result handler in a later frame on the main thread. */
+    private void inBackground(Callable<?> work, Consumer<Object> onMainThread) {
+        background.execute(() -> {
+            Object result;
+            try {
+                result = work.call();
+            } catch (Exception e) {
+                result = e;
+            }
+            Object done = result;
+            synchronized (toMainThread) {
+                toMainThread.add(() -> onMainThread.accept(done));
+            }
+        });
+    }
+
     /** Keys pressed since the last frame (physical, plus injected ones in tests). */
     private Set<Integer> poll() {
-        Set<Integer> pressed = new HashSet<>();
+        Set<Integer> pressed = new LinkedHashSet<>(); // keeps the typing order of injected keys
         for (int key : WATCHED) {
             boolean down = game.physicalKeyDown(key);
             if (down && held.add(key)) {
@@ -189,10 +285,16 @@ public final class SecureScreen {
 
     private void open() {
         mode = Mode.LIST;
+        tab = Tab.INSTALLED;
         message = "";
         checks.clear();
         reload();
         selected = 0;
+        sharing = actions.sharingEnabled();
+        if (sharing && !sharingStarted) {
+            sharingStarted = true; // once per game: send today's report if it is due
+            inBackground(() -> actions.shareIfDue(actions.unverifiedJars()), r -> System.out.println("[Jumpstart] sharing: " + r));
+        }
         game.pause(true);
     }
 
@@ -226,11 +328,29 @@ public final class SecureScreen {
         return states.getOrDefault(mod.id(), "not loaded");
     }
 
-    private void onList(Set<Integer> pressed, long now) {
+    private void onKeys(Set<Integer> pressed, long now) {
         if (pressed.contains(KEY_ESCAPE)) {
             close();
             return;
         }
+        if (pressed.contains(KEY_TAB)) {
+            tab = Tab.values()[(tab.ordinal() + 1) % Tab.values().length];
+            message = "";
+            if (tab == Tab.SHARING) {
+                showSharing();
+            }
+            return;
+        }
+        switch (tab) {
+            case INSTALLED -> onInstalled(pressed, now);
+            case JAVA_LIBRARY, LUA_LIBRARY -> onLibrary(libraries.get(tab), pressed, now);
+            case SHARING -> onSharing(pressed);
+        }
+    }
+
+    // --- installed tab ---------------------------------------------------------------------------
+
+    private void onInstalled(Set<Integer> pressed, long now) {
         if (pressed.contains(KEY_UP) && selected > 0) {
             selected--;
         }
@@ -335,6 +455,165 @@ public final class SecureScreen {
         messageGood = good;
     }
 
+    // --- library tabs ----------------------------------------------------------------------------
+
+    private void onLibrary(Library lib, Set<Integer> pressed, long now) {
+        for (int key : pressed) {
+            if (key == KEY_BACKSPACE && lib.query.length() > 0) {
+                lib.query.setLength(lib.query.length() - 1);
+            } else if (key == KEY_SPACE) {
+                type(lib, " ");
+            } else if ((key >= 'A' && key <= 'Z') || (key >= '0' && key <= '9') || key == KEY_MINUS) {
+                type(lib, game.keyName(key));
+            }
+        }
+        if (pressed.contains(KEY_UP) && lib.selected > 0) {
+            lib.selected--;
+        }
+        if (pressed.contains(KEY_DOWN) && lib.selected < lib.items.size() - 1) {
+            lib.selected++;
+        }
+        if (pressed.contains(KEY_PAGE_DOWN) && !lib.next.isEmpty() && !lib.busy) {
+            search(lib, true);
+        }
+        if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
+            String query = lib.query.toString().strip();
+            if (lib.searched == null || !query.equals(lib.searched)) {
+                search(lib, false);
+            } else if (!lib.items.isEmpty()) {
+                startDownload(lib.items.get(lib.selected), now);
+            }
+        }
+    }
+
+    private void type(Library lib, String text) {
+        if (text != null && lib.query.length() < 60) {
+            lib.query.append(text);
+        }
+    }
+
+    private void search(Library lib, boolean nextPage) {
+        if (lib.busy) {
+            return;
+        }
+        lib.busy = true;
+        lib.status = texts.get("searching");
+        String query = nextPage ? lib.searched : lib.query.toString().strip();
+        String cursor = nextPage ? lib.next : null;
+        inBackground(() -> actions.search(lib.kind, query, cursor), result -> {
+            lib.busy = false;
+            if (result instanceof LibraryClient.Page page) {
+                if (!nextPage) {
+                    lib.items = new ArrayList<>();
+                    lib.selected = 0;
+                }
+                lib.items.addAll(page.items());
+                lib.next = page.next();
+                lib.searched = query;
+                lib.status = lib.items.isEmpty() ? texts.get("noResults")
+                        : String.format(Locale.ROOT, texts.get("results"), lib.items.size(), page.total());
+            } else {
+                lib.status = texts.get("searchFailed") + ((Exception) result).getMessage();
+            }
+        });
+    }
+
+    /** Enter on a library item: subscribe and download it through Steam, then install it. */
+    private void startDownload(LibraryClient.Item item, long now) {
+        if (download != null) {
+            say(texts.get("downloadBusy"), false);
+            return;
+        }
+        String unavailable = actions.workshop().unavailableReason();
+        if (unavailable != null) {
+            say(texts.get("noSteam") + unavailable, false);
+            return;
+        }
+        long state = actions.workshop().state(item.id());
+        if ((state & Workshop.INSTALLED) == 0 || (state & Workshop.NEEDS_UPDATE) != 0) {
+            if (!actions.workshop().subscribeAndDownload(item.id())) {
+                say(texts.get("subscribeFailed"), false);
+                return;
+            }
+        }
+        download = new Download(item, now);
+        say(String.format(Locale.ROOT, texts.get("downloading"), item.title()), true);
+    }
+
+    /** Every frame while a download runs: when Steam has the item, install what is in it. */
+    private void followDownload(long now) {
+        Download d = download;
+        long state = actions.workshop().state(d.item().id());
+        boolean ready = (state & Workshop.INSTALLED) != 0
+                && (state & (Workshop.DOWNLOADING | Workshop.DOWNLOAD_PENDING | Workshop.NEEDS_UPDATE)) == 0;
+        if (!ready) {
+            if (now - d.since() > DOWNLOAD_TIMEOUT_MS) {
+                download = null;
+                say(texts.get("downloadTimeout"), false);
+            }
+            return;
+        }
+        download = null;
+        String folder = actions.workshop().installFolder(d.item().id());
+        List<Actions.FolderMod> found = folder == null ? List.of() : actions.modsInFolder(folder);
+        if (found.isEmpty()) {
+            say(texts.get("noModInItem"), false);
+            return;
+        }
+        List<String> problems = new ArrayList<>();
+        ModEntry java = null;
+        for (Actions.FolderMod mod : found) {
+            String problem = actions.activate(mod.id());
+            if (problem != null) {
+                problems.add(problem);
+            }
+            if (java == null && mod.java() != null) {
+                java = mod.java();
+            }
+        }
+        if (java != null && mode == Mode.LIST) {
+            // Java: straight into BiteCheck's check, on the installed tab
+            tab = Tab.INSTALLED;
+            reload();
+            for (int i = 0; i < mods.size(); i++) {
+                if (mods.get(i).id().equals(java.id())) {
+                    selected = i;
+                }
+            }
+            say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
+            start(java, now);
+        } else if (java != null) {
+            say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
+        } else {
+            say(problems.isEmpty() ? String.format(Locale.ROOT, texts.get("enabledLua"), d.item().title())
+                    : String.join("; ", problems), problems.isEmpty());
+        }
+    }
+
+    // --- sharing tab -------------------------------------------------------------------------------
+
+    private void showSharing() {
+        sharing = actions.sharingEnabled();
+        sharingPreview = texts.get("previewBusy");
+        inBackground(() -> UsageSharing.preview(GameActions.CLIENT, actions.unverifiedJars()), r ->
+                sharingPreview = r instanceof String text ? text : texts.get("previewFailed"));
+    }
+
+    private void onSharing(Set<Integer> pressed) {
+        if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
+            try {
+                actions.setSharing(!sharing);
+                sharing = !sharing;
+                say(texts.get(sharing ? "sharingOn" : "sharingOff"), true);
+                if (sharing) {
+                    inBackground(() -> actions.shareIfDue(actions.unverifiedJars()), r -> say(String.valueOf(r), true));
+                }
+            } catch (IOException e) {
+                say(e.getMessage(), false);
+            }
+        }
+    }
+
     // --- drawing ---------------------------------------------------------------------------------
 
     private void drawHint() {
@@ -360,23 +639,49 @@ public final class SecureScreen {
         game.text(GameScreen.Font.LARGE, x, y, texts.get("title"), 1f, 1f, 1f, 1f);
         y += game.fontHeight(GameScreen.Font.LARGE) + 4;
         y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("secure"), 0.55f, 0.85f, 0.6f);
-        y += 12;
+        y += 8;
 
         int bottom = py + ph - 18;
         int small = game.fontHeight(GameScreen.Font.SMALL);
-        if (mode == Mode.LIST) {
-            game.text(GameScreen.Font.SMALL, x, bottom - small, texts.get("help"), 0.7f, 0.7f, 0.7f, 1f);
-            drawList(x, y, width, bottom - small - 12);
-        } else {
+        if (mode != Mode.LIST) {
             drawQuestion(x, y, width, bottom, now);
+            return;
         }
+        y = drawTabs(x, y);
+        game.text(GameScreen.Font.SMALL, x, bottom - small, texts.get("help." + tab.name()), 0.7f, 0.7f, 0.7f, 1f);
+        int contentBottom = bottom - small - 12;
+        if (!message.isEmpty()) {
+            int lines = Math.min(3, game.textWidth(GameScreen.Font.SMALL, message) / Math.max(1, width) + 1);
+            contentBottom -= lines * (small + 2) + 6;
+            wrapped(GameScreen.Font.SMALL, x, contentBottom + 6, width, message,
+                    messageGood ? 0.5f : 1f, messageGood ? 1f : 0.65f, messageGood ? 0.5f : 0.4f);
+        }
+        switch (tab) {
+            case INSTALLED -> drawList(x, y, width, contentBottom);
+            case JAVA_LIBRARY, LUA_LIBRARY -> drawLibrary(libraries.get(tab), x, y, width, contentBottom);
+            case SHARING -> drawSharing(x, y, width, contentBottom);
+        }
+    }
+
+    private int drawTabs(int x, int y) {
+        int cx = x;
+        int h = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        for (Tab t : Tab.values()) {
+            String label = texts.get("tab." + t.name());
+            int w = game.textWidth(GameScreen.Font.MEDIUM, label) + 24;
+            boolean active = t == tab;
+            game.rect(cx, y, w, h, active ? 0.25f : 0.12f, active ? 0.45f : 0.13f, active ? 0.3f : 0.15f, 1f);
+            float c = active ? 1f : 0.7f;
+            game.text(GameScreen.Font.MEDIUM, cx + 12, y + 4, label, c, c, c, 1f);
+            cx += w + 6;
+        }
+        return y + h + 12;
     }
 
     private void drawList(int x, int top, int width, int bottom) {
         int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
-        int detailsHeight = small * 5 + 10;
-        int listBottom = bottom - detailsHeight;
+        int listBottom = bottom - small * 3 - 10;
         if (mods.isEmpty()) {
             game.text(GameScreen.Font.MEDIUM, x, top, texts.get("noMods"), 0.8f, 0.8f, 0.8f, 1f);
         }
@@ -418,11 +723,70 @@ public final class SecureScreen {
                     0.65f, 0.65f, 0.65f, 1f);
             y += small;
             game.text(GameScreen.Font.SMALL, x, y, texts.get("luaNote"), 0.55f, 0.55f, 0.55f, 1f);
-            y += small;
         }
-        if (!message.isEmpty()) {
-            wrapped(GameScreen.Font.SMALL, x, y + 4, width, message,
-                    messageGood ? 0.5f : 1f, messageGood ? 1f : 0.65f, messageGood ? 0.5f : 0.4f);
+    }
+
+    private void drawLibrary(Library lib, int x, int top, int width, int bottom) {
+        int medium = game.fontHeight(GameScreen.Font.MEDIUM);
+        int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
+        game.rect(x - 6, top - 4, width + 12, medium + 10, 0.03f, 0.03f, 0.04f, 1f);
+        game.text(GameScreen.Font.MEDIUM, x, top, texts.get("search") + lib.query + "_", 1f, 1f, 1f, 1f);
+        int y = top + medium + 14;
+        game.text(GameScreen.Font.SMALL, x, y, lib.status.isEmpty() ? texts.get("searchHint") : lib.status, 0.7f, 0.7f, 0.7f, 1f);
+        y += small + 6;
+
+        int line = medium + small + 10;
+        int listBottom = bottom - small * 2 - 8;
+        int visible = Math.max(1, (listBottom - y) / line);
+        int first = Math.max(0, Math.min(lib.selected - visible / 2, lib.items.size() - visible));
+        for (int i = first; i < Math.min(lib.items.size(), first + visible); i++) {
+            LibraryClient.Item item = lib.items.get(i);
+            int ry = y + (i - first) * line;
+            if (i == lib.selected) {
+                game.rect(x - 6, ry - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
+            }
+            game.text(GameScreen.Font.MEDIUM, x, ry, item.title(), 1f, 1f, 1f, 1f);
+            String right = workshopLabel(item) + "   " + String.format(Locale.ROOT, texts.get("subscribers"), item.subscriptions());
+            int w = game.textWidth(GameScreen.Font.SMALL, right);
+            game.text(GameScreen.Font.SMALL, x + width - w, ry + 2, right, 0.7f, 0.85f, 0.7f, 1f);
+            game.text(GameScreen.Font.SMALL, x + 12, ry + medium + 2, cut(item.description(), 140), 0.6f, 0.6f, 0.6f, 1f);
+        }
+        if (!lib.items.isEmpty()) {
+            LibraryClient.Item item = lib.items.get(lib.selected);
+            int dy = listBottom + 6;
+            game.rect(x - 6, dy - 4, width + 12, 1, 0.4f, 0.4f, 0.4f, 1f);
+            game.text(GameScreen.Font.SMALL, x, dy, "Workshop " + item.id() + "   " + String.join(", ", item.tags()), 0.65f, 0.65f, 0.65f, 1f);
+            game.text(GameScreen.Font.SMALL, x, dy + small, texts.get(item.java() ? "javaNote" : "luaLibraryNote"), 0.55f, 0.55f, 0.55f, 1f);
+        }
+    }
+
+    private String workshopLabel(LibraryClient.Item item) {
+        if (download != null && download.item().id() == item.id()) {
+            return texts.get("ws.downloading");
+        }
+        long state = actions.workshop().unavailableReason() == null ? actions.workshop().state(item.id()) : 0;
+        if ((state & Workshop.INSTALLED) != 0) {
+            return texts.get((state & Workshop.NEEDS_UPDATE) != 0 ? "ws.update" : "ws.installed");
+        }
+        return (state & Workshop.SUBSCRIBED) != 0 ? texts.get("ws.subscribed") : "";
+    }
+
+    private void drawSharing(int x, int y, int width, int bottom) {
+        game.text(GameScreen.Font.MEDIUM, x, y, texts.get(sharing ? "sharing.on" : "sharing.off"),
+                sharing ? 0.5f : 1f, sharing ? 1f : 0.8f, sharing ? 0.5f : 0.4f, 1f);
+        y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("sharing.what"), 0.85f, 0.85f, 0.85f);
+        y += 8;
+        game.text(GameScreen.Font.SMALL, x, y, texts.get("sharing.preview"), 0.7f, 0.7f, 0.7f, 1f);
+        y += game.fontHeight(GameScreen.Font.SMALL) + 6;
+        int line = game.fontHeight(GameScreen.Font.SMALL) + 2;
+        for (String l : sharingPreview.split("\n")) {
+            if (y + line > bottom) {
+                game.text(GameScreen.Font.SMALL, x, y, "...", 0.6f, 0.6f, 0.6f, 1f);
+                break;
+            }
+            game.text(GameScreen.Font.SMALL, x + 12, y, cut(l.replace('\t', ' '), 150), 0.6f, 0.8f, 0.9f, 1f);
+            y += line;
         }
     }
 
@@ -490,22 +854,42 @@ public final class SecureScreen {
         return y;
     }
 
+    /** The end of a long text (paths). */
     private static String shorten(String text, int max) {
         return text.length() <= max ? text : "..." + text.substring(text.length() - max + 3);
+    }
+
+    /** The start of a long text (descriptions). */
+    private static String cut(String text, int max) {
+        return text.length() <= max ? text : text.substring(0, max - 3) + "...";
     }
 
     // --- for tests -------------------------------------------------------------------------------
 
     /** One line about the current state, for automated tests. */
     String describe() {
-        ModEntry mod = selectedMod();
-        StringBuilder sb = new StringBuilder(mode.name());
-        sb.append(" selected=").append(mod == null ? "-" : mod.id());
-        if (mod != null) {
-            sb.append(" state=").append(stateOf(mod));
+        StringBuilder sb = new StringBuilder(mode.name()).append(" tab=").append(tab);
+        if (tab == Tab.JAVA_LIBRARY || tab == Tab.LUA_LIBRARY) {
+            Library lib = libraries.get(tab);
+            sb.append(" query=").append(lib.query).append(" results=").append(lib.items.size());
+            if (!lib.items.isEmpty()) {
+                sb.append(" selected=").append(lib.items.get(lib.selected).id());
+            }
+            sb.append(" status=").append(lib.status);
+        } else if (tab == Tab.SHARING) {
+            sb.append(" sharing=").append(sharing);
+        } else {
+            ModEntry mod = selectedMod();
+            sb.append(" selected=").append(mod == null ? "-" : mod.id());
+            if (mod != null) {
+                sb.append(" state=").append(stateOf(mod));
+            }
         }
         if (pending != null) {
             sb.append(" asking=").append(pending.check().verdict());
+        }
+        if (download != null) {
+            sb.append(" downloading=").append(download.item().id());
         }
         sb.append(" message=").append(message);
         return sb.toString();
@@ -513,6 +897,14 @@ public final class SecureScreen {
 
     Mode mode() {
         return mode;
+    }
+
+    Tab tab() {
+        return tab;
+    }
+
+    String sharingPreview() {
+        return sharingPreview;
     }
 
     List<String> modIds() {

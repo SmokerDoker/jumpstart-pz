@@ -14,6 +14,12 @@ public final class Main {
     /** Tests only: -Djumpstart.testInput=true lets Lua press the secure screen's keys. Read once. */
     static final boolean TEST_INPUT = Boolean.getBoolean("jumpstart.testInput");
     private static boolean patched;
+    /** Network and hashing for the secure screen, off the game's main thread. */
+    private static final java.util.concurrent.ExecutorService BACKGROUND = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "Jumpstart background");
+        t.setDaemon(true);
+        return t;
+    });
 
     private Main() {
     }
@@ -39,7 +45,8 @@ public final class Main {
 
     private static synchronized void startSecureScreen(LiveInstaller installer, ZombieBuddyFork zombieBuddy) {
         try {
-            SecureScreen.install(new SecureScreen(new ReflectiveGameScreen(), new GameActions(installer, zombieBuddy), TEST_INPUT));
+            SecureScreen.install(new SecureScreen(new ReflectiveGameScreen(),
+                    new GameActions(installer, zombieBuddy, LiveInstaller.biteCheckDir()), TEST_INPUT, BACKGROUND));
             if (patched) {
                 return; // main() ran again (Lua reloaded); the game is patched already
             }

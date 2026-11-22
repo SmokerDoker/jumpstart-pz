@@ -31,7 +31,8 @@ public final class JumpstartLua {
             Map.entry("down", SecureScreen.KEY_DOWN), Map.entry("pgup", SecureScreen.KEY_PAGE_UP),
             Map.entry("pgdn", SecureScreen.KEY_PAGE_DOWN), Map.entry("enter", SecureScreen.KEY_ENTER),
             Map.entry("esc", SecureScreen.KEY_ESCAPE), Map.entry("j", SecureScreen.KEY_J),
-            Map.entry("n", SecureScreen.KEY_N), Map.entry("a", SecureScreen.KEY_A), Map.entry("r", SecureScreen.KEY_R));
+            Map.entry("n", SecureScreen.KEY_N), Map.entry("a", SecureScreen.KEY_A), Map.entry("r", SecureScreen.KEY_R),
+            Map.entry("tab", SecureScreen.KEY_TAB), Map.entry("backspace", SecureScreen.KEY_BACKSPACE));
 
     private JumpstartLua() {
     }
@@ -72,6 +73,21 @@ public final class JumpstartLua {
         Integer key = name == null ? null : TEST_KEYS.get(name.toLowerCase(Locale.ROOT));
         if (screen == null || key == null || !screen.inject(key)) {
             return "FAILED test input is off";
+        }
+        return "OK";
+    }
+
+    /** Tests only: types letters, digits and spaces into the secure screen (one key per character). */
+    public static String testType(String text) {
+        SecureScreen screen = SecureScreen.current();
+        if (screen == null || text == null) {
+            return "FAILED test input is off";
+        }
+        for (char c : text.toUpperCase(Locale.ROOT).toCharArray()) {
+            int key = c == ' ' ? SecureScreen.KEY_SPACE : c == '-' ? SecureScreen.KEY_MINUS : c;
+            if (!screen.inject(key)) {
+                return "FAILED test input is off";
+            }
         }
         return "OK";
     }

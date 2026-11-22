@@ -1,0 +1,16 @@
+{
+  "name": "jumpstart-cloud",
+  "private": true,
+  "description": "Cloudflare Worker for Jumpstart and BiteCheck: searchable Java and Lua mod libraries (Steam Workshop) and voluntary reports of unverified mods.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260730.0",
+    "wrangler": "4.166.0"
+  }
+}

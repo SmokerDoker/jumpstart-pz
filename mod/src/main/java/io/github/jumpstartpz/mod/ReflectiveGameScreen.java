@@ -23,6 +23,7 @@ final class ReflectiveGameScreen implements GameScreen {
     private final Method getScreenWidth;
     private final Method getScreenHeight;
     private final Method glfwGetKey;
+    private final Method glfwGetKeyName;
     private final Method getWindow;
     private final Method isIngameState;
     private final Field speedControlsInstance;
@@ -53,6 +54,7 @@ final class ReflectiveGameScreen implements GameScreen {
         getScreenHeight = core.getMethod("getScreenHeight");
 
         glfwGetKey = Class.forName("org.lwjgl.glfw.GLFW").getMethod("glfwGetKey", long.class, int.class);
+        glfwGetKeyName = Class.forName("org.lwjgl.glfw.GLFW").getMethod("glfwGetKeyName", int.class, int.class);
         getWindow = Class.forName("org.lwjglx.opengl.Display").getMethod("getWindow");
 
         isIngameState = Class.forName("zombie.GameWindow").getMethod("isIngameState");
@@ -95,6 +97,19 @@ final class ReflectiveGameScreen implements GameScreen {
     public boolean physicalKeyDown(int glfwKey) {
         long window = (Long) call(getWindow, null);
         return window != 0 && (Integer) call(glfwGetKey, null, window, glfwKey) == 1; // GLFW_PRESS
+    }
+
+    @Override
+    public String keyName(int glfwKey) {
+        Object name = call(glfwGetKeyName, null, glfwKey, 0);
+        if (name instanceof String s && s.length() == 1) {
+            return s;
+        }
+        // keys GLFW has no name for: the US layout's character
+        if ((glfwKey >= 'A' && glfwKey <= 'Z') || (glfwKey >= '0' && glfwKey <= '9')) {
+            return String.valueOf((char) Character.toLowerCase(glfwKey));
+        }
+        return null;
     }
 
     @Override

@@ -1,0 +1,27 @@
+# Jumpstart cloud: one free Cloudflare Worker with one D1 database. See README.md for the setup.
+name = "jumpstart-cloud"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[vars]
+# Project Zomboid's Steam app id and the Workshop item of ZombieBuddy: Java mods depend on it.
+PZ_APP_ID = "108600"
+ZOMBIEBUDDY_WORKSHOP_ID = "3619862853"
+# Workshop tag the libraries show by default (empty: every build)
+DEFAULT_TAG = "Build 42"
+# A report counts in the public list only when at least this many installations sent it.
+MIN_INSTALLS_PUBLIC = "3"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "jumpstart-cloud"
+database_id = "REPLACE_WITH_THE_ID_FROM_wrangler_d1_create"
+migrations_dir = "migrations"
+
+[triggers]
+# daily clean-up of old reports
+crons = ["17 3 * * *"]
+
+# Secrets (wrangler secret put ...):
+#   STEAM_API_KEY  a Steam Web API key (https://steamcommunity.com/dev/apikey); only the Worker sees it
+#   REPORT_SALT    a long random string; installation ids are stored only as SHA-256(salt + id)

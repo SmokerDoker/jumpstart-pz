@@ -55,13 +55,16 @@ public final class LiveInstaller {
      */
     public static LiveInstaller forGame() {
         HotswapBackend backend = ZombieBuddyFork.current();
-        // -Djumpstart.bitecheckDir=... points it at another BiteCheck folder (tests)
-        String dir = System.getProperty("jumpstart.bitecheckDir");
-        Path biteCheckDir = dir != null && !dir.isBlank() ? Path.of(dir)
-                : Path.of(System.getProperty("user.home"), ".bitecheck");
+        Path biteCheckDir = biteCheckDir();
         BiteCheckGate gate = new BiteCheckGate(new io.github.jumpstartpz.core.gate.BiteCheckIndex(biteCheckDir, java.time.Instant::now),
                 backend.approvalsDir(), biteCheckDir, java.time.Instant::now);
         return new LiveInstaller(gate, backend);
+    }
+
+    /** ~/.bitecheck, or the folder in -Djumpstart.bitecheckDir=... (tests). */
+    public static Path biteCheckDir() {
+        String dir = System.getProperty("jumpstart.bitecheckDir");
+        return dir != null && !dir.isBlank() ? Path.of(dir) : Path.of(System.getProperty("user.home"), ".bitecheck");
     }
 
     public BiteCheckGate gate() {

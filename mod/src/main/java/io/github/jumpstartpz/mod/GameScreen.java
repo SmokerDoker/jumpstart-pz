@@ -25,6 +25,12 @@ interface GameScreen {
      */
     boolean physicalKeyDown(int glfwKey);
 
+    /**
+     * The character a letter, digit or punctuation key types on the player's keyboard layout (for
+     * the search field), or null. Key codes as in GLFW, which names keys after the US layout.
+     */
+    String keyName(int glfwKey);
+
     boolean inGame();
 
     /** Stops game time while the screen is open (single player), and restores it afterwards. */

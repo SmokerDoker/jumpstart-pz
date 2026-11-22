@@ -71,7 +71,16 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   `Jumpstart` only reads (`status`, `stateOf`, `check`), and the fork lets Lua change mods only with
   the test option `hotswap_lua=true`. Tested in the game (`tools\gametest.ps1`, 29 of 29 checks,
   including fake Ctrl+Shift+J events from Lua that must not open the screen)
-- [ ] Marketplace: Workshop search and updates
+- [x] Marketplace in the secure screen: a **Java library** and a **Lua library** to search the
+  Steam Workshop (typed on the real keyboard), through the Jumpstart cloud Worker
+  ([`cloud/`](cloud/README.md)), which holds the Steam Web API key. Enter subscribes and downloads
+  the item through Steam; a Java mod then goes straight into BiteCheck's check and loads live, a
+  Lua mod is enabled for the next game start. "update available" shows Workshop updates.
+- [x] Voluntary sharing (tab *Sharing*, off by default, BiteCheck's `UsageSharing`): once a day the
+  SHA-256, Workshop id, mod id and size of unverified jars go to the cloud, so the BiteCheck
+  registry reviews the mods people really play first. The tab shows exactly what would be sent.
+- [ ] Deploy the cloud Worker (needs your Cloudflare account and a Steam Web API key, see
+  [cloud/README.md](cloud/README.md)), then make its address the default
 
 ## Build
 
@@ -87,10 +96,11 @@ running, the fork built next to this repository): `tools\gametest.ps1`.
 ## Repository layout
 
 ```
-core/          BiteCheck gate, LiveInstaller, hotswap engine (planned next to it: market, mp)
+core/          BiteCheck gate, LiveInstaller, hotswap engine, library client (planned: multiplayer)
 mod/           The Jumpstart mod for Project Zomboid (secure screen, read-only Lua API)
 third_party/   BiteCheck (git submodule)
-tools/         In-game test
+tools/         In-game test and a stand-in for the cloud
+cloud/         Cloudflare Worker: mod libraries (Steam Workshop search) and voluntary reports
 docs/          Design notes and spike results
 ```
 
