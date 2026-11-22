@@ -36,3 +36,29 @@ tasks.test {
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
+
+// BiteCheck's public keys as Java constants. ZombieBuddy defines a mod's classes but serves none of
+// its resources, so the launcher's resource lookup finds no key in game; constants travel with the
+// class bytes, which BiteCheck and ZombieBuddy check by hash.
+val generatePinnedKeys by tasks.registering {
+    val keysDir = rootProject.file("third_party/bitecheck-pz/keys")
+    val registryKey = keysDir.resolve("registry.pub")
+    val timestampKey = keysDir.resolve("timestamp.pub")
+    val outDir = layout.buildDirectory.dir("generated/pinnedKeys")
+    inputs.files(registryKey, timestampKey)
+    outputs.dir(outDir)
+    doLast {
+        fun literal(f: File) = f.readText().trim().replace("\\", "\\\\").replace("\"", "\\\"")
+        val dir = outDir.get().asFile.resolve("io/github/jumpstartpz/core/gate")
+        dir.mkdirs()
+        dir.resolve("PinnedKeys.java").writeText(
+            "package io.github.jumpstartpz.core.gate;\n\n" +
+            "/** BiteCheck's public keys, copied from third_party/bitecheck-pz/keys at build time. */\n" +
+            "final class PinnedKeys {\n" +
+            "    private PinnedKeys() {\n    }\n\n" +
+            "    static final String REGISTRY = \"" + literal(registryKey) + "\";\n" +
+            "    static final String TIMESTAMP = \"" + literal(timestampKey) + "\";\n" +
+            "}\n")
+    }
+}
+sourceSets["main"].java.srcDir(generatePinnedKeys)

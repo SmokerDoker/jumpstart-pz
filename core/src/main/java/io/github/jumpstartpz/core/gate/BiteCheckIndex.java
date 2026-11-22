@@ -2,10 +2,14 @@ package io.github.jumpstartpz.core.gate;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -49,8 +53,9 @@ public final class BiteCheckIndex implements IndexSource {
     @Override
     public synchronized void refresh() {
         notes.clear();
+        List<Path> keyFiles = new ArrayList<>();
         try {
-            Config config = Config.load(biteCheckDir.resolve("config.toml"));
+            Config config = withPinnedKeys(Config.load(biteCheckDir.resolve("config.toml")), keyFiles);
             LauncherState state = LauncherState.load(biteCheckDir.resolve("state.toml"));
             URI url = config.url("index_url").orElse(URI.create(IndexClient.DEFAULT_URL));
             IndexClient client = new IndexClient(url, IndexClient.registryKey(config),
@@ -62,7 +67,37 @@ public final class BiteCheckIndex implements IndexSource {
         } catch (IOException e) {
             notes.add("BiteCheck index not available: " + e.getMessage());
             index = Optional.empty();
+        } finally {
+            for (Path file : keyFiles) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (IOException e) {
+                    // a temp file with a public key; nothing secret
+                }
+            }
         }
+    }
+
+    /**
+     * The launcher reads its pinned keys as resources, which ZombieBuddy does not serve for mod
+     * jars. Hand them over as files instead, unless BiteCheck's config names its own keys.
+     */
+    private static Config withPinnedKeys(Config config, List<Path> keyFiles) throws IOException {
+        Map<String, String> pinned = new LinkedHashMap<>();
+        if (config.string("registry_key").isEmpty()) {
+            pinned.put("registry_key", writeKey(PinnedKeys.REGISTRY, keyFiles));
+        }
+        if (config.string("timestamp_key").isEmpty()) {
+            pinned.put("timestamp_key", writeKey(PinnedKeys.TIMESTAMP, keyFiles));
+        }
+        return pinned.isEmpty() ? config : config.with(pinned);
+    }
+
+    private static String writeKey(String key, List<Path> keyFiles) throws IOException {
+        Path file = Files.createTempFile("jumpstart-bitecheck", ".pub");
+        keyFiles.add(file);
+        Files.writeString(file, key + "\n", StandardCharsets.UTF_8);
+        return file.toAbsolutePath().toString();
     }
 
     @Override
