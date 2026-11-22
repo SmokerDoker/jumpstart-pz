@@ -16,3 +16,6 @@ out/
 *.iml
 .DS_Store
 Thumbs.db
+
+# Local notes (not in the repository)
+notizen/
