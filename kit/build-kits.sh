@@ -20,14 +20,14 @@ make() { # name, files...
   for f in "$@"; do cp "$kit/$f" "$d/"; done
   echo "$d"
 }
-w="$(make windows install-windows.ps1 TESTPLAN.md)"
+w="$(make windows install-windows.ps1 "Jumpstart installieren.cmd" TESTPLAN.md)"
 (cd "$stage" && zip -qr "$out/$(basename "$w").zip" "$(basename "$w")")
 for os in macos linux; do
-  d="$(make "$os" install-unix.sh TESTPLAN.md)"
-  chmod +x "$d/install-unix.sh"
+  d="$(make "$os" install-unix.sh "Jumpstart installieren.command" TESTPLAN.md)"
+  chmod +x "$d/install-unix.sh" "$d/Jumpstart installieren.command"
   (cd "$stage" && tar -czf "$out/$(basename "$d").tar.gz" "$(basename "$d")")
 done
-s="$(make server install-server.sh install-server.ps1 SERVER.md)"
+s="$(make server install-server.sh install-server.ps1 "Server einrichten.cmd" SERVER.md)"
 chmod +x "$s/install-server.sh"
 (cd "$stage" && zip -qr "$out/$(basename "$s").zip" "$(basename "$s")")
 rm -rf "$stage"

@@ -34,8 +34,38 @@ mkdir -p "$mods"
 rm -rf "$mods/Jumpstart"
 cp -R "$kit/Jumpstart" "$mods/Jumpstart"
 echo "Jumpstart mod -> $mods/Jumpstart"
+
+# ZombieBuddy and Jumpstart on in the main menu's mod list (a copy of the old list stays next to it)
+list="$mods/default.txt"
+if [ ! -f "$list" ]; then
+  printf 'VERSION = 1,\n\nmods\n{\n}\n\nmaps\n{\n}\n' > "$list"
+fi
+for id in Jumpstart ZombieBuddy; do # inserted at the top: ZombieBuddy ends up first
+  if ! grep -Fq "mod = $id," "$list" && ! grep -Fq "mod = \\$id," "$list"; then
+    [ -f "$list.before-jumpstart" ] || cp "$list" "$list.before-jumpstart"
+    awk -v id="$id" '{print} /^mods/{m=1} m && /^\{/{print "    mod = " id ","; m=0}' "$list" > "$list.tmp" && mv "$list.tmp" "$list"
+  fi
+done
+echo "ZombieBuddy and Jumpstart enabled in $list"
+
+option="-javaagent:ZombieBuddy.jar=hotswap=true --"
+case "$(uname -s)" in
+  Darwin) workshop="$HOME/Library/Application Support/Steam/steamapps/workshop/content/108600/3619862853"; opener=open
+          printf '%s' "$option" | pbcopy 2>/dev/null && copied=1 || copied= ;;
+  *)      workshop="$(dirname "$(dirname "$(dirname "$game")")")/workshop/content/108600/3619862853"; opener=xdg-open
+          if command -v wl-copy >/dev/null; then printf '%s' "$option" | wl-copy && copied=1 || copied=
+          elif command -v xclip >/dev/null; then printf '%s' "$option" | xclip -selection clipboard && copied=1 || copied=
+          else copied=; fi ;;
+esac
+if [ ! -d "$workshop" ]; then
+  echo
+  echo "ZombieBuddy is not subscribed in the Steam Workshop yet: opening its page, click Subscribe."
+  "$opener" "steam://url/CommunityFilePage/3619862853" >/dev/null 2>&1 || echo "    https://steamcommunity.com/sharedfiles/filedetails/?id=3619862853"
+fi
 echo
-echo "Now in Steam: Project Zomboid > Properties > Launch Options:"
-echo "    -javaagent:ZombieBuddy.jar=hotswap=true --"
-echo "In the game: enable ZombieBuddy and Jumpstart in the mod menu; ZombieBuddy asks once whether"
-echo "Jumpstart.jar may load (say yes). Then Ctrl+Shift+J opens Jumpstart's screen."
+echo "One step left, in Steam: Project Zomboid > Properties > General > Launch Options:"
+echo "    $option"
+[ -n "$copied" ] && echo "(already in your clipboard: just paste it)"
+echo
+echo "Then start the game. ZombieBuddy asks once whether Jumpstart.jar may load: say yes."
+echo "Ctrl+Shift+J opens Jumpstart's screen."

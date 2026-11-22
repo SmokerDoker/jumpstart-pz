@@ -1,2 +1,6 @@
 # shell scripts must keep LF line endings (the kit is built on Windows, run on macOS/Linux)
 *.sh text eol=lf
+*.command text eol=lf
+# double-click files for Windows keep CRLF
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
