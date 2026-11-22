@@ -15,6 +15,7 @@ esac
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+cd "$work" # also when run as another user from a folder that user cannot enter (sudo -u)
 echo "Jumpstart: looking for the newest kit ($tag) ..."
 urls="$(curl -fsSL "https://api.github.com/repos/$repo/releases/tags/$tag" | grep -o '"browser_download_url": *"[^"]*"' | sed 's/.*"\(https[^"]*\)"/\1/')"
 url="$(printf '%s\n' "$urls" | grep "/$pattern" | head -n 1)"
