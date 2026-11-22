@@ -3,12 +3,21 @@
 #   bash install-server.sh /path/to/pzserver [servername]   (--uninstall as second argument to undo)
 # With a server name (default: the only ~/Zomboid/Server/*.ini, if there is just one) it also puts
 # ZombieBuddy and Jumpstart into that server's .ini (Mods= and WorkshopItems=).
+# Optional environment:
+#   ZOMBOID_DIR           the server's data folder when it runs with -cachedir=... (default ~/Zomboid)
+#   JUMPSTART_AGENT_ARGS  ZombieBuddy's options (default hotswap=true); a server without a console:
+#                         hotswap=true,policy=deny-new,config_dir=<folder> and approve the jars ahead
+#   JUMPSTART_VM_ARGS     more JVM options, separated by spaces (e.g. -Djumpstart.bitecheckDir=<folder>)
 set -euo pipefail
 kit="$(cd "$(dirname "$0")" && pwd)"
 dir="$(cd "${1:-.}" && pwd)"
 json="$dir/ProjectZomboid64.json"
 [ -f "$json" ] && [ -d "$dir/java" ] || { echo "no Project Zomboid server in $dir (ProjectZomboid64.json and java/ expected)"; exit 1; }
-mods="${HOME}/Zomboid/mods"
+zdir="${ZOMBOID_DIR:-$HOME/Zomboid}"
+mods="$zdir/mods"
+agent_args="${JUMPSTART_AGENT_ARGS:-hotswap=true}"
+extra=""
+for a in ${JUMPSTART_VM_ARGS:-}; do extra="$extra\n\t\t\"$a\","; done
 if [ "${2:-}" = "--uninstall" ]; then
   [ -f "$json.before-jumpstart" ] && mv -f "$json.before-jumpstart" "$json" && echo "ProjectZomboid64.json restored"
   rm -f "$dir/java/ZombieBuddy.jar"; rm -rf "$mods/Jumpstart"; echo "removed"; exit 0
@@ -16,13 +25,13 @@ fi
 cp "$kit/ZombieBuddy.jar" "$dir/java/ZombieBuddy.jar"
 if ! grep -q 'ZombieBuddy.jar' "$json"; then
   cp "$json" "$json.before-jumpstart"
-  sed -i "s#\"vmArgs\": *\[#\"vmArgs\": [\n\t\t\"-javaagent:$dir/java/ZombieBuddy.jar=hotswap=true\",#" "$json"
+  sed -i "s#\"vmArgs\": *\[#\"vmArgs\": [\n\t\t\"-javaagent:$dir/java/ZombieBuddy.jar=$agent_args\",$extra#" "$json"
 fi
 grep -q 'ZombieBuddy.jar' "$json" || { echo "could not add -javaagent to $json; add it to vmArgs by hand"; exit 1; }
 mkdir -p "$mods"; rm -rf "$mods/Jumpstart"; cp -R "$kit/Jumpstart" "$mods/Jumpstart"
 echo "ZombieBuddy (Jumpstart fork) -> $dir/java, -javaagent in ProjectZomboid64.json, Jumpstart -> $mods/Jumpstart"
 
-inis="$HOME/Zomboid/Server"
+inis="$zdir/Server"
 name="${2:-}"
 if [ -z "$name" ] && [ -d "$inis" ] && [ "$(find "$inis" -maxdepth 1 -name '*.ini' | wc -l)" -eq 1 ]; then
   name="$(basename "$(find "$inis" -maxdepth 1 -name '*.ini')" .ini)"
