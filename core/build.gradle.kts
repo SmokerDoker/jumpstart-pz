@@ -9,9 +9,12 @@ val junitVersion = "6.1.3"
 
 dependencies {
     compileOnly("net.bytebuddy:byte-buddy:$byteBuddyVersion")
-    // Byte Buddy's nullability annotations refer to JSR-305; without it javac warns and -Werror fails.
-    compileOnly("com.google.code.findbugs:jsr305:3.0.2")
-    testCompileOnly("com.google.code.findbugs:jsr305:3.0.2")
+    // Byte Buddy's class files refer to JSR-305 and SpotBugs annotations; without them javac
+    // warns about the missing annotation types and -Werror fails.
+    for (annotations in listOf("com.google.code.findbugs:jsr305:3.0.2", "com.github.spotbugs:spotbugs-annotations:4.8.6")) {
+        compileOnly(annotations)
+        testCompileOnly(annotations)
+    }
 
     testImplementation("net.bytebuddy:byte-buddy:$byteBuddyVersion")
     testImplementation("net.bytebuddy:byte-buddy-agent:$byteBuddyVersion")
