@@ -120,9 +120,11 @@ Jumpstart; on the command line: `JumpstartSetup.jar --install | --uninstall | --
 
 **Automatic updates** (box ticked by default): Jumpstart puts itself in front of the game in Steam's
 launch options and, before every game start, installs the newest **signed** release (tags `v*`, never
-`test-kit`) and repairs what a game update undid; then the game starts. Details and the signing key:
-[kit/RELEASING.md](kit/RELEASING.md). Uninstall Jumpstart in its window before removing the app, so
-Steam's launch options do not point at a missing program.
+`test-kit`) and repairs what a game update undid; then the game starts. The launch option runs
+`~/.jumpstart/JumpstartSetup.jar` with the game's own Java, so it never depends on the installed app:
+remove the app and the game still starts. The installer updates itself the same way (signed). Setting
+the launch option needs Steam closed once; the installer closes and restarts Steam for you. Details
+and the signing key: [kit/RELEASING.md](kit/RELEASING.md).
 
 **Dedicated servers**: `JumpstartSetup.jar --server <folder> --name <server> --headless`, with
 `--update` before every start (systemd `ExecStartPre`): [kit/SERVER.md](kit/SERVER.md).

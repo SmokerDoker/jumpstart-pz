@@ -258,7 +258,7 @@ final class InstallerWindow {
         busy();
         // with the auto-update box: Jumpstart's wrapper goes into the launch options too
         Setup installer = new Setup(setup.location(), t, this::append,
-                autoUpdate.isSelected() ? Wrapper.prefix(setup.location().os()) : Optional.empty());
+                autoUpdate.isSelected() ? Wrapper.prefix(setup.location()) : Optional.empty());
         background(() -> InstallerMain.choosePayload(payloadDir, this::append, t), chosen -> {
             Optional<String> installed = installer.installedVersion();
             if (InstallerMain.isDowngrade(chosen.version(), installed)) {
@@ -297,6 +297,9 @@ final class InstallerWindow {
         // launch options first: they decide whether ZombieBuddy.jar may go
         background(() -> setup.launchOptions(false), r -> launchStep(false, r, () -> background(() -> {
             setup.uninstallFiles();
+            if (!setup.status().autoUpdate()) {
+                Bootstrap.remove(); // nothing starts it any more
+            }
             return Boolean.TRUE;
         }, ok -> {
             append(t.get("done.uninstall"));
@@ -315,8 +318,15 @@ final class InstallerWindow {
                         t.get("steam.running.title"), JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
                 if (choice == 0) {
                     append(t.get("steam.closing"));
-                    background(() -> Steam.close(setup.location().os(), Duration.ofSeconds(60))
-                            ? setup.launchOptions(install) : Setup.LaunchResult.STEAM_RUNNING, again -> {
+                    background(() -> {
+                        if (!Steam.close(setup.location().os(), Duration.ofSeconds(60))) {
+                            return Setup.LaunchResult.STEAM_RUNNING;
+                        }
+                        Setup.LaunchResult result = setup.launchOptions(install);
+                        Steam.open(setup.location().os(), "steam://open/main"); // Steam comes back by itself
+                        append(t.get("steam.restarted"));
+                        return result;
+                    }, again -> {
                                 if (again == Setup.LaunchResult.STEAM_RUNNING) {
                                     append(t.get("steam.notClosed"));
                                     manual(install);

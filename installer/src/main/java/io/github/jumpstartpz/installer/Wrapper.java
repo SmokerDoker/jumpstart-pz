@@ -42,42 +42,23 @@ final class Wrapper {
     private Wrapper() {
     }
 
-    /** True if this installer can act as wrapper: an installed app, or a JumpstartSetup.jar (not a build folder). */
+    /** True if this installer can act as wrapper: it runs from a jar (app or JumpstartSetup.jar), not a build folder. */
     static boolean available() {
-        String app = System.getProperty("jpackage.app-path");
-        if (app != null && !app.isBlank()) {
-            return true;
-        }
-        try {
-            Path jar = Path.of(Wrapper.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-            return Files.isRegularFile(jar) && jar.toString().endsWith(".jar");
-        } catch (Exception e) {
-            return false;
-        }
+        return Bootstrap.ownJar().isPresent() || Files.isRegularFile(Bootstrap.bootJar());
     }
 
-    /** The launch option prefix that starts this installer as wrapper, if it is installed somewhere stable. */
-    static Optional<String> prefix(Platform.Os os) {
-        String app = System.getProperty("jpackage.app-path");
-        if (app != null && !app.isBlank()) {
-            return Optional.of(quote(app) + " --wrap");
-        }
-        // JumpstartSetup.jar: keep a copy where it will not be deleted with the downloads
-        try {
-            Path jar = Path.of(Wrapper.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-            if (!Files.isRegularFile(jar) || !jar.toString().endsWith(".jar")) {
-                return Optional.empty();
-            }
-            Path stable = Path.of(System.getProperty("user.home"), ".jumpstart", "JumpstartSetup.jar");
-            if (!jar.toAbsolutePath().normalize().equals(stable.toAbsolutePath().normalize())) {
-                Files.createDirectories(stable.getParent());
-                Files.copy(jar, stable, StandardCopyOption.REPLACE_EXISTING);
-            }
-            Path java = Path.of(System.getProperty("java.home"), "bin", os == Platform.Os.WINDOWS ? "javaw.exe" : "java");
-            return Optional.of(quote(java.toString()) + " -jar " + quote(stable.toString()) + " --wrap");
-        } catch (Exception e) {
+    /**
+     * The launch option prefix: the game's own Java runs ~/.jumpstart/JumpstartSetup.jar (copied there
+     * now). Nothing in it belongs to the installed app, so removing the app keeps the game starting.
+     * Without the game's Java (not found), the Java this runs on.
+     */
+    static Optional<String> prefix(GameLocation loc) {
+        if (!Bootstrap.placeBootJar()) {
             return Optional.empty();
         }
+        Path java = loc.gameJava().orElseGet(() -> Path.of(System.getProperty("java.home"), "bin",
+                loc.os() == Platform.Os.WINDOWS ? "javaw.exe" : "java"));
+        return Optional.of(quote(java.toString()) + " -jar " + quote(Bootstrap.bootJar().toString()) + " --wrap");
     }
 
     private static String quote(String s) {
@@ -126,13 +107,14 @@ final class Wrapper {
             return;
         }
         Optional<String> installed = setup.installedVersion();
-        Optional<Updater.Release> release = Updater.forJumpstart().latest();
+        Updater updater = Updater.forJumpstart();
+        Optional<Updater.Release> release = updater.latest();
         if (release.isPresent() && Versions.isUpdate(release.get().version(), release.get().builtDay(), installed)) {
             Updater.Release r = release.get();
             log.accept("update " + installed.orElse("?") + " -> " + r.version());
             Runnable close = progress(t.get("update.running", r.version()));
             try {
-                setup.installFiles(Updater.forJumpstart().payload(r), false);
+                setup.installFiles(updater.payload(r), false);
             } finally {
                 close.run();
             }
@@ -140,6 +122,8 @@ final class Wrapper {
         } else {
             log.accept("up to date (" + installed.orElse("?") + (release.isPresent() ? ", newest " + release.get().version() : ", no signed release yet") + ")");
         }
+        // the installer itself: kept for the next start (this one may be locked while the game runs)
+        release.ifPresent(r -> Bootstrap.fetch(updater, r, log));
         if (setup.repair()) {
             log.accept("hotswap=true put back into ProjectZomboid64.json (a game update had removed it)");
         }

@@ -151,6 +151,27 @@ class UpdaterTest {
     }
 
     @Test
+    void theNewInstallerIsKeptAndCheckedBeforeUse() throws Exception {
+        publish(payloadZip());
+        System.setProperty("jumpstart.home", tmp.resolve("home").toString());
+        try {
+            Updater.Release r = updater().latest().orElseThrow();
+            assertEquals(Optional.empty(), Bootstrap.newer());
+            Bootstrap.fetch(updater(), r, line -> { });
+            Bootstrap.Newer n = Bootstrap.newer().orElseThrow();
+            assertEquals("0.2.0", n.version());
+            assertTrue(Files.isRegularFile(n.jar()));
+            // a changed file is never used
+            Files.write(n.jar(), new byte[] {2});
+            assertEquals(Optional.empty(), Bootstrap.newer());
+            // in a build folder (no version) nothing takes over
+            assertEquals(false, Bootstrap.delegate(new String[0]));
+        } finally {
+            System.clearProperty("jumpstart.home");
+        }
+    }
+
+    @Test
     void theReleaseKeyIsUsable() {
         // the pinned public key parses as Ed25519
         Updater.forJumpstart();

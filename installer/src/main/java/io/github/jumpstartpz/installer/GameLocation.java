@@ -49,6 +49,28 @@ public record GameLocation(Platform.Os os, Path javaDir, Path zomboidDir, List<P
         return zomboidDir.resolve("jumpstart-backup");
     }
 
+    /**
+     * The Java that comes with the game (Java 25: window, HTTP and Ed25519 included). Steam's launch
+     * options start Jumpstart's updater with it, so they never depend on the installed app.
+     * Windows: jre64\bin\javaw.exe (no console window); Linux: jre64/bin/java; macOS: somewhere in
+     * the game's app bundle.
+     */
+    public Optional<Path> gameJava() {
+        Path direct = javaDir.resolve(os == Platform.Os.WINDOWS ? "jre64/bin/javaw.exe" : "jre64/bin/java");
+        if (Files.isRegularFile(direct)) {
+            return Optional.of(direct);
+        }
+        if (os != Platform.Os.MACOS || javaDir.getParent() == null) {
+            return Optional.empty();
+        }
+        try (var files = Files.walk(javaDir.getParent(), 8)) { // Project Zomboid.app/Contents
+            return files.filter(p -> p.endsWith(Path.of("bin", "java")) && Files.isRegularFile(p) && Files.isExecutable(p))
+                    .sorted().findFirst();
+        } catch (IOException | RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
     /** True if ZombieBuddy is subscribed in the Steam Workshop. */
     public boolean zombieBuddyFromWorkshop() {
         return workshopDirs.stream().anyMatch(d -> Files.isDirectory(d.resolve(ZOMBIEBUDDY_WORKSHOP_ID)));

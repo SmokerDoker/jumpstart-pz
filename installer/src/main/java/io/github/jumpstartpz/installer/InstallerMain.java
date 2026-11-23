@@ -29,6 +29,10 @@ public final class InstallerMain {
     }
 
     public static void main(String[] args) {
+        // a newer installer from a signed release takes over (also for the installed app)
+        if (Bootstrap.delegate(args)) {
+            return;
+        }
         Texts t = Texts.forSystem();
         if (args.length > 0 && args[0].equals("--wrap")) {
             System.exit(Wrapper.run(Arrays.asList(args).subList(1, args.length), t));
@@ -62,6 +66,11 @@ public final class InstallerMain {
                 case "--force" -> force = true;
                 case "--help", "-h" -> {
                     usage();
+                    return;
+                }
+                case "--version" -> {
+                    System.out.println("JumpstartSetup " + Bootstrap.ownVersion().orElse("dev")
+                            + Bootstrap.ownJar().map(j -> " (" + j + ")").orElse(""));
                     return;
                 }
                 default -> {
@@ -125,6 +134,7 @@ public final class InstallerMain {
         try {
             Updater updater = Updater.forJumpstart();
             Optional<Updater.Release> r = updater.latest();
+            r.ifPresent(release -> Bootstrap.fetch(updater, release, log));
             if (r.isPresent() && Versions.isUpdate(r.get().version(), r.get().builtDay(), bundled.map(Payload::version))) {
                 log.accept(t.get("update.newer", r.get().version()));
                 return updater.payload(r.get());
@@ -149,7 +159,7 @@ public final class InstallerMain {
                 System.err.println(t.get("error.noGame") + " (--game-dir)");
                 return 1;
             }
-            Optional<String> wrapper = autoUpdate ? Wrapper.prefix(loc.get().os()) : Optional.empty();
+            Optional<String> wrapper = autoUpdate ? Wrapper.prefix(loc.get()) : Optional.empty();
             Setup setup = new Setup(loc.get(), t, System.out::println, wrapper);
             System.out.println(t.get("game") + ": " + loc.get().javaDir());
             switch (action) {
@@ -166,6 +176,7 @@ public final class InstallerMain {
                     Updater updater = Updater.forJumpstart();
                     Optional<Updater.Release> r = updater.latest();
                     Optional<String> installed = setup.installedVersion();
+                    r.ifPresent(release -> Bootstrap.fetch(updater, release, System.out::println));
                     if (r.isPresent() && Versions.isUpdate(r.get().version(), r.get().builtDay(), installed)) {
                         System.out.println(t.get("update.running", r.get().version()));
                         setup.installFiles(updater.payload(r.get()), false);
@@ -192,6 +203,9 @@ public final class InstallerMain {
                 default -> {
                     boolean launch = launchOptions(setup, t, false, closeSteam);
                     setup.uninstallFiles();
+                    if (launch) {
+                        Bootstrap.remove(); // nothing starts it any more
+                    }
                     System.out.println(t.get("done.uninstall"));
                     return launch ? 0 : 4;
                 }
@@ -213,6 +227,7 @@ public final class InstallerMain {
             System.out.println(t.get("steam.closing"));
             if (Steam.close(setup.location().os(), Duration.ofSeconds(60))) {
                 r = setup.launchOptions(install);
+                Steam.open(setup.location().os(), "steam://open/main"); // and back
             } else {
                 System.out.println(t.get("steam.notClosed"));
             }
