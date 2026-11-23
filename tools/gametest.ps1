@@ -206,9 +206,12 @@ $r = Screen
 Check "sharing is off by default" $r ($r -like "LIST tab=SHARING sharing=false*")
 Check "nothing sent while off" "" (-not (Test-Path "$mock\usage-1.txt"))
 Key enter
-Start-Sleep 4
+Start-Sleep 1
 $r = Screen
 Check "Enter turns sharing on" $r ($r -like "*sharing=true*")
+# the report goes out on Jumpstart's background thread, after whatever it is busy with
+$deadline = (Get-Date).AddSeconds(30)
+while (-not (Test-Path "$mock\usage-1.txt") -and (Get-Date) -lt $deadline) { Start-Sleep 1 }
 $sent = Get-Content "$mock\usage-1.txt" -Raw -ErrorAction SilentlyContinue
 Check "a report was sent" $sent ($sent -like "jumpstart-usage 1*")
 $changedSha = Sha $changed
