@@ -128,6 +128,20 @@ public final class SecureScreen {
     private String sharingPreview = "";
     private boolean sharingStarted;
 
+    // detail pane (installed mods and libraries): description scrolled with Shift+Up/Down
+    private int detailScroll;
+    private String detailKey = "";
+    private boolean shiftHeld;
+    /** Workshop pages from Steam (full description, preview), by item id. */
+    private final Map<Long, Actions.Details> pages = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Set<Long> pageRequested = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private long pageCandidate;
+    private long pageCandidateSince;
+    /** Wrapped description lines, kept while the text and width stay the same. */
+    private String wrappedText = "";
+    private int wrappedWidth = -1;
+    private List<String> wrappedLines = List.of();
+
     /** {@code server}: the server asked for this mod (multiplayer update); the answer goes back to it. */
     private record Pending(ModEntry mod, BiteCheckGate.Check check, boolean update, boolean server) {
     }
@@ -293,6 +307,7 @@ public final class SecureScreen {
         }
         boolean ctrl = held.contains(KEY_LEFT_CONTROL) || held.contains(KEY_RIGHT_CONTROL);
         boolean shift = held.contains(KEY_LEFT_SHIFT) || held.contains(KEY_RIGHT_SHIFT);
+        shiftHeld = shift;
         if (pressed.contains(KEY_J) && ctrl && shift) {
             pressed.remove(KEY_J);
             pressed.add(OPEN);
@@ -382,6 +397,16 @@ public final class SecureScreen {
                 showSharing();
             }
             return;
+        }
+        if (shiftHeld && (tab == Tab.INSTALLED || tab == Tab.JAVA_LIBRARY || tab == Tab.LUA_LIBRARY)) {
+            // Shift with Up/Down (PgUp/PgDn: a page) scrolls the detail pane's description, not the list
+            int step = (pressed.contains(KEY_DOWN) ? 3 : 0) - (pressed.contains(KEY_UP) ? 3 : 0)
+                    + (pressed.contains(KEY_PAGE_DOWN) ? 15 : 0) - (pressed.contains(KEY_PAGE_UP) ? 15 : 0);
+            if (step != 0) {
+                detailScroll = Math.max(0, detailScroll + step);
+                pressed = new java.util.HashSet<>(pressed);
+                pressed.removeAll(Set.of(KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN));
+            }
         }
         switch (tab) {
             case INSTALLED -> onInstalled(pressed, now);
@@ -1199,8 +1224,9 @@ public final class SecureScreen {
         int sw = game.width();
         int sh = game.height();
         game.rect(0, 0, sw, sh, 0f, 0f, 0f, 0.8f);
-        int pw = Math.min(1100, sw - 60);
-        int ph = Math.min(720, sh - 60);
+        // most of the screen, up to 1600 x 1000
+        int pw = Math.min(1600, Math.max(Math.min(900, sw - 40), sw * 92 / 100));
+        int ph = Math.min(1000, Math.max(Math.min(600, sh - 40), sh * 90 / 100));
         int px = (sw - pw) / 2;
         int py = (sh - ph) / 2;
         game.rect(px, py, pw, ph, 0.07f, 0.08f, 0.1f, 0.98f);
@@ -1239,7 +1265,7 @@ public final class SecureScreen {
         }
         switch (tab) {
             case INSTALLED -> drawList(x, y, width, contentBottom);
-            case JAVA_LIBRARY, LUA_LIBRARY -> drawLibrary(libraries.get(tab), x, y, width, contentBottom);
+            case JAVA_LIBRARY, LUA_LIBRARY -> drawLibrary(libraries.get(tab), x, y, width, contentBottom, now);
             case SHARING -> drawSharing(x, y, width, contentBottom);
             case SERVER -> drawServer(x, y, width, contentBottom);
         }
@@ -1263,67 +1289,101 @@ public final class SecureScreen {
         return y + h + 12;
     }
 
+    /** The list's share of the width; the detail pane gets the rest. */
+    private static int listWidth(int width) {
+        return width * 42 / 100;
+    }
+
     private void drawList(int x, int top, int width, int bottom) {
-        int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
-        int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
-        int listBottom = bottom - small * 3 - 10;
         if (mods.isEmpty()) {
             game.text(GameScreen.Font.MEDIUM, x, top, texts.get("noMods"), 0.8f, 0.8f, 0.8f, 1f);
+            return;
         }
-        int visible = Math.max(1, (listBottom - top) / line);
+        int listWidth = listWidth(width);
+        int line = Math.max(game.fontHeight(GameScreen.Font.MEDIUM) + 12, 32);
+        int icon = line - 6;
+        int visible = Math.max(1, (bottom - top) / line);
         int first = Math.max(0, Math.min(selected - visible / 2, mods.size() - visible));
         int kindWidth = game.textWidth(GameScreen.Font.SMALL, "Java  ");
         for (int i = first; i < Math.min(mods.size(), first + visible); i++) {
             Actions.InstalledMod mod = mods.get(i);
             int y = top + (i - first) * line;
             if (i == selected) {
-                game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
+                game.rect(x - 6, y - 3, listWidth + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
+            String image = actions.details(mod.id()).image();
+            if (image == null || !game.image(image, x, y, icon, icon)) {
+                game.rect(x, y, icon, icon, 0.14f, 0.15f, 0.17f, 1f);
+            }
+            int tx = x + icon + 10;
             boolean java = mod.java() != null;
-            game.text(GameScreen.Font.SMALL, x, y + 2, java ? "Java" : "Lua", java ? 0.95f : 0.55f, java ? 0.75f : 0.8f, java ? 0.35f : 1f, 1f);
-            game.text(GameScreen.Font.MEDIUM, x + kindWidth, y, mod.name(), 1f, 1f, 1f, 1f);
+            game.text(GameScreen.Font.SMALL, tx, y + 4, java ? "Java" : "Lua", java ? 0.95f : 0.55f, java ? 0.75f : 0.8f, java ? 0.35f : 1f, 1f);
             String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
             String label = texts.get("state." + state);
-            float[] c = switch (state) {
-                case "self", "on", "lua:on" -> new float[] {0.45f, 0.95f, 0.45f};
-                case "off", "lua:off" -> new float[] {0.95f, 0.7f, 0.3f};
-                case "on, until restart", "lua:on, next load" -> new float[] {0.6f, 0.8f, 0.6f};
-                case "lua:off, next load" -> new float[] {0.85f, 0.75f, 0.5f};
-                default -> new float[] {0.65f, 0.65f, 0.65f};
-            };
-            int w = game.textWidth(GameScreen.Font.MEDIUM, label);
-            game.text(GameScreen.Font.MEDIUM, x + width - w, y, label, c[0], c[1], c[2], 1f);
+            float[] c = stateColor(state);
+            int w = game.textWidth(GameScreen.Font.SMALL, label);
+            game.text(GameScreen.Font.SMALL, x + listWidth - w, y + 4, label, c[0], c[1], c[2], 1f);
+            game.text(GameScreen.Font.MEDIUM, tx + kindWidth, y + 2, fit(GameScreen.Font.MEDIUM, mod.name(), listWidth - icon - 10 - kindWidth - w - 12),
+                    1f, 1f, 1f, 1f);
         }
+        int dx = x + listWidth + 26;
+        game.rect(dx - 14, top - 4, 1, bottom - top + 4, 0.3f, 0.3f, 0.3f, 1f);
+        drawInstalledDetails(selectedMod(), dx, top, x + width - dx, bottom);
+    }
 
-        int y = listBottom + 6;
-        game.rect(x - 6, y - 4, width + 12, 1, 0.4f, 0.4f, 0.4f, 1f);
-        Actions.InstalledMod mod = selectedMod();
+    private static float[] stateColor(String state) {
+        return switch (state) {
+            case "self", "on", "lua:on" -> new float[] {0.45f, 0.95f, 0.45f};
+            case "off", "lua:off" -> new float[] {0.95f, 0.7f, 0.3f};
+            case "on, until restart", "lua:on, next load" -> new float[] {0.6f, 0.8f, 0.6f};
+            case "lua:off, next load" -> new float[] {0.85f, 0.75f, 0.5f};
+            default -> new float[] {0.65f, 0.65f, 0.65f};
+        };
+    }
+
+    /** The selected installed mod: picture, name, state, BiteCheck's verdict, and its description. */
+    private void drawInstalledDetails(Actions.InstalledMod mod, int x, int top, int width, int bottom) {
         if (mod == null) {
             return;
         }
+        detailFor("mod:" + mod.id());
+        Actions.Details d = actions.details(mod.id());
+        int box = Math.min(128, width / 3);
+        boolean picture = d.image() != null && game.image(d.image(), x, top, box, box);
+        int tx = picture ? x + box + 16 : x;
+        int tw = x + width - tx;
+        int y = top;
+        game.text(GameScreen.Font.LARGE, tx, y, fit(GameScreen.Font.LARGE, mod.name(), tw), 1f, 1f, 1f, 1f);
+        y += game.fontHeight(GameScreen.Font.LARGE) + 6;
+        String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
+        float[] sc = stateColor(state);
+        game.text(GameScreen.Font.MEDIUM, tx, y, (mod.java() != null ? "Java   " : "Lua   ") + texts.get("state." + state), sc[0], sc[1], sc[2], 1f);
+        y += game.fontHeight(GameScreen.Font.MEDIUM) + 6;
         if (mod.java() != null) {
             BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
             if (check != null) {
                 String verdict = check.verdict().name();
                 float[] c = verdict.equals("ALLOW") ? new float[] {0.5f, 1f, 0.5f}
                         : verdict.equals("REFUSE") ? new float[] {1f, 0.4f, 0.4f} : new float[] {1f, 0.8f, 0.3f};
-                game.text(GameScreen.Font.SMALL, x, y, texts.get(verdict) + "  (" + check.status() + ": " + check.info() + ")",
-                        c[0], c[1], c[2], 1f);
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(verdict) + "  (" + check.status() + ": " + check.info() + ")", c[0], c[1], c[2]);
             }
-            y += small;
-            game.text(GameScreen.Font.SMALL, x, y, texts.get("mod") + mod.id() + "   " + texts.get("file") + shorten(mod.java().jar().toString(), 110),
-                    0.65f, 0.65f, 0.65f, 1f);
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
+                    + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("file") + shorten(mod.java().jar().toString(), 90), 0.55f, 0.55f, 0.55f);
         } else {
-            game.text(GameScreen.Font.SMALL, x, y, texts.get("luaMod"), 0.55f, 0.8f, 1f, 1f);
-            y += small;
-            game.text(GameScreen.Font.SMALL, x, y, texts.get("mod") + mod.id()
-                    + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f, 1f);
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("luaMod"), 0.55f, 0.8f, 1f);
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
+                    + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
         }
-        y += small;
-        game.text(GameScreen.Font.SMALL, x, y, texts.get("luaNote"), 0.55f, 0.55f, 0.55f, 1f);
+        y = Math.max(y, picture ? top + box : top) + 10;
+        int noteTop = bottom - wrapLines(GameScreen.Font.SMALL, texts.get("luaNote"), width).size() * (game.fontHeight(GameScreen.Font.SMALL) + 2);
+        wrapped(GameScreen.Font.SMALL, x, noteTop, width, texts.get("luaNote"), 0.5f, 0.5f, 0.5f);
+        game.rect(x, y, width, 1, 0.3f, 0.3f, 0.3f, 1f);
+        String description = d.description().isBlank() ? texts.get("details.none") : d.description();
+        drawScrolled(description, x, y + 10, width, noteTop - 10);
     }
 
-    private void drawLibrary(Library lib, int x, int top, int width, int bottom) {
+    private void drawLibrary(Library lib, int x, int top, int width, int bottom, long now) {
         int medium = game.fontHeight(GameScreen.Font.MEDIUM);
         int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
         game.rect(x - 6, top - 4, width + 12, medium + 10, 0.03f, 0.03f, 0.04f, 1f);
@@ -1332,29 +1392,134 @@ public final class SecureScreen {
         game.text(GameScreen.Font.SMALL, x, y, lib.status.isEmpty() ? texts.get("searchHint") : lib.status, 0.7f, 0.7f, 0.7f, 1f);
         y += small + 6;
 
+        int listWidth = listWidth(width);
         int line = medium + small + 10;
-        int listBottom = bottom - small * 2 - 8;
-        int visible = Math.max(1, (listBottom - y) / line);
+        int visible = Math.max(1, (bottom - y) / line);
         int first = Math.max(0, Math.min(lib.selected - visible / 2, lib.items.size() - visible));
         for (int i = first; i < Math.min(lib.items.size(), first + visible); i++) {
             LibraryClient.Item item = lib.items.get(i);
             int ry = y + (i - first) * line;
             if (i == lib.selected) {
-                game.rect(x - 6, ry - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
+                game.rect(x - 6, ry - 3, listWidth + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
-            game.text(GameScreen.Font.MEDIUM, x, ry, item.title(), 1f, 1f, 1f, 1f);
-            String right = workshopLabel(item) + "   " + String.format(Locale.ROOT, texts.get("subscribers"), item.subscriptions());
-            int w = game.textWidth(GameScreen.Font.SMALL, right);
-            game.text(GameScreen.Font.SMALL, x + width - w, ry + 2, right, 0.7f, 0.85f, 0.7f, 1f);
-            game.text(GameScreen.Font.SMALL, x + 12, ry + medium + 2, cut(item.description(), 140), 0.6f, 0.6f, 0.6f, 1f);
+            game.text(GameScreen.Font.MEDIUM, x, ry, fit(GameScreen.Font.MEDIUM, item.title(), listWidth), 1f, 1f, 1f, 1f);
+            String info = String.format(Locale.ROOT, texts.get("subscribers"), item.subscriptions());
+            String ws = workshopLabel(item);
+            game.text(GameScreen.Font.SMALL, x + 12, ry + medium + 2, fit(GameScreen.Font.SMALL, (ws.isEmpty() ? "" : ws + "   ") + info, listWidth - 12),
+                    0.7f, 0.85f, 0.7f, 1f);
         }
-        if (!lib.items.isEmpty()) {
-            LibraryClient.Item item = lib.items.get(lib.selected);
-            int dy = listBottom + 6;
-            game.rect(x - 6, dy - 4, width + 12, 1, 0.4f, 0.4f, 0.4f, 1f);
-            game.text(GameScreen.Font.SMALL, x, dy, "Workshop " + item.id() + "   " + String.join(", ", item.tags()), 0.65f, 0.65f, 0.65f, 1f);
-            game.text(GameScreen.Font.SMALL, x, dy + small, texts.get(item.java() ? "javaNote" : "luaLibraryNote"), 0.55f, 0.55f, 0.55f, 1f);
+        if (lib.items.isEmpty()) {
+            return;
         }
+        int dx = x + listWidth + 26;
+        game.rect(dx - 14, y - 4, 1, bottom - y + 4, 0.3f, 0.3f, 0.3f, 1f);
+        drawWorkshopDetails(lib.items.get(lib.selected), dx, y, x + width - dx, bottom, now);
+    }
+
+    /** A library item: preview, title, Workshop id and tags, and the full description from Steam. */
+    private void drawWorkshopDetails(LibraryClient.Item item, int x, int top, int width, int bottom, long now) {
+        detailFor("ws:" + item.id());
+        // ask Steam for the page once the selection has stayed on the item for a moment
+        if (pageCandidate != item.id()) {
+            pageCandidate = item.id();
+            pageCandidateSince = now;
+        } else if (now - pageCandidateSince > 350 && pageRequested.add(item.id())) {
+            long id = item.id();
+            inBackground(() -> actions.workshopDetails(id), r -> {
+                if (r instanceof Actions.Details page && (!page.description().isBlank() || page.image() != null)) {
+                    pages.put(id, page);
+                } else if (!(r instanceof Actions.Details)) {
+                    pageRequested.remove(id); // failed: try again later
+                }
+            });
+        }
+        Actions.Details page = pages.get(item.id());
+        int y = top;
+        int boxH = Math.min(220, (bottom - top) / 3);
+        if (page != null && page.image() != null && game.image(page.image(), x, y, width, boxH)) {
+            y += boxH + 10;
+        }
+        game.text(GameScreen.Font.LARGE, x, y, fit(GameScreen.Font.LARGE, item.title(), width), 1f, 1f, 1f, 1f);
+        y += game.fontHeight(GameScreen.Font.LARGE) + 6;
+        y = wrapped(GameScreen.Font.SMALL, x, y, width, "Workshop " + item.id() + "   " + String.join(", ", item.tags()), 0.65f, 0.65f, 0.65f);
+        String ws = workshopLabel(item);
+        if (!ws.isEmpty()) {
+            y = wrapped(GameScreen.Font.SMALL, x, y, width, ws, 0.6f, 0.9f, 0.6f);
+        }
+        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get(item.java() ? "javaNote" : "luaLibraryNote"), 0.55f, 0.55f, 0.55f);
+        y += 8;
+        game.rect(x, y, width, 1, 0.3f, 0.3f, 0.3f, 1f);
+        String description = page != null && !page.description().isBlank() ? page.description()
+                : item.description() + (pageRequested.contains(item.id()) && page == null ? "\n\n" + texts.get("details.loading") : "");
+        drawScrolled(description.isBlank() ? texts.get("details.none") : description, x, y + 10, width, bottom);
+    }
+
+    /** A new item in the detail pane starts at the top of its description. */
+    private void detailFor(String key) {
+        if (!key.equals(detailKey)) {
+            detailKey = key;
+            detailScroll = 0;
+        }
+    }
+
+    /** Draws a text wrapped to the width, from line detailScroll on, with a scroll bar when it is longer. */
+    private void drawScrolled(String text, int x, int y, int width, int bottom) {
+        int line = game.fontHeight(GameScreen.Font.SMALL) + 2;
+        if (!text.equals(wrappedText) || width - 14 != wrappedWidth) {
+            wrappedText = text;
+            wrappedWidth = width - 14;
+            wrappedLines = wrapLines(GameScreen.Font.SMALL, text, wrappedWidth);
+        }
+        int visible = Math.max(1, (bottom - y) / line);
+        int max = Math.max(0, wrappedLines.size() - visible);
+        detailScroll = Math.min(detailScroll, max);
+        for (int i = detailScroll; i < Math.min(wrappedLines.size(), detailScroll + visible); i++) {
+            game.text(GameScreen.Font.SMALL, x, y + (i - detailScroll) * line, wrappedLines.get(i), 0.85f, 0.85f, 0.85f, 1f);
+        }
+        if (max > 0) {
+            int track = visible * line;
+            int thumb = Math.max(20, track * visible / wrappedLines.size());
+            int pos = (track - thumb) * detailScroll / max;
+            game.rect(x + width - 6, y, 4, track, 0.18f, 0.18f, 0.2f, 1f);
+            game.rect(x + width - 6, y + pos, 4, thumb, 0.45f, 0.7f, 0.5f, 1f);
+        }
+    }
+
+    /** Paragraphs (lines) wrapped at word boundaries; a word longer than the width is cut. */
+    private List<String> wrapLines(GameScreen.Font font, String text, int width) {
+        List<String> out = new ArrayList<>();
+        for (String paragraph : text.split("\n", -1)) {
+            StringBuilder current = new StringBuilder();
+            for (String word : paragraph.split(" ")) {
+                String candidate = current.length() == 0 ? word : current + " " + word;
+                if (current.length() > 0 && game.textWidth(font, candidate) > width) {
+                    out.add(current.toString());
+                    current = new StringBuilder(fit(font, word, width));
+                } else {
+                    current = new StringBuilder(current.length() == 0 ? fit(font, word, width) : candidate);
+                }
+            }
+            out.add(current.toString());
+        }
+        return out;
+    }
+
+    /** The text, shortened with "..." until it fits the width. */
+    private String fit(GameScreen.Font font, String text, int width) {
+        if (width <= 0 || game.textWidth(font, text) <= width) {
+            return text;
+        }
+        int lo = 0;
+        int hi = text.length();
+        while (lo < hi) {
+            int mid = (lo + hi + 1) / 2;
+            if (game.textWidth(font, text.substring(0, mid) + "...") <= width) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        return text.substring(0, lo) + "...";
     }
 
     private String workshopLabel(LibraryClient.Item item) {

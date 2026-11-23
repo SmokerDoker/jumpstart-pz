@@ -111,6 +111,88 @@ final class GameActions implements Actions {
         }
     }
 
+    private final Map<String, Details> details = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<Long, Details> workshopDetails = new java.util.concurrent.ConcurrentHashMap<>();
+    private final io.github.jumpstartpz.core.market.WorkshopPage workshopPage = new io.github.jumpstartpz.core.market.WorkshopPage();
+
+    @Override
+    public Details details(String modId) {
+        return details.computeIfAbsent(modId, id -> {
+            String dir = downloadedModDirs.get(id);
+            if (dir == null) {
+                return Details.NONE;
+            }
+            try {
+                Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("readModInfo", String.class).invoke(null, dir);
+                if (info == null) {
+                    return Details.NONE;
+                }
+                Object description = info.getClass().getMethod("getDescription").invoke(info);
+                String image = imageOf(dir, (String) info.getClass().getMethod("getIcon").invoke(info));
+                if (image == null && (Integer) info.getClass().getMethod("getPosterCount").invoke(info) > 0) {
+                    image = imageOf(dir, (String) info.getClass().getMethod("getPoster", int.class).invoke(info, 0));
+                }
+                return new Details(richTextToPlain(description == null ? "" : description.toString()), image);
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return Details.NONE;
+            }
+        });
+    }
+
+    /** An icon or poster path from mod.info as an absolute path to an existing file, or null. */
+    private static String imageOf(String dir, String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        java.nio.file.Path p = java.nio.file.Path.of(path);
+        if (!p.isAbsolute()) {
+            p = java.nio.file.Path.of(dir).resolve(path);
+        }
+        return java.nio.file.Files.isRegularFile(p) ? p.toAbsolutePath().toString() : null;
+    }
+
+    /** mod.info descriptions use the game's rich text: <LINE> and <BR> break lines, other tags go. */
+    static String richTextToPlain(String text) {
+        return text.replaceAll("(?i)\\s*<(LINE|BR)>\\s*", "\n").replaceAll("<[^<>]{1,40}>", "").strip();
+    }
+
+    @Override
+    public Details workshopDetails(long workshopId) {
+        Details known = workshopDetails.get(workshopId);
+        if (known != null) {
+            return known;
+        }
+        Details result = Details.NONE;
+        try {
+            var page = workshopPage.fetch(workshopId);
+            if (page.isPresent()) {
+                String image = null;
+                try {
+                    image = workshopPage.preview(page.get(), cacheDir().resolve("jumpstart-cache").resolve("workshop"))
+                            .map(p -> p.toAbsolutePath().toString()).orElse(null);
+                } catch (IOException | RuntimeException e) {
+                    System.out.println("[Jumpstart] preview of " + workshopId + ": " + e.getMessage());
+                }
+                result = new Details(page.get().description(), image);
+            }
+        } catch (IOException | RuntimeException e) {
+            System.out.println("[Jumpstart] Workshop page of " + workshopId + ": " + e.getMessage());
+            return Details.NONE; // not kept: tried again next time
+        }
+        workshopDetails.put(workshopId, result);
+        return result;
+    }
+
+    /** The game's data folder (Zomboid, or what -cachedir says). */
+    private static java.nio.file.Path cacheDir() {
+        try {
+            Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+            return java.nio.file.Path.of((String) fs.getClass().getMethod("getCacheDir").invoke(fs));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return java.nio.file.Path.of(System.getProperty("user.home"), "Zomboid");
+        }
+    }
+
     /** The Workshop item of a mod folder (.../108600/ITEM/mods/MOD), 0 for a local mod. */
     static long workshopIdOf(String dir) {
         String[] parts = dir.replace('\\', '/').split("/");

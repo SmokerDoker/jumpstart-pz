@@ -552,6 +552,140 @@ class SecureScreenTest {
         assertEquals("failed {mod=Unknown, reason=not ready in time, token=T}", link.sent.get(link.sent.size() - 1));
     }
 
+    // --- layout preview ----------------------------------------------------------------------------
+
+    /**
+     * Draws the screen with Java2D into PNGs (mod/build/layout-preview), to look at the layout without
+     * the game: the installed tab with a mod's icon and description, and a library item's page. Fonts
+     * differ a little from the game's; sizes and positions are the same code.
+     */
+    @Test
+    void layoutPreview() throws Exception {
+        Path out = Path.of("build", "layout-preview");
+        java.nio.file.Files.createDirectories(out);
+        Path knox = Path.of("C:/Program Files (x86)/Steam/steamapps/workshop/content/108600/3816775774/mods/KnoxInventoryBeta/42");
+        String icon = java.nio.file.Files.isRegularFile(knox.resolve("icon.png")) ? knox.resolve("icon.png").toString() : sample(out, "icon", 128, 128);
+        String poster = java.nio.file.Files.isRegularFile(knox.resolve("poster.png")) ? knox.resolve("poster.png").toString() : sample(out, "poster", 512, 288);
+        String text = "Knox Inventory 1.0 BETA: the whole Project Zomboid UI in the style of Escape From Tarkov - a grid inventory "
+                + "around your live 3D character, rigs and bags in bags, its own right-click menu, a car dashboard and a main menu "
+                + "that is a camp by the fire or a bar in a blizzard.\n\nFeatures:\n\u2022 Grid inventory\n\u2022 Rigs and bags in bags\n"
+                + "\u2022 Its own right-click menu\n\u2022 Car dashboard\n\nRequires ZombieBuddy.";
+        actions.withSelf = true;
+        actions.luaMods.add("KnoxInventoryBeta");
+        actions.details.put("KnoxInventoryBeta", new Actions.Details(text, icon));
+        actions.details.put("Verified", new Actions.Details("A verified mod: reviewed by BiteCheck.", icon));
+        actions.page = new Actions.Details((text + "\n\n").repeat(4).strip(), poster);
+        for (int[] size : new int[][] {{1920, 1080}, {1366, 768}}) {
+            PreviewGame pg = new PreviewGame(size[0], size[1]);
+            SecureScreen s = new SecureScreen(pg, actions, false, Runnable::run, link);
+            SecureScreen.install(s);
+            long[] t = {now};
+            Runnable frame = () -> { pg.clear(); s.frame(t[0]); t[0] += 16; };
+            java.util.function.IntConsumer tap = key -> { pg.down.add(key); frame.run(); pg.down.remove(key); frame.run(); };
+            pg.down.add(SecureScreen.KEY_LEFT_CONTROL);
+            pg.down.add(SecureScreen.KEY_LEFT_SHIFT);
+            tap.accept(SecureScreen.KEY_J);
+            pg.down.clear();
+            frame.run();
+            for (int i = 0; i < 10 && !s.describe().contains("selected=KnoxInventoryBeta"); i++) {
+                tap.accept(SecureScreen.KEY_DOWN);
+            }
+            frame.run();
+            pg.save(out.resolve("installed-" + size[0] + "x" + size[1] + ".png"));
+            tap.accept(SecureScreen.KEY_TAB);
+            tap.accept(SecureScreen.KEY_ENTER);
+            t[0] += 1000; // the page is asked for once the selection stays
+            for (int i = 0; i < 5; i++) {
+                frame.run();
+            }
+            pg.save(out.resolve("library-" + size[0] + "x" + size[1] + ".png"));
+        }
+        assertTrue(java.nio.file.Files.isRegularFile(out.resolve("library-1366x768.png")));
+    }
+
+    private static String sample(Path dir, String name, int w, int h) throws java.io.IOException {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setPaint(new java.awt.GradientPaint(0, 0, new java.awt.Color(0x2E5A3A), w, h, new java.awt.Color(0x8A6A2A)));
+        g.fillRect(0, 0, w, h);
+        g.dispose();
+        Path file = dir.resolve(name + ".png");
+        javax.imageio.ImageIO.write(img, "png", file.toFile());
+        return file.toAbsolutePath().toString();
+    }
+
+    /** A GameScreen drawing with Java2D into an image. */
+    private static final class PreviewGame implements GameScreen {
+        final Set<Integer> down = new HashSet<>();
+        private final java.awt.image.BufferedImage img;
+        private final java.awt.Graphics2D g;
+        private final Map<String, java.awt.image.BufferedImage> images = new HashMap<>();
+
+        PreviewGame(int w, int h) {
+            img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_RGB);
+            g = img.createGraphics();
+            g.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING, java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        }
+
+        void clear() {
+            g.setColor(new java.awt.Color(0x3A4A3A));
+            g.fillRect(0, 0, img.getWidth(), img.getHeight());
+        }
+
+        void save(Path file) throws java.io.IOException {
+            javax.imageio.ImageIO.write(img, "png", file.toFile());
+        }
+
+        private static java.awt.Font font(Font f) {
+            return new java.awt.Font(java.awt.Font.SANS_SERIF, f == Font.LARGE ? java.awt.Font.BOLD : java.awt.Font.PLAIN,
+                    switch (f) { case SMALL -> 14; case MEDIUM -> 18; case LARGE -> 24; });
+        }
+
+        @Override public int width() { return img.getWidth(); }
+        @Override public int height() { return img.getHeight(); }
+        @Override public int fontHeight(Font font) { return g.getFontMetrics(font(font)).getHeight(); }
+        @Override public int textWidth(Font font, String text) { return g.getFontMetrics(font(font)).stringWidth(text); }
+
+        @Override
+        public void text(Font font, int x, int y, String text, float r, float gr, float b, float a) {
+            g.setFont(font(font));
+            g.setColor(new java.awt.Color(r, gr, b, a));
+            g.drawString(text, x, y + g.getFontMetrics().getAscent());
+        }
+
+        @Override
+        public void rect(int x, int y, int w, int h, float r, float gr, float b, float a) {
+            g.setColor(new java.awt.Color(r, gr, b, a));
+            g.fillRect(x, y, w, h);
+        }
+
+        @Override
+        public boolean image(String file, int x, int y, int w, int h) {
+            java.awt.image.BufferedImage i = images.computeIfAbsent(file, f -> {
+                try {
+                    return javax.imageio.ImageIO.read(new java.io.File(f));
+                } catch (java.io.IOException e) {
+                    return null;
+                }
+            });
+            if (i == null) {
+                return false;
+            }
+            double f = Math.min((double) w / i.getWidth(), (double) h / i.getHeight());
+            int dw = (int) Math.round(i.getWidth() * f);
+            int dh = (int) Math.round(i.getHeight() * f);
+            g.drawImage(i, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh, null);
+            return true;
+        }
+
+        @Override public boolean physicalKeyDown(int glfwKey) { return down.contains(glfwKey); }
+        @Override public String keyName(int glfwKey) { return String.valueOf((char) Character.toLowerCase(glfwKey)); }
+        @Override public boolean inGame() { return false; }
+        @Override public void pause(boolean paused) { }
+        @Override public String language() { return "DE"; }
+    }
+
     // --- helpers ---------------------------------------------------------------------------------
 
     private void frame() {
@@ -596,6 +730,7 @@ class SecureScreenTest {
         @Override public int textWidth(Font font, String text) { return text.length() * 8; }
         @Override public void text(Font font, int x, int y, String text, float r, float g, float b, float a) { drawn.add(text); }
         @Override public void rect(int x, int y, int w, int h, float r, float g, float b, float a) { }
+        @Override public boolean image(String file, int x, int y, int w, int h) { drawn.add("image:" + file); return true; }
         @Override public boolean physicalKeyDown(int glfwKey) { return down.contains(glfwKey); }
         @Override public String keyName(int glfwKey) { return String.valueOf((char) Character.toLowerCase(glfwKey)); }
         @Override public boolean inGame() { return false; }
@@ -615,6 +750,18 @@ class SecureScreenTest {
         final List<String> deactivated = new ArrayList<>();
         final List<String> unloaded = new ArrayList<>();
         final List<String> uninstalled = new ArrayList<>();
+        final Map<String, Details> details = new HashMap<>();
+        Details page = Details.NONE;
+
+        @Override
+        public Details details(String modId) {
+            return details.getOrDefault(modId, Details.NONE);
+        }
+
+        @Override
+        public Details workshopDetails(long workshopId) {
+            return page;
+        }
 
         @Override
         public List<ModEntry> javaMods() {

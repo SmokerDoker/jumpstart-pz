@@ -87,6 +87,27 @@ interface Actions {
     record FolderMod(String id, String name, ModEntry java) {
     }
 
+    /**
+     * What the detail pane shows about a mod: its description and a picture (an absolute path to a
+     * PNG, or null).
+     */
+    record Details(String description, String image) {
+        static final Details NONE = new Details("", null);
+    }
+
+    /** An installed mod's description and icon (or poster) from its mod.info; quick, no network. */
+    default Details details(String modId) {
+        return Details.NONE;
+    }
+
+    /**
+     * A Workshop item's full description and preview from Steam; network, call off the main thread.
+     * Empty description when Steam does not know the item.
+     */
+    default Details workshopDetails(long workshopId) {
+        return Details.NONE;
+    }
+
     // --- voluntary sharing (BiteCheck's UsageSharing) ---
 
     boolean sharingEnabled();

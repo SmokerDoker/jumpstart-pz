@@ -93,6 +93,45 @@ final class ReflectiveGameScreen implements GameScreen {
         call(renderi, spriteRenderer, null, x, y, w, h, r, g, b, a, null);
     }
 
+    /** Loaded pictures by file; a file that failed to load is kept as null, so it is tried once. */
+    private final Map<String, Object> textures = new java.util.HashMap<>();
+    private Method getSharedTexture;
+    private Method textureWidth;
+    private Method textureHeight;
+
+    @Override
+    public boolean image(String file, int x, int y, int w, int h) {
+        try {
+            if (getSharedTexture == null) {
+                Class<?> texture = Class.forName("zombie.core.textures.Texture");
+                getSharedTexture = texture.getMethod("getSharedTexture", String.class);
+                textureWidth = texture.getMethod("getWidth");
+                textureHeight = texture.getMethod("getHeight");
+            }
+            if (!textures.containsKey(file)) {
+                // the same call the game's mod list uses for mod icons and posters (absolute paths)
+                textures.put(file, getSharedTexture.invoke(null, file));
+            }
+            Object tex = textures.get(file);
+            if (tex == null) {
+                return false;
+            }
+            int tw = (Integer) textureWidth.invoke(tex);
+            int th = (Integer) textureHeight.invoke(tex);
+            if (tw <= 0 || th <= 0) {
+                return false; // still loading
+            }
+            double f = Math.min((double) w / tw, (double) h / th);
+            int dw = (int) Math.round(tw * f);
+            int dh = (int) Math.round(th * f);
+            call(renderi, spriteRenderer, tex, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh, 1f, 1f, 1f, 1f, null);
+            return true;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            textures.put(file, null);
+            return false;
+        }
+    }
+
     @Override
     public boolean physicalKeyDown(int glfwKey) {
         long window = (Long) call(getWindow, null);

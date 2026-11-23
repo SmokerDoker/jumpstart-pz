@@ -20,6 +20,12 @@ interface GameScreen {
     void rect(int x, int y, int w, int h, float r, float g, float b, float a);
 
     /**
+     * Draws a picture file (absolute path) fitted into the box, keeping its proportions. False if it
+     * cannot be loaded (then nothing is drawn).
+     */
+    boolean image(String file, int x, int y, int w, int h);
+
+    /**
      * Whether a key is physically held down, read from GLFW (key codes as in GLFW). Not from the
      * game's keyboard queue, which Lua can fill with fake key events.
      */
