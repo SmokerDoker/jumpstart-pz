@@ -233,6 +233,10 @@ Check "approval for the real jar" "" ($approvalsText -match (Sha $verified))
 Check "no approval for the changed copy" "" (-not ($approvalsText -match (Sha $changed)))
 Check "real index downloaded" "" (Test-Path "$t\.bitecheck\cache\index.toml")
 Check "game still running" "" ([bool](GameProcess))
+# the mouse: Lua cannot move the cursor while the screen is open (Mouse.setXY patched, and accepted by the JVM)
+$hooked = Select-String -Path "$t\game-out.txt" -Pattern 'hooks in zombie.input.Mouse' -Quiet
+$refused = Select-String -Path "$t\game-out.txt" -Pattern 'VerifyError|could not patch zombie.input.Mouse' -Quiet
+Check "Mouse.setXY is blocked while the screen is open" "" ($hooked -and -not $refused)
 
 Log "Jumpstart log lines:"
 Select-String -Path "$t\game-out.txt" -Pattern 'Jumpstart|hotswap:' | ForEach-Object { Log ("  " + $_.Line) }

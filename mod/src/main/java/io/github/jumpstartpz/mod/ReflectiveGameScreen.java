@@ -93,6 +93,78 @@ final class ReflectiveGameScreen implements GameScreen {
         call(renderi, spriteRenderer, null, x, y, w, h, r, g, b, a, null);
     }
 
+    private Method glfwGetCursorPos;
+    private Method glfwGetWindowSize;
+    private Method glfwGetMouseButton;
+    private Method mouseWheel;
+    private Method renderCursor;
+
+    private void mouseMethods() throws ReflectiveOperationException {
+        if (glfwGetCursorPos == null) {
+            Class<?> glfw = Class.forName("org.lwjgl.glfw.GLFW");
+            glfwGetCursorPos = glfw.getMethod("glfwGetCursorPos", long.class, double[].class, double[].class);
+            glfwGetWindowSize = glfw.getMethod("glfwGetWindowSize", long.class, int[].class, int[].class);
+            glfwGetMouseButton = glfw.getMethod("glfwGetMouseButton", long.class, int.class);
+            Class<?> mouse = Class.forName("zombie.input.Mouse");
+            mouseWheel = mouse.getMethod("getWheelState");
+            renderCursor = mouse.getMethod("renderCursorTexture");
+        }
+    }
+
+    @Override
+    public int[] mousePosition() {
+        try {
+            mouseMethods();
+            long window = (Long) call(getWindow, null);
+            if (window == 0) {
+                return null;
+            }
+            double[] cx = new double[1];
+            double[] cy = new double[1];
+            glfwGetCursorPos.invoke(null, window, cx, cy);
+            int[] ww = new int[1];
+            int[] wh = new int[1];
+            glfwGetWindowSize.invoke(null, window, ww, wh);
+            // GLFW gives window coordinates; the game draws in pixels (they differ on high-DPI screens)
+            double sx = ww[0] > 0 ? (double) width() / ww[0] : 1;
+            double sy = wh[0] > 0 ? (double) height() / wh[0] : 1;
+            return new int[] {(int) Math.round(cx[0] * sx), (int) Math.round(cy[0] * sy)};
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    @Override
+    public boolean physicalMouseDown(int button) {
+        try {
+            mouseMethods();
+            long window = (Long) call(getWindow, null);
+            return window != 0 && (Integer) glfwGetMouseButton.invoke(null, window, button) == 1; // GLFW_PRESS
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public int wheel() {
+        try {
+            mouseMethods();
+            return Integer.signum((Integer) mouseWheel.invoke(null));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    @Override
+    public void drawCursor() {
+        try {
+            mouseMethods();
+            renderCursor.invoke(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            // no game cursor: the system's is there
+        }
+    }
+
     /** Loaded pictures by file; a file that failed to load is kept as null, so it is tried once. */
     private final Map<String, Object> textures = new java.util.HashMap<>();
     private Method getSharedTexture;

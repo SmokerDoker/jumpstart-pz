@@ -142,6 +142,30 @@ public final class SecureScreen {
     private int wrappedWidth = -1;
     private List<String> wrappedLines = List.of();
 
+    // --- the mouse: physical (GLFW), a click on a button is the key it shows ---------------------------
+    /** A clickable area: the key it stands for (every rule and delay of that key applies), or an action. */
+    private record Hit(int x, int y, int w, int h, int key, Runnable action) {
+        boolean contains(int[] p) {
+            return p != null && p[0] >= x && p[0] < x + w && p[1] >= y && p[1] < y + h;
+        }
+
+        /** The same button in another frame: same place, size and key (actions are new objects every frame). */
+        boolean same(Hit o) {
+            return o != null && x == o.x && y == o.y && w == o.w && h == o.h && key == o.key;
+        }
+    }
+
+    private List<Hit> hits = new ArrayList<>();
+    private List<Hit> lastHits = List.of();
+    private int[] mouse;
+    private boolean mouseDown;
+    private Hit pressedHit;
+    /** {x, y, w, h} of the list and the detail pane, for the wheel. */
+    private int[] listArea;
+    private int[] detailArea;
+    private int[] lastListArea;
+    private int[] lastDetailArea;
+
     /** {@code server}: the server asked for this mod (multiplayer update); the answer goes back to it. */
     private record Pending(ModEntry mod, BiteCheckGate.Check check, boolean update, boolean server) {
     }
@@ -242,6 +266,9 @@ public final class SecureScreen {
         runMainThreadWork();
         session.tick();
         Set<Integer> pressed = poll();
+        if (mode != Mode.CLOSED) {
+            pollMouse(pressed);
+        }
         if (download != null) {
             followDownload(now);
         }
@@ -265,7 +292,111 @@ public final class SecureScreen {
             case UNINSTALL_ONCE, UNINSTALL_TWICE -> onUninstallQuestion(pressed, now);
         }
         if (mode != Mode.CLOSED) {
+            hits = new ArrayList<>();
+            listArea = null;
+            detailArea = null;
             draw(now);
+            game.drawCursor(); // the game's cursor (if it draws one) on top of the screen
+            lastHits = hits;
+            lastListArea = listArea;
+            lastDetailArea = detailArea;
+        } else {
+            lastHits = List.of();
+            mouseDown = false;
+            pressedHit = null;
+        }
+    }
+
+    /**
+     * The physical mouse: a click counts when the button goes down and up on the same button, which
+     * then acts like its key; the wheel scrolls the list or the description under the cursor.
+     */
+    private void pollMouse(Set<Integer> pressed) {
+        mouse = game.mousePosition();
+        boolean down = game.physicalMouseDown(0);
+        if (down && !mouseDown) {
+            pressedHit = hitAt(mouse);
+        } else if (!down && mouseDown) {
+            Hit h = hitAt(mouse);
+            if (h != null && h.same(pressedHit)) {
+                if (h.action() != null) {
+                    h.action().run();
+                } else {
+                    pressed.add(h.key());
+                }
+            }
+            pressedHit = null;
+        }
+        mouseDown = down;
+        int wheel = game.wheel();
+        if (wheel != 0 && mode == Mode.LIST) {
+            scroll(wheel);
+        }
+    }
+
+    private Hit hitAt(int[] p) {
+        for (int i = lastHits.size() - 1; i >= 0; i--) {
+            if (lastHits.get(i).contains(p)) {
+                return lastHits.get(i);
+            }
+        }
+        return null;
+    }
+
+    private static boolean inside(int[] area, int[] p) {
+        return area != null && p != null && p[0] >= area[0] && p[0] < area[0] + area[2] && p[1] >= area[1] && p[1] < area[1] + area[3];
+    }
+
+    /** The wheel: the description under the cursor, else the list's selection. */
+    private void scroll(int wheel) {
+        if (inside(lastDetailArea, mouse)) {
+            detailScroll = Math.max(0, detailScroll - wheel * 3);
+        } else if (inside(lastListArea, mouse)) {
+            switch (tab) {
+                case INSTALLED -> selected = Math.max(0, Math.min(mods.size() - 1, selected - wheel));
+                case JAVA_LIBRARY, LUA_LIBRARY -> {
+                    Library lib = libraries.get(tab);
+                    lib.selected = Math.max(0, Math.min(lib.items.size() - 1, lib.selected - wheel));
+                }
+                case SERVER -> serverSelected = Math.max(0, Math.min(session.serverMods.size() - 1, serverSelected - wheel));
+                default -> { }
+            }
+        }
+    }
+
+    /** A button that acts like {@code key} (or runs {@code action}); returns its width. */
+    private int button(int x, int y, String label, int key, Runnable action, boolean enabled) {
+        int h = buttonHeight();
+        int w = game.textWidth(GameScreen.Font.MEDIUM, label) + 24;
+        boolean over = enabled && new Hit(x, y, w, h, 0, null).contains(mouse);
+        game.rect(x, y, w, h, enabled ? (over ? 0.32f : 0.2f) : 0.12f, enabled ? (over ? 0.58f : 0.4f) : 0.12f,
+                enabled ? (over ? 0.38f : 0.27f) : 0.13f, 1f);
+        float c = enabled ? 1f : 0.5f;
+        game.text(GameScreen.Font.MEDIUM, x + 12, y + 5, label, c, c, c, 1f);
+        hits.add(new Hit(x, y, w, h, key, action)); // also when greyed out: the key's own rule decides (J too early)
+        return w;
+    }
+
+    private int buttonHeight() {
+        return game.fontHeight(GameScreen.Font.MEDIUM) + 10;
+    }
+
+    /** Yes and No under a question; Yes looks off until its delay is over (the J key's rule applies either way). */
+    private void answerButtons(int x, int bottom, long waitMs) {
+        int y = bottom - game.fontHeight(GameScreen.Font.MEDIUM) - buttonHeight() - 12;
+        String yes = waitMs > 0 ? String.format(Locale.ROOT, texts.get("btn.yesWait"), (waitMs + 999) / 1000) : texts.get("btn.yes");
+        int w = button(x, y, yes, KEY_J, null, waitMs <= 0);
+        button(x + w + 12, y, texts.get("btn.no"), KEY_N, null, true);
+    }
+
+    private void switchTab(Tab to) {
+        tab = to;
+        if (tab == Tab.SERVER) {
+            session.refresh();
+        }
+        message = "";
+        if (tab == Tab.SHARING) {
+            showSharing();
         }
     }
 
@@ -385,17 +516,11 @@ public final class SecureScreen {
             return;
         }
         if (pressed.contains(KEY_TAB)) {
-            tab = Tab.values()[(tab.ordinal() + 1) % Tab.values().length];
-            if (tab == Tab.SERVER && !session.connected()) {
-                tab = Tab.INSTALLED; // the server tab exists only in multiplayer
+            Tab next = Tab.values()[(tab.ordinal() + 1) % Tab.values().length];
+            if (next == Tab.SERVER && !session.connected()) {
+                next = Tab.INSTALLED; // the server tab exists only in multiplayer
             }
-            if (tab == Tab.SERVER) {
-                session.refresh();
-            }
-            message = "";
-            if (tab == Tab.SHARING) {
-                showSharing();
-            }
+            switchTab(next);
             return;
         }
         if (shiftHeld && (tab == Tab.INSTALLED || tab == Tab.JAVA_LIBRARY || tab == Tab.LUA_LIBRARY)) {
@@ -572,6 +697,7 @@ public final class SecureScreen {
                 : texts.get("uninstall.ready");
         game.text(GameScreen.Font.MEDIUM, x, bottom - game.fontHeight(GameScreen.Font.MEDIUM), keys,
                 wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, 1f);
+        answerButtons(x, bottom, wait);
     }
 
     /** Enter on a mod: load it, or reload its jar when it is loaded already. */
@@ -1159,6 +1285,7 @@ public final class SecureScreen {
         String keys = wait > 0 ? String.format(Locale.ROOT, texts.get("mp.consent.wait"), (wait + 999) / 1000) : texts.get("mp.consent.keys");
         game.text(GameScreen.Font.MEDIUM, x, bottom - game.fontHeight(GameScreen.Font.MEDIUM), keys,
                 wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, wait > 0 ? 0.6f : 1f, 1f);
+        answerButtons(x, bottom, wait);
     }
 
     private void drawServer(int x, int y, int width, int bottom) {
@@ -1188,11 +1315,22 @@ public final class SecureScreen {
             }
         }
         int line = medium + 8;
-        for (int i = 0; i < list.size() && y + line < bottom; i++) {
+        int rowsBottom = bottom - buttonHeight() - 10;
+        int bx = x;
+        if (session.admin) {
+            bx += button(bx, rowsBottom + 6, texts.get("btn.serverUpdate"), KEY_ENTER, null, true) + 10;
+            bx += button(bx, rowsBottom + 6, texts.get("btn.serverToggle"), KEY_A, null, true) + 10;
+            bx += button(bx, rowsBottom + 6, texts.get("btn.serverRemove"), KEY_U, null, true) + 10;
+        }
+        button(bx, rowsBottom + 6, texts.get("btn.refresh"), KEY_R, null, true);
+        listArea = new int[] {x - 6, y - 4, width + 12, rowsBottom - y};
+        for (int i = 0; i < list.size() && y + line < rowsBottom; i++) {
             ClientSession.ServerMod m = list.get(i);
             if (i == serverSelected) {
                 game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
+            int row = i;
+            hits.add(new Hit(x - 6, y - 3, width + 12, line - 2, 0, () -> serverSelected = row));
             game.text(GameScreen.Font.MEDIUM, x, y, m.id(), 1f, 1f, 1f, 1f);
             if (m.lua()) {
                 String right = "Lua";
@@ -1236,6 +1374,8 @@ public final class SecureScreen {
         int width = pw - 48;
         int y = py + 18;
         game.text(GameScreen.Font.LARGE, x, y, texts.get("title"), 1f, 1f, 1f, 1f);
+        int closeWidth = game.textWidth(GameScreen.Font.MEDIUM, texts.get("btn.close")) + 24;
+        button(px + pw - closeWidth - 16, py + 14, texts.get("btn.close"), KEY_ESCAPE, null, true);
         y += game.fontHeight(GameScreen.Font.LARGE) + 4;
         y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("secure"), 0.55f, 0.85f, 0.6f);
         y += 8;
@@ -1284,6 +1424,8 @@ public final class SecureScreen {
             game.rect(cx, y, w, h, active ? 0.25f : 0.12f, active ? 0.45f : 0.13f, active ? 0.3f : 0.15f, 1f);
             float c = active ? 1f : 0.7f;
             game.text(GameScreen.Font.MEDIUM, cx + 12, y + 4, label, c, c, c, 1f);
+            Tab target = t;
+            hits.add(new Hit(cx, y, w, h, 0, () -> switchTab(target)));
             cx += w + 6;
         }
         return y + h + 12;
@@ -1311,6 +1453,8 @@ public final class SecureScreen {
             if (i == selected) {
                 game.rect(x - 6, y - 3, listWidth + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
+            int row = i;
+            hits.add(new Hit(x - 6, y - 3, listWidth + 12, line - 2, 0, () -> selected = row));
             String image = actions.details(mod.id()).image();
             if (image == null || !game.image(image, x, y, icon, icon)) {
                 game.rect(x, y, icon, icon, 0.14f, 0.15f, 0.17f, 1f);
@@ -1328,6 +1472,8 @@ public final class SecureScreen {
         }
         int dx = x + listWidth + 26;
         game.rect(dx - 14, top - 4, 1, bottom - top + 4, 0.3f, 0.3f, 0.3f, 1f);
+        listArea = new int[] {x - 6, top - 4, listWidth + 12, bottom - top + 4};
+        detailArea = new int[] {dx, top, x + width - dx, bottom - top};
         drawInstalledDetails(selectedMod(), dx, top, x + width - dx, bottom);
     }
 
@@ -1376,6 +1522,15 @@ public final class SecureScreen {
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
         }
         y = Math.max(y, picture ? top + box : top) + 10;
+        if (!mod.id().equals(SELF)) {
+            int bx = x;
+            if (mod.java() != null) {
+                bx += button(bx, y, texts.get("btn.load"), KEY_ENTER, null, true) + 10;
+            }
+            bx += button(bx, y, texts.get("btn.toggle"), KEY_A, null, true) + 10;
+            button(bx, y, texts.get("btn.uninstall"), KEY_U, null, true);
+            y += buttonHeight() + 10;
+        }
         int noteTop = bottom - wrapLines(GameScreen.Font.SMALL, texts.get("luaNote"), width).size() * (game.fontHeight(GameScreen.Font.SMALL) + 2);
         wrapped(GameScreen.Font.SMALL, x, noteTop, width, texts.get("luaNote"), 0.5f, 0.5f, 0.5f);
         game.rect(x, y, width, 1, 0.3f, 0.3f, 0.3f, 1f);
@@ -1388,13 +1543,20 @@ public final class SecureScreen {
         int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
         game.rect(x - 6, top - 4, width + 12, medium + 10, 0.03f, 0.03f, 0.04f, 1f);
         game.text(GameScreen.Font.MEDIUM, x, top, texts.get("search") + lib.query + "_", 1f, 1f, 1f, 1f);
+        int searchWidth = game.textWidth(GameScreen.Font.MEDIUM, texts.get("btn.search")) + 24;
+        button(x + width - searchWidth + 6, top - 4, texts.get("btn.search"), 0, () -> search(lib, false), !lib.busy);
         int y = top + medium + 14;
         game.text(GameScreen.Font.SMALL, x, y, lib.status.isEmpty() ? texts.get("searchHint") : lib.status, 0.7f, 0.7f, 0.7f, 1f);
         y += small + 6;
 
         int listWidth = listWidth(width);
         int line = medium + small + 10;
-        int visible = Math.max(1, (bottom - y) / line);
+        int listBottom = lib.next.isEmpty() ? bottom : bottom - buttonHeight() - 8;
+        if (!lib.next.isEmpty()) {
+            button(x, listBottom + 4, texts.get("btn.more"), 0, () -> search(lib, true), !lib.busy);
+        }
+        listArea = new int[] {x - 6, y - 4, listWidth + 12, listBottom - y + 4};
+        int visible = Math.max(1, (listBottom - y) / line);
         int first = Math.max(0, Math.min(lib.selected - visible / 2, lib.items.size() - visible));
         for (int i = first; i < Math.min(lib.items.size(), first + visible); i++) {
             LibraryClient.Item item = lib.items.get(i);
@@ -1402,6 +1564,8 @@ public final class SecureScreen {
             if (i == lib.selected) {
                 game.rect(x - 6, ry - 3, listWidth + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
             }
+            int row = i;
+            hits.add(new Hit(x - 6, ry - 3, listWidth + 12, line - 2, 0, () -> lib.selected = row));
             game.text(GameScreen.Font.MEDIUM, x, ry, fit(GameScreen.Font.MEDIUM, item.title(), listWidth), 1f, 1f, 1f, 1f);
             String info = String.format(Locale.ROOT, texts.get("subscribers"), item.subscriptions());
             String ws = workshopLabel(item);
@@ -1413,6 +1577,7 @@ public final class SecureScreen {
         }
         int dx = x + listWidth + 26;
         game.rect(dx - 14, y - 4, 1, bottom - y + 4, 0.3f, 0.3f, 0.3f, 1f);
+        detailArea = new int[] {dx, y, x + width - dx, bottom - y};
         drawWorkshopDetails(lib.items.get(lib.selected), dx, y, x + width - dx, bottom, now);
     }
 
@@ -1447,7 +1612,9 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, x, y, width, ws, 0.6f, 0.9f, 0.6f);
         }
         y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get(item.java() ? "javaNote" : "luaLibraryNote"), 0.55f, 0.55f, 0.55f);
-        y += 8;
+        y += 6;
+        button(x, y, texts.get("btn.install"), 0, () -> startDownload(item, frameTime), download == null);
+        y += buttonHeight() + 8;
         game.rect(x, y, width, 1, 0.3f, 0.3f, 0.3f, 1f);
         String description = page != null && !page.description().isBlank() ? page.description()
                 : item.description() + (pageRequested.contains(item.id()) && page == null ? "\n\n" + texts.get("details.loading") : "");
@@ -1539,6 +1706,8 @@ public final class SecureScreen {
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("sharing.what"), 0.85f, 0.85f, 0.85f);
         y += 8;
+        button(x, y, texts.get(sharing ? "btn.sharingOff" : "btn.sharingOn"), KEY_ENTER, null, true);
+        y += buttonHeight() + 10;
         game.text(GameScreen.Font.SMALL, x, y, texts.get("sharing.preview"), 0.7f, 0.7f, 0.7f, 1f);
         y += game.fontHeight(GameScreen.Font.SMALL) + 6;
         int line = game.fontHeight(GameScreen.Font.SMALL) + 2;
@@ -1593,6 +1762,7 @@ public final class SecureScreen {
                 : texts.get("confirm.ready");
         game.text(GameScreen.Font.MEDIUM, x, bottom - game.fontHeight(GameScreen.Font.MEDIUM), keys,
                 left > 0 ? 0.6f : 1f, left > 0 ? 0.6f : 1f, left > 0 ? 0.6f : 1f, 1f);
+        answerButtons(x, bottom, left);
     }
 
     /** Draws text wrapped at word boundaries; returns the y below it. */

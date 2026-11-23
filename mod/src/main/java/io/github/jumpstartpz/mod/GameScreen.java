@@ -37,6 +37,21 @@ interface GameScreen {
      */
     String keyName(int glfwKey);
 
+    /**
+     * Where the physical mouse is, in screen pixels ({x, y}), read from GLFW; null if unknown. Lua
+     * cannot move it while the screen is open (Mouse.setXY is blocked then).
+     */
+    int[] mousePosition();
+
+    /** Whether a mouse button (0 left, 1 right) is physically held down, from GLFW. */
+    boolean physicalMouseDown(int button);
+
+    /** The mouse wheel this frame: positive up, negative down, 0 still. */
+    int wheel();
+
+    /** Draws the game's own mouse cursor again, on top of the screen (when the game shows one). */
+    void drawCursor();
+
     boolean inGame();
 
     /** Stops game time while the screen is open (single player), and restores it afterwards. */

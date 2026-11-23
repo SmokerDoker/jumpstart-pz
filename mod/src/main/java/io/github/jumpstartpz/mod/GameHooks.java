@@ -61,6 +61,12 @@ final class GameHooks {
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .readerFlags(ClassReader.EXPAND_FRAMES)
                                 .method(named("update").and(takesArguments(0)), GameHooks::returnWhileBlocked)))
+                // Lua can move the mouse cursor (Mouse.setXY): not while the screen is open, so nothing can
+                // put the cursor on a button the player is about to click
+                .type(named("zombie.input.Mouse")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .readerFlags(ClassReader.EXPAND_FRAMES)
+                                .method(named("setXY").and(takesArguments(2)), GameHooks::returnWhileBlocked)))
                 .type(named("zombie.network.GameClient")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .method(named("receiveClientCommand"), (t, m, mv, c, p, w, r) -> redirect(mv, TRIGGER3, "clientEvent")))));
@@ -150,12 +156,31 @@ final class GameHooks {
         };
     }
 
-    /** At the start of a static no-argument void method: if (SecureScreen.blocksInput()) return; */
+    /** A parameter's type as a stack map frame entry. */
+    static Object frameType(TypeDescription t) {
+        if (t.represents(long.class)) {
+            return Opcodes.LONG;
+        }
+        if (t.represents(double.class)) {
+            return Opcodes.DOUBLE;
+        }
+        if (t.represents(float.class)) {
+            return Opcodes.FLOAT;
+        }
+        if (t.isPrimitive()) {
+            return Opcodes.INTEGER; // int, boolean, byte, char, short
+        }
+        return t.getInternalName();
+    }
+
+    /** At the start of a static void method: if (SecureScreen.blocksInput()) return; */
     private static MethodVisitor returnWhileBlocked(TypeDescription type, MethodDescription method, MethodVisitor mv,
                                                    Implementation.Context context, TypePool pool, int writerFlags, int readerFlags) {
         if (!method.isStatic() || !method.getReturnType().represents(void.class)) {
             return mv;
         }
+        // the frame at the jump target lists the method's parameters, which the code after it reads
+        Object[] locals = method.getParameters().asTypeList().asErasures().stream().map(GameHooks::frameType).toArray();
         return new MethodVisitor(Opcodes.ASM9, mv) {
             @Override
             public void visitCode() {
@@ -165,7 +190,7 @@ final class GameHooks {
                 super.visitJumpInsn(Opcodes.IFEQ, go);
                 super.visitInsn(Opcodes.RETURN);
                 super.visitLabel(go);
-                super.visitFrame(Opcodes.F_NEW, 0, new Object[0], 0, new Object[0]);
+                super.visitFrame(Opcodes.F_NEW, locals.length, locals, 0, new Object[0]);
             }
 
             @Override

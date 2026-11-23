@@ -92,6 +92,66 @@ class SecureScreenTest {
     }
 
     @Test
+    void theMouseAnswersLikeTheKeysAndWithTheSameDelay() {
+        openScreen();
+        click("B unknown mod"); // a row: selects it
+        click("Load live / reload (Enter)");
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
+        assertTrue(game.drew("Yes (J) in 3 s"), "Yes waits like the J key: " + game.drawn);
+
+        click("Yes (J)"); // too early: does nothing, like J
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
+        assertTrue(actions.calls.isEmpty());
+
+        now += SecureScreen.FIRST_DELAY_MS;
+        frame();
+        click("Yes (J)");
+        assertEquals(SecureScreen.Mode.LIST, screen.mode());
+        assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
+    }
+
+    @Test
+    void aClickCountsOnlyDownAndUpOnTheSameButton() {
+        openScreen();
+        click("B unknown mod");
+        click("Load live / reload (Enter)");
+        now += SecureScreen.FIRST_DELAY_MS;
+        frame();
+        int[] no = game.at.get("No (N)");
+        int[] yes = game.at.get("Yes (J)");
+        // pressed on No, released on Yes (or the other way): nothing
+        game.mouse = new int[] {no[0] + 3, no[1] + 3};
+        game.mouseDown = true;
+        frame();
+        game.mouse = new int[] {yes[0] + 3, yes[1] + 3};
+        game.mouseDown = false;
+        frame();
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
+        assertTrue(actions.calls.isEmpty());
+        click("No (N)");
+        assertEquals(SecureScreen.Mode.LIST, screen.mode());
+        assertTrue(actions.calls.isEmpty());
+    }
+
+    @Test
+    void tabsRowsAndTheWheel() {
+        openScreen();
+        click("Java library");
+        assertTrue(screen.describe().contains("tab=JAVA_LIBRARY"), screen.describe());
+        click("Installed");
+        assertTrue(screen.describe().contains("tab=INSTALLED"), screen.describe());
+        int[] row = game.at.get("C shady mod"); // only in the list (the selected one is also the detail title)
+        game.mouse = new int[] {row[0], row[1] + 2};
+        game.wheel = -1; // down: the next mod
+        frame();
+        frame();
+        assertTrue(game.drew("B unknown mod"));
+        assertTrue(screen.describe().contains("selected=Unknown"), screen.describe());
+        click("Close (Esc)");
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode());
+    }
+
+    @Test
     void anUnknownModNeedsJAfterTheDelay() {
         openScreen();
         tap(SecureScreen.KEY_DOWN);
@@ -681,6 +741,10 @@ class SecureScreenTest {
 
         @Override public boolean physicalKeyDown(int glfwKey) { return down.contains(glfwKey); }
         @Override public String keyName(int glfwKey) { return String.valueOf((char) Character.toLowerCase(glfwKey)); }
+        @Override public int[] mousePosition() { return null; }
+        @Override public boolean physicalMouseDown(int button) { return false; }
+        @Override public int wheel() { return 0; }
+        @Override public void drawCursor() { }
         @Override public boolean inGame() { return false; }
         @Override public void pause(boolean paused) { }
         @Override public String language() { return "DE"; }
@@ -701,6 +765,21 @@ class SecureScreenTest {
         frame();
     }
 
+    /** Clicks the button (or tab, or row) whose label starts with {@code label}: down and up on it. */
+    private void click(String label) {
+        int[] p = game.at.entrySet().stream().filter(e -> e.getKey().startsWith(label)).map(Map.Entry::getValue).findFirst()
+                .orElseThrow(() -> new AssertionError("nothing drawn as " + label + ": " + game.drawn));
+        clickAt(p[0] + 3, p[1] + 3);
+    }
+
+    private void clickAt(int x, int y) {
+        game.mouse = new int[] {x, y};
+        game.mouseDown = true;
+        frame();
+        game.mouseDown = false;
+        frame();
+    }
+
     private void type(String text) {
         for (char c : text.toUpperCase(java.util.Locale.ROOT).toCharArray()) {
             tap(c);
@@ -718,6 +797,11 @@ class SecureScreenTest {
     private static final class FakeGame implements GameScreen {
         final Set<Integer> down = new HashSet<>();
         final List<String> drawn = new ArrayList<>();
+        /** Where each text was drawn last ({x, y}), to click on buttons by their label. */
+        final Map<String, int[]> at = new HashMap<>();
+        int[] mouse = {0, 0};
+        boolean mouseDown;
+        int wheel;
         boolean paused;
 
         boolean drew(String text) {
@@ -728,7 +812,11 @@ class SecureScreenTest {
         @Override public int height() { return 1080; }
         @Override public int fontHeight(Font font) { return 16; }
         @Override public int textWidth(Font font, String text) { return text.length() * 8; }
-        @Override public void text(Font font, int x, int y, String text, float r, float g, float b, float a) { drawn.add(text); }
+        @Override public void text(Font font, int x, int y, String text, float r, float g, float b, float a) { drawn.add(text); at.put(text, new int[] {x, y}); }
+        @Override public int[] mousePosition() { return mouse; }
+        @Override public boolean physicalMouseDown(int button) { return button == 0 && mouseDown; }
+        @Override public int wheel() { int w = wheel; wheel = 0; return w; }
+        @Override public void drawCursor() { }
         @Override public void rect(int x, int y, int w, int h, float r, float g, float b, float a) { }
         @Override public boolean image(String file, int x, int y, int w, int h) { drawn.add("image:" + file); return true; }
         @Override public boolean physicalKeyDown(int glfwKey) { return down.contains(glfwKey); }

@@ -153,14 +153,19 @@ final class GameActions implements Actions {
             return null;
         }
         try {
-            // both resolved (links, short names, /var -> /private/var) before they are compared
-            java.nio.file.Path root = java.nio.file.Path.of(dir).toRealPath();
+            java.nio.file.Path given = java.nio.file.Path.of(dir).toAbsolutePath().normalize();
+            java.nio.file.Path root = given.toRealPath();
             java.nio.file.Path p = java.nio.file.Path.of(path);
-            p = p.isAbsolute() ? p : root.resolve(p);
+            p = (p.isAbsolute() ? p : given.resolve(p)).normalize();
+            // first by name only, before anything is looked up: inside the folder as the game names it
+            // (or as it really is: links, short names, /var -> /private/var)
+            if (!p.startsWith(given) && !p.startsWith(root)) {
+                return null;
+            }
             if (!java.nio.file.Files.isRegularFile(p)) {
                 return null;
             }
-            java.nio.file.Path real = p.toRealPath();
+            java.nio.file.Path real = p.toRealPath(); // and no link out of the folder
             return real.startsWith(root) ? real.toString() : null;
         } catch (java.io.IOException | RuntimeException e) {
             return null;
