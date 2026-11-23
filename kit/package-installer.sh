@@ -51,7 +51,9 @@ common=(
 case "$TYPE" in
     msi)
         # A second launcher with a console, for the command line (JumpstartConsole.exe --status).
-        printf 'win-console=true\n' > "$WORK/console.properties"
+        # Only the .exe in the install folder: no Start menu entry or desktop shortcut, so players
+        # see a single Jumpstart app (as BiteCheck does).
+        printf 'win-console=true\nwin-menu=false\nwin-shortcut=false\n' > "$WORK/console.properties"
         jpackage --type msi --name Jumpstart "${common[@]}" \
             --win-per-user-install --win-menu --win-menu-group Jumpstart --win-shortcut \
             --win-upgrade-uuid 6d0f3b8e-4a51-4c1e-9b7a-2f5c8e1d9a43 \
