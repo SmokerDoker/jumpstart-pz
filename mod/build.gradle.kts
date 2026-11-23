@@ -24,19 +24,35 @@ tasks.test {
     }
 }
 
-// One jar with Jumpstart and BiteCheck (core + launcher classes and the pinned keys).
+// The BiteCheck launcher classes Jumpstart uses in game (index, state, approvals, sharing). The others
+// (window, game start, Steam setup, Platform) start processes and are never called in game; leaving
+// them out keeps BiteCheck's scanner from flagging Jumpstart for them. ModJarTest checks both.
+val launcherClassesInGame = listOf("Config", "IndexClient", "LauncherState", "UsageSharing", "ZombieBuddyApprovals")
+
+// One jar with Jumpstart and BiteCheck (core + the launcher classes above).
 // Byte Buddy is not included: ZombieBuddy provides it.
 val modJar by tasks.registering(Jar::class) {
     group = "build"
     description = "Builds Jumpstart.jar for the mod folder."
     archiveFileName.set("Jumpstart.jar")
     destinationDirectory.set(layout.buildDirectory.dir("modjar"))
+    inputs.property("launcherClassesInGame", launcherClassesInGame)
     from(sourceSets["main"].output)
     dependsOn(configurations.runtimeClasspath)
     from({ configurations.runtimeClasspath.get().filter { it.name.endsWith(".jar") }.map { zipTree(it) } }) {
         exclude("META-INF/MANIFEST.MF")
+        exclude { e ->
+            val p = e.path
+            p.startsWith("io/github/bitecheckpz/launcher/") && !e.isDirectory &&
+                launcherClassesInGame.none { p == "io/github/bitecheckpz/launcher/$it.class" || p.startsWith("io/github/bitecheckpz/launcher/$it$") }
+        }
     }
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.test {
+    dependsOn(modJar)
+    systemProperty("jumpstart.modJar", modJar.get().archiveFile.get().asFile.absolutePath)
 }
 
 val modFolder by tasks.registering(Sync::class) {
