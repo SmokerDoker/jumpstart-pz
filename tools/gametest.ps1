@@ -24,7 +24,9 @@
 #>
 param(
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
-    [string]$ForkJar = (Join-Path $PSScriptRoot "..\..\zombiebuddy-jumpstart\java\build\jdk25\libs\zombiebuddy-jumpstart.jar"),
+    # the fork's test jar with experimental.jar (its Lua server drives this test): in the fork's java/,
+    # gradle -PgameClasspath=<game>\projectzomboid.jar shadowJarExperimental. The player jar has no Lua server.
+    [string]$ForkJar = (Join-Path $PSScriptRoot "..\..\zombiebuddy-jumpstart\java\build\jdk25\libs\zombiebuddy-jumpstart-experimental.jar"),
     [string]$ModFolder = (Join-Path $PSScriptRoot "..\mod\build\mod\Jumpstart"),
     [string]$TestDir = "$env:USERPROFILE\Zomboid-jumpstart-gate-test",
     [switch]$KeepRunning
