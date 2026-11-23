@@ -81,17 +81,102 @@ final class Wrapper {
             log.accept("nothing to start after --wrap");
             return 2;
         }
+        List<String> run = runnable(command);
+        if (!run.equals(command)) {
+            log.accept("macOS app bundle: starting " + run.get(0));
+        }
         try {
-            Process game = new ProcessBuilder(command).inheritIO().start();
-            int code = game.waitFor();
-            log.accept("game exited: " + code);
-            return code;
+            return startAndWait(run, log);
         } catch (IOException e) {
-            log.accept("cannot start " + command.get(0) + ": " + e);
+            log.accept("cannot start " + run.get(0) + ": " + e);
+            if (isAppBundle(command.get(0))) {
+                // last resort: let macOS open the bundle, and wait for it
+                List<String> open = new java.util.ArrayList<>(List.of("open", "-W", "-a", command.get(0), "--args"));
+                open.addAll(command.subList(1, command.size()));
+                try {
+                    log.accept("trying: open -W -a ...");
+                    return startAndWait(open, log);
+                } catch (IOException e2) {
+                    log.accept("cannot open " + command.get(0) + ": " + e2);
+                } catch (InterruptedException e2) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             return 1;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return 1;
+        }
+    }
+
+    private static int startAndWait(List<String> command, Consumer<String> log) throws IOException, InterruptedException {
+        Process game = new ProcessBuilder(command).inheritIO().start();
+        int code = game.waitFor();
+        log.accept("game exited: " + code);
+        return code;
+    }
+
+    static boolean isAppBundle(String path) {
+        return path.endsWith(".app") && Files.isDirectory(Path.of(path));
+    }
+
+    /**
+     * The command line Steam handed over, made runnable. On macOS Steam's %command% is the game's
+     * .app bundle, a folder that cannot be run as a program (error 13); its program is
+     * Contents/MacOS/&lt;CFBundleExecutable from Info.plist&gt;, started with the same arguments, as Steam
+     * starts it without a wrapper.
+     */
+    static List<String> runnable(List<String> command) {
+        if (command.isEmpty() || !isAppBundle(command.get(0))) {
+            return command;
+        }
+        Optional<Path> exe = bundleExecutable(Path.of(command.get(0)));
+        if (exe.isEmpty()) {
+            return command;
+        }
+        List<String> out = new java.util.ArrayList<>(command);
+        out.set(0, exe.get().toString());
+        return out;
+    }
+
+    static Optional<Path> bundleExecutable(Path app) {
+        Path contents = app.resolve("Contents");
+        Path macos = contents.resolve("MacOS");
+        String name = null;
+        try {
+            // an XML Info.plist (Steam games ship it so); a binary one is read by plutil below
+            String plist = Files.readString(contents.resolve("Info.plist"), StandardCharsets.ISO_8859_1);
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("<key>CFBundleExecutable</key>\\s*<string>([^<]+)</string>").matcher(plist);
+            if (m.find()) {
+                name = m.group(1).strip();
+            }
+        } catch (IOException e) {
+            // no Info.plist: look into Contents/MacOS below
+        }
+        if (name == null && Files.isRegularFile(contents.resolve("Info.plist"))) {
+            try {
+                Process p = new ProcessBuilder("plutil", "-extract", "CFBundleExecutable", "raw", "-o", "-",
+                        contents.resolve("Info.plist").toString()).redirectErrorStream(true).start();
+                String s = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+                if (p.waitFor() == 0 && !s.isEmpty() && !s.contains("/")) {
+                    name = s;
+                }
+            } catch (IOException e) {
+                // no plutil (not macOS)
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (name != null && !name.contains("/") && Files.isRegularFile(macos.resolve(name))) {
+            return Optional.of(macos.resolve(name));
+        }
+        // the only program in Contents/MacOS
+        try (java.util.stream.Stream<Path> files = Files.list(macos)) {
+            List<Path> programs = files.filter(Files::isRegularFile).toList();
+            return programs.size() == 1 ? Optional.of(programs.get(0)) : Optional.empty();
+        } catch (IOException e) {
+            return Optional.empty();
         }
     }
 
