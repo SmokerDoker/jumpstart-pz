@@ -1,9 +1,12 @@
-# Builds the four download packages and publishes them:
-#   jumpstart-windows-<v>.zip, jumpstart-macos-<v>.tar.gz, jumpstart-linux-<v>.tar.gz (clients)
+# Builds the downloads and publishes them:
+#   Jumpstart-windows-x64.msi, Jumpstart-macos-arm64.dmg, Jumpstart-macos-x64.dmg,
+#   Jumpstart-linux-x64.deb, Jumpstart-linux-x64.rpm   one-click installers with their own Java
+#   JumpstartSetup.jar                                  the same installer for any Java 21+ (Steam Deck)
+#   jumpstart-windows-<v>.zip, jumpstart-macos-<v>.tar.gz, jumpstart-linux-<v>.tar.gz (script kits)
 #   jumpstart-server-<v>.zip (dedicated servers)
 # Each holds the ZombieBuddy fork (built here from SmokerDoker/zombiebuddy-jumpstart, branch
 # jumpstart/hotswap, against projectzomboid.jar of the dedicated server, downloaded anonymously from
-# Steam) and the Jumpstart mod.
+# Steam) as Java agent and as mod folder (no Workshop subscription needed), and the Jumpstart mod.
 #   push to main  -> pre-release "test-kit" (replaced on every push)
 #   tag v*        -> release with that version
 name: Kits
@@ -24,6 +27,9 @@ concurrency:
 jobs:
   kits:
     runs-on: ubuntu-latest
+    outputs:
+      kit_version: ${{ steps.version.outputs.kit_version }}
+      app_version: ${{ steps.version.outputs.app_version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,29 +87,115 @@ jobs:
       - name: Build Jumpstart
         run: JAVA_HOME="$JAVA_HOME_21_X64" ./gradlew --no-daemon check :mod:modFolder
 
+      - name: The fork's ZombieBuddy mod folder
+        run: bash kit/zombiebuddy-mod.sh fork "$FORK_JAR" dist-mods
+
       - name: Version
+        id: version
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="test-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"; fi
+          # kits: the tag or test-<date>-<sha>; installers (jpackage): x.y.z that grows with every build
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; a="$v"; else v="test-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"; a="0.1.${GITHUB_RUN_NUMBER}"; fi
           echo "KIT_VERSION=$v" >> "$GITHUB_ENV"
+          echo "kit_version=$v" >> "$GITHUB_OUTPUT"
+          echo "app_version=$a" >> "$GITHUB_OUTPUT"
 
       - name: Build the kits
-        run: bash kit/build-kits.sh "$FORK_JAR" mod/build/mod/Jumpstart dist "$KIT_VERSION"
+        run: bash kit/build-kits.sh dist-mods/ZombieBuddy mod/build/mod/Jumpstart dist "$KIT_VERSION"
+
+      - name: Build the installer jar
+        run: |
+          JAVA_HOME="$JAVA_HOME_21_X64" ./gradlew --no-daemon :installer:installerJar             "-PzombieBuddyMod=$PWD/dist-mods/ZombieBuddy" "-PkitVersion=$KIT_VERSION"
+          cp installer/build/setup/JumpstartSetup.jar dist/
+          # the installer installs into a fake game and Zomboid folder and removes it again
+          home="$RUNNER_TEMP/home"; game="$RUNNER_TEMP/game/projectzomboid"; mkdir -p "$home" "$game"
+          echo game > "$game/projectzomboid.jar"
+          java -Duser.home="$home" -jar dist/JumpstartSetup.jar --install --game-dir "$RUNNER_TEMP/game" || test $? -eq 4 # 4: no Steam here for the launch options
+          test -f "$game/ZombieBuddy.jar" && test -f "$home/Zomboid/mods/ZombieBuddy/libs/ZombieBuddy.jar" && test -f "$home/Zomboid/mods/Jumpstart/42/mod.info"
+          java -Duser.home="$home" -jar dist/JumpstartSetup.jar --uninstall --game-dir "$RUNNER_TEMP/game" || test $? -eq 4
+          test ! -e "$home/Zomboid/mods/Jumpstart"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: jumpstart-kits-${{ env.KIT_VERSION }}
+          name: kits
           path: dist
+
+  # one native installer per system, built on that system (jpackage cannot cross-build)
+  installers:
+    needs: kits
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, type: msi, label: windows-x64 }
+          - { os: macos-15, type: dmg, label: macos-arm64 }
+          - { os: macos-15-intel, type: dmg, label: macos-x64 }
+          - { os: ubuntu-22.04, type: deb, label: linux-x64 }
+          - { os: ubuntu-22.04, type: rpm, label: linux-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: actions/download-artifact@v8
+        with:
+          name: kits
+          path: kits
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          case "${{ matrix.type }}" in
+            deb) sudo apt-get update -q && sudo apt-get install -y -q fakeroot ;;
+            rpm) sudo apt-get update -q && sudo apt-get install -y -q rpm ;;
+            msi)
+              # jpackage needs the WiX Toolset 3 (candle.exe, light.exe)
+              if ! command -v candle.exe >/dev/null; then
+                wix="$(ls -d "/c/Program Files (x86)/WiX Toolset v3"*/bin 2>/dev/null | head -n 1 || true)"
+                if [ -z "$wix" ]; then choco install wixtoolset -y --no-progress; wix="$(ls -d "/c/Program Files (x86)/WiX Toolset v3"*/bin | head -n 1)"; fi
+                echo "$wix" >> "$GITHUB_PATH"
+              fi
+              ;;
+          esac
+      - name: Build the installer
+        shell: bash
+        run: |
+          bash kit/package-installer.sh kits/JumpstartSetup.jar "${{ needs.kits.outputs.app_version }}" "${{ matrix.type }}" out
+          cd out
+          for f in *; do mv "$f" "Jumpstart-${{ matrix.label }}.${f##*.}"; done
+          ls -la
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.label }}-${{ matrix.type }}
+          path: out/*
+
+  publish:
+    needs: [kits, installers]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Collect and checksum
+        run: |
+          mkdir dist
+          find artifacts -type f -exec cp {} dist/ \;
+          rm -f dist/SHA256SUMS.txt
+          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KIT_VERSION: ${{ needs.kits.outputs.kit_version }}
         run: |
           set -euo pipefail
-          notes="Downloads for the online test: one client package per system (Windows, macOS, Linux) and one for dedicated servers. Install and test steps: TESTPLAN.md in each package (servers: SERVER.md). Built from ${GITHUB_SHA::7}; ZombieBuddy fork from SmokerDoker/zombiebuddy-jumpstart (jumpstart/hotswap)."
+          notes="Install with one click: Jumpstart-windows-x64.msi, Jumpstart-macos-arm64.dmg (Apple Silicon), Jumpstart-macos-x64.dmg (Intel), Jumpstart-linux-x64.deb or .rpm, or JumpstartSetup.jar with any Java 21+ (Steam Deck). They bring the ZombieBuddy fork along: no Workshop subscription, no ZombieBuddy installer. Script kits for Windows, macOS, Linux and dedicated servers as before (TESTPLAN.md, SERVER.md). Built from ${GITHUB_SHA::7}; ZombieBuddy fork from SmokerDoker/zombiebuddy-jumpstart (jumpstart/hotswap)."
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            gh release create "$GITHUB_REF_NAME" dist/* --title "Jumpstart $KIT_VERSION" --notes "$notes"
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$REPO" --title "Jumpstart $KIT_VERSION" --notes "$notes"
           else
-            gh release delete test-kit --yes --cleanup-tag 2>/dev/null || true
-            gh release create test-kit dist/* --prerelease --target "$GITHUB_SHA" \
-              --title "Jumpstart test kit ($KIT_VERSION)" --notes "$notes"
+            gh release delete test-kit --repo "$REPO" --yes --cleanup-tag 2>/dev/null || true
+            gh release create test-kit dist/* --repo "$REPO" --prerelease --target "$GITHUB_SHA"               --title "Jumpstart test kit ($KIT_VERSION)" --notes "$notes"
           fi

@@ -16,4 +16,4 @@ includeBuild("third_party/bitecheck-pz") {
 }
 
 // Planned next to them (see README): bootstrap, market, mp.
-include("core", "mod")
+include("core", "mod", "installer")

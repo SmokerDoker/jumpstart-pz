@@ -88,20 +88,48 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   (the player answers its questions); whoever says no or is not ready within 3 minutes is
   disconnected, then the server follows. Test kit for Windows, macOS
   and Ubuntu: [kit/](kit/TESTPLAN.md)
+- [x] One-click installers like BiteCheck's (`installer/`, `kit/package-installer.sh`): `.msi`, `.dmg`
+  (Apple Silicon and Intel), `.deb`, `.rpm` with their own Java runtime, and `JumpstartSetup.jar`.
+  They ship the ZombieBuddy fork as Java agent **and** as mod folder, so nobody needs ZombieBuddy from
+  the Workshop or its installer any more; macOS/Linux launch options are set in Steam's
+  `localconfig.vdf` while Steam is closed
 - [x] The cloud Worker runs at <https://jumpstart-cloud.smokerdoker.workers.dev> (D1 database in
   Western Europe) and is the default for Jumpstart and BiteCheck (`cloud_url` overrides it)
 
 ## Downloads
 
+**Install with one click** (newest test build; each brings the
+[ZombieBuddy fork](https://github.com/SmokerDoker/zombiebuddy-jumpstart) along, so no ZombieBuddy
+from the Workshop and no ZombieBuddy installer are needed):
+
+| System | Download | Note |
+| --- | --- | --- |
+| Windows 10/11 | [Jumpstart-windows-x64.msi](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/Jumpstart-windows-x64.msi) | for your user only, no admin rights; SmartScreen warns once (not code-signed): "More info" → "Run anyway" |
+| macOS | [Apple Silicon](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/Jumpstart-macos-arm64.dmg) · [Intel](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/Jumpstart-macos-x64.dmg) | not notarized: open once via System Settings → Privacy & Security → "Open anyway" |
+| Linux | [Debian/Ubuntu (.deb)](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/Jumpstart-linux-x64.deb) · [Fedora/openSUSE (.rpm)](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/Jumpstart-linux-x64.rpm) | |
+| Any, incl. Steam Deck | [JumpstartSetup.jar](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/JumpstartSetup.jar) | runs with any Java 21+, e.g. the game's own: `…/ProjectZomboid/projectzomboid/jre64/bin/java -jar JumpstartSetup.jar` |
+
+Open **Jumpstart** and press **Install Jumpstart**. It finds the game in every Steam library and puts
+in place: the fork as `ZombieBuddy.jar` (a ZombieBuddy.jar of your own is kept as
+`ZombieBuddy.jar.before-jumpstart`), the mod folders `Zomboid/mods/ZombieBuddy` and
+`Zomboid/mods/Jumpstart`, both switched on in the mod list, and the start option `hotswap=true`:
+on Windows in `ProjectZomboid64.json`, on macOS and Linux in Steam's launch options (Steam has to be
+closed for that; the installer offers to close it, or copies the line for you). Your other launch
+options, BiteCheck's `--wrap` included, stay. The same window updates, repairs and removes
+Jumpstart; on the command line: `JumpstartSetup.jar --install | --uninstall | --status`.
+
 [Releases](https://github.com/SmokerDoker/jumpstart-pz/releases): `test-kit` is rebuilt on every
-push to main (workflow *Kits*): client packages for Windows, macOS and Linux and one for dedicated
-servers, each with the ZombieBuddy fork, the Jumpstart mod, install scripts and the test plan.
+push to main (workflow *Kits*): the installers above, script kits for Windows, macOS and Linux and
+one for dedicated servers, each with the ZombieBuddy fork, the Jumpstart mod, install scripts and the
+test plan; `SHA256SUMS.txt` lists every file's hash.
 
 ## Build
 
 ```sh
 git submodule update --init      # BiteCheck, pinned in third_party/
 ./gradlew check :mod:modFolder   # tests, and the mod folder in mod/build/mod/Jumpstart
+# the installer, with the fork's mod folder from kit/zombiebuddy-mod.sh:
+./gradlew :installer:installerJar -PzombieBuddyMod=<folder>/ZombieBuddy   # installer/build/setup/JumpstartSetup.jar
 ```
 
 Needs JDK 21 to 24 with the wrapper (Gradle 8.14); with JDK 25 use Gradle 9. Project Zomboid
@@ -115,7 +143,8 @@ core/          BiteCheck gate, LiveInstaller, hotswap engine, library client (pl
 mod/           The Jumpstart mod for Project Zomboid (secure screen, read-only Lua API)
 third_party/   BiteCheck (git submodule)
 tools/         In-game tests (single player, dedicated server), a stand-in for the cloud, the kit builder
-kit/           Install scripts and test plan for the online test with friends
+installer/     One-click installer (window and command line), packaged with jpackage as .msi, .dmg, .deb, .rpm
+kit/           Install scripts, packaging scripts and test plan for the online test with friends
 cloud/         Cloudflare Worker: mod libraries (Steam Workshop search) and voluntary reports
 docs/          Design notes and spike results
 ```

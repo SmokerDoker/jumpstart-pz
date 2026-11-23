@@ -10,9 +10,10 @@ hosted server with ZombieBuddy and Jumpstart by itself. This is for dedicated se
      `Server einrichten.cmd` (Steam's "Project Zomboid Dedicated Server" folder; another one:
      `Server einrichten.cmd -ServerDir "D:\pzserver" -ServerName myserver`).
 2. With a server name (or when there is just one `.ini` in `~/Zomboid/Server`, Windows
-   `%USERPROFILE%\Zomboid\Server`) the installer adds `ZombieBuddy;Jumpstart` to `Mods=` and
-   `3619862853` (ZombieBuddy) to `WorkshopItems=`; a new name creates the `.ini`. Add your own Java
-   mods there as usual.
+   `%USERPROFILE%\Zomboid\Server`) the installer adds `ZombieBuddy;Jumpstart` to `Mods=`; a new
+   name creates the `.ini`. ZombieBuddy (the fork) comes as a mod folder in the server's `mods`, so it
+   needs no entry in `WorkshopItems=` (an existing `3619862853` there does no harm). Add your own Java
+   mods as usual.
 3. First start in a console: ZombieBuddy asks there once per new Java jar whether it may load
    (answer `y` for Jumpstart and your mods). The answers are kept in `~/.zombie_buddy/mod_approvals.json`.
 4. The log shows `[Jumpstart] multiplayer: server side ready; Java mods for the clients: [...]`.
@@ -21,4 +22,5 @@ hosted server with ZombieBuddy and Jumpstart by itself. This is for dedicated se
    Enter = load/update for everybody, A = off/on for everybody. Every other player has to agree;
    whoever says no or is not ready within 3 minutes is disconnected.
 
-Clients need the client kit (Windows, macOS or Linux) for Jumpstart and the ZombieBuddy fork.
+Clients need Jumpstart and the ZombieBuddy fork too: the one-click installer or the client kit
+(Windows, macOS or Linux).

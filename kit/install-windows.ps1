@@ -1,7 +1,8 @@
 <#
-  Jumpstart test kit for Windows: puts the ZombieBuddy fork and the Jumpstart mod in place.
-  Works with ZombieBuddy installed the normal way (ZombieBuddyInstaller.exe, zbNative.dll) and without:
-  then the fork starts as a Java agent from ProjectZomboid64.json.
+  Jumpstart test kit for Windows: puts the ZombieBuddy fork (agent jar and mod folder) and the Jumpstart
+  mod in place. No ZombieBuddy from the Workshop and no ZombieBuddyInstaller needed; with zbNative.dll
+  from ZombieBuddy's installer it keeps using that, otherwise the fork starts as a Java agent from
+  ProjectZomboid64.json.
   Run:  double-click "Jumpstart installieren.cmd", or
         powershell -ExecutionPolicy Bypass -File install-windows.ps1      (-Uninstall to undo)
 #>
@@ -27,18 +28,22 @@ if (-not $GameDir) {
 $kit = $PSScriptRoot
 $zb = Join-Path $GameDir "ZombieBuddy.jar"
 $json = Join-Path $GameDir "ProjectZomboid64.json"
-$mods = Join-Path $env:USERPROFILE "Zomboid\mods"
+$zomboid = Join-Path $env:USERPROFILE "Zomboid"
+$mods = Join-Path $zomboid "mods"
+$zbBackup = Join-Path $zomboid "jumpstart-backup\ZombieBuddy"
 if (-not (Test-Path $GameDir)) { throw "Project Zomboid not found at $GameDir (use -GameDir)" }
 
 if ($Uninstall) {
     if (Test-Path "$zb.before-jumpstart") { Copy-Item "$zb.before-jumpstart" $zb -Force; Remove-Item "$zb.before-jumpstart"; "ZombieBuddy.jar restored" }
     if (Test-Path "$json.before-jumpstart") { Copy-Item "$json.before-jumpstart" $json -Force; Remove-Item "$json.before-jumpstart"; "ProjectZomboid64.json restored" }
     if (Test-Path "$mods\Jumpstart") { Remove-Item "$mods\Jumpstart" -Recurse -Force; "Jumpstart mod removed" }
+    if (Test-Path "$mods\ZombieBuddy\jumpstart-fork.txt") { Remove-Item "$mods\ZombieBuddy" -Recurse -Force; "ZombieBuddy mod (fork) removed" }
+    if ((Test-Path $zbBackup) -and -not (Test-Path "$mods\ZombieBuddy")) { Move-Item $zbBackup "$mods\ZombieBuddy"; "your own ZombieBuddy mod folder is back" }
     return
 }
 
 if (-not (Test-Path "$zb.before-jumpstart") -and (Test-Path $zb)) { Copy-Item $zb "$zb.before-jumpstart" }
-Copy-Item "$kit\ZombieBuddy.jar" $zb -Force
+Copy-Item "$kit\ZombieBuddy\libs\ZombieBuddy.jar" $zb -Force
 "ZombieBuddy.jar: Jumpstart fork"
 
 $text = Get-Content $json -Raw
@@ -63,6 +68,18 @@ if (Test-Path "$mods\Jumpstart") { Remove-Item "$mods\Jumpstart" -Recurse -Force
 Copy-Item "$kit\Jumpstart" "$mods\Jumpstart" -Recurse
 "Jumpstart mod: $mods\Jumpstart"
 
+# ZombieBuddy's mod folder (the fork), so no Workshop subscription is needed. A ZombieBuddy folder
+# of your own (without jumpstart-fork.txt) is moved to Zomboid\jumpstart-backup and comes back with -Uninstall.
+if ((Test-Path "$mods\ZombieBuddy") -and -not (Test-Path "$mods\ZombieBuddy\jumpstart-fork.txt")) {
+    $target = if (Test-Path $zbBackup) { "$zbBackup-" + (Get-Date -Format "yyyyMMdd-HHmmss") } else { $zbBackup }
+    New-Item -ItemType Directory -Force (Split-Path $zbBackup) | Out-Null
+    Move-Item "$mods\ZombieBuddy" $target
+    "your own ZombieBuddy mod folder moved to $target"
+}
+if (Test-Path "$mods\ZombieBuddy") { Remove-Item "$mods\ZombieBuddy" -Recurse -Force }
+Copy-Item "$kit\ZombieBuddy" "$mods\ZombieBuddy" -Recurse
+"ZombieBuddy mod (Jumpstart fork): $mods\ZombieBuddy"
+
 # ZombieBuddy and Jumpstart on in the main menu's mod list (a copy of the old list stays next to it)
 $list = Join-Path $mods "default.txt"
 if (-not (Test-Path $list)) { [IO.File]::WriteAllText($list, "VERSION = 1,`r`n`r`nmods`r`n{`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n") }
@@ -76,12 +93,6 @@ foreach ($id in "Jumpstart", "ZombieBuddy") { # inserted at the top: ZombieBuddy
 }
 "ZombieBuddy and Jumpstart enabled in $list"
 
-$steamapps = Split-Path (Split-Path $GameDir)
-if (-not (Test-Path (Join-Path $steamapps "workshop\content\108600\3619862853"))) {
-    ""
-    "ZombieBuddy is not subscribed in the Steam Workshop yet: opening its page, click Subscribe."
-    Start-Process "steam://url/CommunityFilePage/3619862853" -ErrorAction SilentlyContinue
-}
 ""
-"Done. Start Project Zomboid through Steam. ZombieBuddy asks once whether Jumpstart.jar may load:"
+"Done. Start Project Zomboid through Steam (no Workshop subscription needed). ZombieBuddy asks once whether Jumpstart.jar may load:"
 "say yes. If BiteCheck is installed, allow Jumpstart there ('Allow anyway'). Ctrl+Shift+J opens Jumpstart."

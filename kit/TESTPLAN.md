@@ -6,33 +6,40 @@ Für 2–4 Spieler auf Windows, macOS und Ubuntu. Dauer: etwa eine Stunde.
 
 Alle brauchen dieselbe Project-Zomboid-Version (Build 42). Steam muss laufen.
 
-**Windows**: PowerShell öffnen und einfügen:
+**Am einfachsten: Installer mit einem Klick** von
+<https://github.com/SmokerDoker/jumpstart-pz/releases/tag/test-kit> laden und öffnen:
+
+- Windows: `Jumpstart-windows-x64.msi` (SmartScreen: „Weitere Informationen" > „Trotzdem ausführen")
+- macOS: `Jumpstart-macos-arm64.dmg` (Apple Silicon) bzw. `Jumpstart-macos-x64.dmg` (Intel); beim
+  ersten Öffnen Systemeinstellungen > Datenschutz & Sicherheit > „Trotzdem öffnen"
+- Linux: `Jumpstart-linux-x64.deb` bzw. `.rpm`; Steam Deck: `JumpstartSetup.jar` mit der Java des
+  Spiels starten (`…/ProjectZomboid/projectzomboid/jre64/bin/java -jar JumpstartSetup.jar`)
+
+Im Fenster **Jumpstart installieren** drücken. Auf macOS/Linux muss Steam für die Startoption kurz
+zu sein: Der Installer bietet an, Steam zu schließen, oder legt die Zeile in die Zwischenablage.
+
+**Oder mit einer Zeile** – Windows (PowerShell):
 
     irm https://raw.githubusercontent.com/SmokerDoker/jumpstart-pz/main/kit/get.ps1 | iex
 
-oder das Paket `jumpstart-windows-….zip` von
-<https://github.com/SmokerDoker/jumpstart-pz/releases/tag/test-kit> entpacken und
-`Jumpstart installieren.cmd` doppelklicken. Steam-Startoptionen braucht Windows nicht.
-
-**macOS und Linux**: Terminal öffnen und einfügen:
+macOS und Linux (Terminal):
 
     curl -fsSL https://raw.githubusercontent.com/SmokerDoker/jumpstart-pz/main/kit/get.sh | bash
 
-(oder das `.tar.gz` entpacken und `Jumpstart installieren.command` doppelklicken; macOS fragt beim
-ersten Mal: Rechtsklick > Öffnen). Danach **ein** Schritt von Hand: in Steam bei Project Zomboid >
-Eigenschaften > Startoptionen `-javaagent:ZombieBuddy.jar=hotswap=true --` einfügen (der
-Installer legt es in die Zwischenablage).
+(oder das passende Paket entpacken und `Jumpstart installieren.cmd/.command` doppelklicken). Auf
+macOS/Linux danach **ein** Schritt von Hand: in Steam bei Project Zomboid > Eigenschaften >
+Startoptionen `-javaagent:ZombieBuddy.jar=hotswap=true --` einfügen (liegt in der Zwischenablage).
 
-Die Installer laden das neueste Paket, prüfen die SHA-256-Prüfsumme, setzen den ZombieBuddy-Fork
-ein, kopieren die Jumpstart-Mod und schalten ZombieBuddy und Jumpstart im Mod-Menü ein. Ist
-ZombieBuddy noch nicht im Workshop abonniert, öffnet sich seine Seite: **Abonnieren** klicken.
+Alle Wege setzen den ZombieBuddy-Fork ein (als `ZombieBuddy.jar` und als Mod-Ordner
+`Zomboid/mods/ZombieBuddy`), kopieren die Jumpstart-Mod und schalten beide im Mod-Menü ein.
+**ZombieBuddy muss nicht mehr im Workshop abonniert werden**; ein vorhandenes Abo stört nicht.
 
 Dann das Spiel starten. ZombieBuddy fragt einmal, ob `Jumpstart.jar` laden darf: **Ja**. Wer den
 BiteCheck-Launcher benutzt: Jumpstart dort mit „Allow anyway“ freigeben (Jumpstart ist noch nicht
 von BiteCheck geprüft). **Strg+Umschalt+J** öffnet den sicheren Bildschirm von Jumpstart.
 
-Rückgängig machen: `install-windows.ps1 -Uninstall` bzw. `bash install-unix.sh --uninstall`
-(und die Startoption wieder entfernen).
+Rückgängig machen: im Installer **Entfernen**, oder `install-windows.ps1 -Uninstall` bzw.
+`bash install-unix.sh --uninstall` (und die Startoption wieder entfernen).
 
 ## 2. Erst allein prüfen (jeder, 5 Minuten)
 

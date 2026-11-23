@@ -1,0 +1,143 @@
+package io.github.jumpstartpz.installer;
+
+import java.util.Locale;
+import java.util.Map;
+
+/** The installer's texts in German and English, chosen by the system language. */
+final class Texts {
+    private static final Map<String, String> EN = Map.ofEntries(
+            Map.entry("title", "Jumpstart"),
+            Map.entry("subtitle", "Install, update and switch Project Zomboid mods while the game runs"),
+            Map.entry("payload", "Version in this installer: %s"),
+            Map.entry("game", "Project Zomboid"),
+            Map.entry("game.missing", "not found"),
+            Map.entry("game.choose", "Choose folder…"),
+            Map.entry("game.chooseTitle", "Project Zomboid's folder (steamapps/common/ProjectZomboid)"),
+            Map.entry("state", "Jumpstart"),
+            Map.entry("state.installed", "installed (%s)"),
+            Map.entry("state.incomplete", "partly installed: %s missing"),
+            Map.entry("state.none", "not installed"),
+            Map.entry("part.jar", "ZombieBuddy fork"),
+            Map.entry("part.mod", "Jumpstart mod"),
+            Map.entry("part.zbmod", "ZombieBuddy mod"),
+            Map.entry("part.launch", "launch option"),
+            Map.entry("bitecheck", "BiteCheck"),
+            Map.entry("bitecheck.yes", "found: every mod Jumpstart loads is checked with BiteCheck's registry"),
+            Map.entry("bitecheck.no", "not installed (optional: Jumpstart checks live installs itself; BiteCheck also checks at game start)"),
+            Map.entry("install", "Install Jumpstart"),
+            Map.entry("update", "Update / repair"),
+            Map.entry("uninstall", "Uninstall"),
+            Map.entry("play", "Start Project Zomboid"),
+            Map.entry("working", "Working…"),
+            Map.entry("done.install", "Jumpstart is installed. Start Project Zomboid; ZombieBuddy asks once whether Jumpstart.jar may load: say yes. Ctrl+Shift+J opens Jumpstart."),
+            Map.entry("done.uninstall", "Jumpstart is removed."),
+            Map.entry("confirm.uninstall", "Remove Jumpstart and the ZombieBuddy fork from Project Zomboid?"),
+            Map.entry("steam.running.title", "Steam is open"),
+            Map.entry("steam.running", "Steam keeps Project Zomboid's launch options while it runs.\nJumpstart needs this launch option:\n\n%s\n\nClose Steam now and set it automatically?"),
+            Map.entry("steam.close", "Close Steam and set it"),
+            Map.entry("steam.manual", "I'll set it myself"),
+            Map.entry("steam.closing", "Closing Steam…"),
+            Map.entry("steam.notClosed", "Steam did not close in time."),
+            Map.entry("manual.title", "One step in Steam"),
+            Map.entry("manual", "In Steam: Project Zomboid > Properties > General > Launch Options, replace the text there with:\n\n%s"),
+            Map.entry("manual.uninstall", "In Steam: Project Zomboid > Properties > General > Launch Options, replace the text there with (empty means: delete the text):\n\n%s"),
+            Map.entry("manual.clipboard", "(It is in your clipboard already.)"),
+            Map.entry("noSteamConfig", "Project Zomboid was never started on this Steam account, so it has no launch options yet."),
+            Map.entry("log.jar", "ZombieBuddy.jar (Jumpstart fork) -> %s"),
+            Map.entry("log.jarBackup", "your ZombieBuddy.jar is kept as %s"),
+            Map.entry("log.jarRestored", "your ZombieBuddy.jar is back"),
+            Map.entry("log.jarRemoved", "ZombieBuddy.jar removed"),
+            Map.entry("log.jarKept", "ZombieBuddy.jar stays: the game still starts ZombieBuddy (launch options or ProjectZomboid64.json)"),
+            Map.entry("log.json", "ProjectZomboid64.json: hotswap=true"),
+            Map.entry("log.jsonRestored", "ProjectZomboid64.json: hotswap=true removed"),
+            Map.entry("log.mod", "Jumpstart mod -> %s"),
+            Map.entry("log.zbmod", "ZombieBuddy mod (Jumpstart fork) -> %s (no Workshop subscription needed)"),
+            Map.entry("log.zbmodOwn", "your own ZombieBuddy mod folder moved to %s"),
+            Map.entry("log.zbmodBack", "your own ZombieBuddy mod folder is back"),
+            Map.entry("log.modRemoved", "%s removed"),
+            Map.entry("log.list", "ZombieBuddy and Jumpstart are on in the main menu's mod list"),
+            Map.entry("log.listOff", "removed from the main menu's mod list: %s"),
+            Map.entry("log.listMissing", "could not change %s: add ZombieBuddy and Jumpstart in the game's mod menu"),
+            Map.entry("log.launch", "Steam launch options: %s"),
+            Map.entry("log.launchOk", "Steam launch options are set"),
+            Map.entry("log.workshop", "ZombieBuddy from the Steam Workshop is not needed any more; you can unsubscribe it"),
+            Map.entry("error.noPayload", "This build of the installer has no Jumpstart files in it (use --payload <folder>)."),
+            Map.entry("error.noGame", "Project Zomboid was not found. Choose its folder."),
+            Map.entry("error.inUse", "%s is in use. Close Project Zomboid and try again."),
+            Map.entry("error.json", "ProjectZomboid64.json has no vmArgs list; it was not changed."),
+            Map.entry("error", "Error: %s"));
+
+    private static final Map<String, String> DE = Map.ofEntries(
+            Map.entry("subtitle", "Mods für Project Zomboid installieren, aktualisieren und schalten, während das Spiel läuft"),
+            Map.entry("payload", "Version in diesem Installer: %s"),
+            Map.entry("game.missing", "nicht gefunden"),
+            Map.entry("game.choose", "Ordner wählen…"),
+            Map.entry("game.chooseTitle", "Ordner von Project Zomboid (steamapps/common/ProjectZomboid)"),
+            Map.entry("state.installed", "installiert (%s)"),
+            Map.entry("state.incomplete", "unvollständig: %s fehlt"),
+            Map.entry("state.none", "nicht installiert"),
+            Map.entry("part.jar", "ZombieBuddy-Fork"),
+            Map.entry("part.mod", "Jumpstart-Mod"),
+            Map.entry("part.zbmod", "ZombieBuddy-Mod"),
+            Map.entry("part.launch", "Startoption"),
+            Map.entry("bitecheck.yes", "gefunden: jede Mod, die Jumpstart lädt, wird mit BiteChecks Registry geprüft"),
+            Map.entry("bitecheck.no", "nicht installiert (optional: Jumpstart prüft Live-Installationen selbst, BiteCheck zusätzlich beim Spielstart)"),
+            Map.entry("install", "Jumpstart installieren"),
+            Map.entry("update", "Aktualisieren / reparieren"),
+            Map.entry("uninstall", "Entfernen"),
+            Map.entry("play", "Project Zomboid starten"),
+            Map.entry("working", "Bitte warten…"),
+            Map.entry("done.install", "Jumpstart ist installiert. Starte Project Zomboid; ZombieBuddy fragt einmal, ob Jumpstart.jar laden darf: Ja. Strg+Umschalt+J öffnet Jumpstart."),
+            Map.entry("done.uninstall", "Jumpstart ist entfernt."),
+            Map.entry("confirm.uninstall", "Jumpstart und den ZombieBuddy-Fork aus Project Zomboid entfernen?"),
+            Map.entry("steam.running.title", "Steam ist geöffnet"),
+            Map.entry("steam.running", "Solange Steam läuft, hält es die Startoptionen von Project Zomboid fest.\nJumpstart braucht diese Startoption:\n\n%s\n\nSteam jetzt schließen und die Startoption automatisch setzen?"),
+            Map.entry("steam.close", "Steam schließen und setzen"),
+            Map.entry("steam.manual", "Ich trage sie selbst ein"),
+            Map.entry("steam.closing", "Steam wird geschlossen…"),
+            Map.entry("steam.notClosed", "Steam hat sich nicht rechtzeitig beendet."),
+            Map.entry("manual.title", "Ein Schritt in Steam"),
+            Map.entry("manual", "In Steam: Project Zomboid > Eigenschaften > Allgemein > Startoptionen, den Text dort ersetzen durch:\n\n%s"),
+            Map.entry("manual.uninstall", "In Steam: Project Zomboid > Eigenschaften > Allgemein > Startoptionen, den Text dort ersetzen durch (leer heißt: Text löschen):\n\n%s"),
+            Map.entry("manual.clipboard", "(Er ist schon in der Zwischenablage.)"),
+            Map.entry("noSteamConfig", "Project Zomboid wurde mit diesem Steam-Konto noch nie gestartet und hat daher noch keine Startoptionen."),
+            Map.entry("log.jarBackup", "deine ZombieBuddy.jar bleibt als %s erhalten"),
+            Map.entry("log.jarRestored", "deine ZombieBuddy.jar ist wieder da"),
+            Map.entry("log.jarRemoved", "ZombieBuddy.jar entfernt"),
+            Map.entry("log.jarKept", "ZombieBuddy.jar bleibt: das Spiel startet ZombieBuddy weiterhin (Startoptionen oder ProjectZomboid64.json)"),
+            Map.entry("log.jsonRestored", "ProjectZomboid64.json: hotswap=true entfernt"),
+            Map.entry("log.mod", "Jumpstart-Mod -> %s"),
+            Map.entry("log.zbmod", "ZombieBuddy-Mod (Jumpstart-Fork) -> %s (kein Workshop-Abo nötig)"),
+            Map.entry("log.zbmodOwn", "dein eigener ZombieBuddy-Mod-Ordner wurde nach %s verschoben"),
+            Map.entry("log.zbmodBack", "dein eigener ZombieBuddy-Mod-Ordner ist wieder da"),
+            Map.entry("log.modRemoved", "%s entfernt"),
+            Map.entry("log.list", "ZombieBuddy und Jumpstart sind in der Mod-Liste des Hauptmenüs eingeschaltet"),
+            Map.entry("log.listOff", "aus der Mod-Liste des Hauptmenüs genommen: %s"),
+            Map.entry("log.listMissing", "%s konnte nicht geändert werden: ZombieBuddy und Jumpstart im Mod-Menü des Spiels einschalten"),
+            Map.entry("log.launch", "Steam-Startoptionen: %s"),
+            Map.entry("log.launchOk", "Steam-Startoptionen sind gesetzt"),
+            Map.entry("log.workshop", "ZombieBuddy aus dem Steam Workshop wird nicht mehr gebraucht; das Abo kannst du beenden"),
+            Map.entry("error.noPayload", "In diesem Installer fehlen die Jumpstart-Dateien (--payload <Ordner>)."),
+            Map.entry("error.noGame", "Project Zomboid wurde nicht gefunden. Bitte den Ordner wählen."),
+            Map.entry("error.inUse", "%s wird gerade benutzt. Project Zomboid schließen und noch einmal versuchen."),
+            Map.entry("error.json", "ProjectZomboid64.json hat keine vmArgs-Liste und wurde nicht geändert."),
+            Map.entry("error", "Fehler: %s"));
+
+    private final boolean german;
+
+    Texts(boolean german) {
+        this.german = german;
+    }
+
+    static Texts forSystem() {
+        return new Texts("de".equals(Locale.getDefault().getLanguage()));
+    }
+
+    String get(String key, Object... args) {
+        String text = german ? DE.getOrDefault(key, EN.get(key)) : EN.get(key);
+        if (text == null) {
+            return key;
+        }
+        return args.length == 0 ? text : String.format(text, args);
+    }
+}
