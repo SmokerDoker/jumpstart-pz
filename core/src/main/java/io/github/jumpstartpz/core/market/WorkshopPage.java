@@ -139,25 +139,66 @@ public final class WorkshopPage {
         }
         byte[] bytes;
         try {
-            HttpResponse<byte[]> response = http.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(20)).GET().build(),
-                    HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() != 200 || response.body().length > MAX_IMAGE_BYTES) {
-                return Optional.empty();
+            HttpResponse<java.io.InputStream> response = http.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(20)).GET().build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+            try (java.io.InputStream in = response.body()) {
+                // after redirects the file must still come from Steam
+                if (response.statusCode() != 200 || !steamHost(response.uri())) {
+                    return Optional.empty();
+                }
+                // read at most the limit: a bigger answer is refused without being loaded
+                bytes = in.readNBytes(MAX_IMAGE_BYTES + 1);
+                if (bytes.length > MAX_IMAGE_BYTES) {
+                    return Optional.empty();
+                }
             }
-            bytes = response.body();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IOException("interrupted", e);
         }
-        BufferedImage image = ImageIO.read(new ByteArrayInputStream(bytes));
+        BufferedImage image = decode(bytes);
         if (image == null) {
-            return Optional.empty(); // a format Java cannot read
+            return Optional.empty(); // a format Java cannot read, or far too big
         }
         Files.createDirectories(cacheDir);
         Path tmp = cacheDir.resolve(page.id() + ".png.tmp");
         ImageIO.write(scaled(image), "png", tmp.toFile());
         Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
         return Optional.of(file);
+    }
+
+    /** Largest picture accepted (pixels per side): a small file can claim huge dimensions. */
+    static final int MAX_SIDE = 8192;
+
+    /**
+     * Decodes a picture without trusting its size: the dimensions are read first, a picture over
+     * {@link #MAX_SIDE} is refused, and a big one is read subsampled close to the size kept.
+     */
+    static BufferedImage decode(byte[] bytes) throws IOException {
+        try (javax.imageio.stream.ImageInputStream in = ImageIO.createImageInputStream(new ByteArrayInputStream(bytes))) {
+            if (in == null) {
+                return null;
+            }
+            java.util.Iterator<javax.imageio.ImageReader> readers = ImageIO.getImageReaders(in);
+            if (!readers.hasNext()) {
+                return null;
+            }
+            javax.imageio.ImageReader reader = readers.next();
+            try {
+                reader.setInput(in, true, true);
+                int w = reader.getWidth(0);
+                int h = reader.getHeight(0);
+                if (w <= 0 || h <= 0 || w > MAX_SIDE || h > MAX_SIDE) {
+                    return null;
+                }
+                javax.imageio.ImageReadParam param = reader.getDefaultReadParam();
+                int step = Math.max(1, Math.max(w, h) / (IMAGE_SIZE * 2));
+                param.setSourceSubsampling(step, step, 0, 0);
+                return reader.read(0, param);
+            } finally {
+                reader.dispose();
+            }
+        }
     }
 
     private static BufferedImage scaled(BufferedImage image) {

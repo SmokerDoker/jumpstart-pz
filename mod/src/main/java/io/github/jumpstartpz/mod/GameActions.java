@@ -139,16 +139,31 @@ final class GameActions implements Actions {
         });
     }
 
-    /** An icon or poster path from mod.info as an absolute path to an existing file, or null. */
-    private static String imageOf(String dir, String path) {
-        if (path == null || path.isBlank()) {
+    /**
+     * An icon or poster path from mod.info (a file anyone can write) as an absolute path, only if it
+     * is a file inside the mod's own folder: no network paths (\\server\..., where Windows would log in
+     * by itself), nothing outside the folder, also not through a link.
+     */
+    static String imageOf(String dir, String path) {
+        if (path == null || path.isBlank() || dir == null) {
             return null;
         }
-        java.nio.file.Path p = java.nio.file.Path.of(path);
-        if (!p.isAbsolute()) {
-            p = java.nio.file.Path.of(dir).resolve(path);
+        String s = path.replace('\\', '/');
+        if (s.startsWith("//") || s.contains("://")) {
+            return null;
         }
-        return java.nio.file.Files.isRegularFile(p) ? p.toAbsolutePath().toString() : null;
+        try {
+            java.nio.file.Path root = java.nio.file.Path.of(dir).toRealPath();
+            java.nio.file.Path p = java.nio.file.Path.of(path);
+            p = (p.isAbsolute() ? p : root.resolve(p)).normalize();
+            if (!p.startsWith(root) || !java.nio.file.Files.isRegularFile(p)) {
+                return null;
+            }
+            java.nio.file.Path real = p.toRealPath();
+            return real.startsWith(root) ? real.toString() : null;
+        } catch (java.io.IOException | RuntimeException e) {
+            return null;
+        }
     }
 
     /** mod.info descriptions use the game's rich text: <LINE> and <BR> break lines, other tags go. */
