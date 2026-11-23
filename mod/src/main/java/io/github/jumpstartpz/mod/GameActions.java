@@ -153,10 +153,11 @@ final class GameActions implements Actions {
             return null;
         }
         try {
+            // both resolved (links, short names, /var -> /private/var) before they are compared
             java.nio.file.Path root = java.nio.file.Path.of(dir).toRealPath();
             java.nio.file.Path p = java.nio.file.Path.of(path);
-            p = (p.isAbsolute() ? p : root.resolve(p)).normalize();
-            if (!p.startsWith(root) || !java.nio.file.Files.isRegularFile(p)) {
+            p = p.isAbsolute() ? p : root.resolve(p);
+            if (!java.nio.file.Files.isRegularFile(p)) {
                 return null;
             }
             java.nio.file.Path real = p.toRealPath();
