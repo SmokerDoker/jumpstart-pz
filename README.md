@@ -116,7 +116,16 @@ in place: the fork as `ZombieBuddy.jar` (a ZombieBuddy.jar of your own is kept a
 on Windows in `ProjectZomboid64.json`, on macOS and Linux in Steam's launch options (Steam has to be
 closed for that; the installer offers to close it, or copies the line for you). Your other launch
 options, BiteCheck's `--wrap` included, stay. The same window updates, repairs and removes
-Jumpstart; on the command line: `JumpstartSetup.jar --install | --uninstall | --status`.
+Jumpstart; on the command line: `JumpstartSetup.jar --install | --uninstall | --update | --status`.
+
+**Automatic updates** (box ticked by default): Jumpstart puts itself in front of the game in Steam's
+launch options and, before every game start, installs the newest **signed** release (tags `v*`, never
+`test-kit`) and repairs what a game update undid; then the game starts. Details and the signing key:
+[kit/RELEASING.md](kit/RELEASING.md). Uninstall Jumpstart in its window before removing the app, so
+Steam's launch options do not point at a missing program.
+
+**Dedicated servers**: `JumpstartSetup.jar --server <folder> --name <server> --headless`, with
+`--update` before every start (systemd `ExecStartPre`): [kit/SERVER.md](kit/SERVER.md).
 
 [Releases](https://github.com/SmokerDoker/jumpstart-pz/releases): `test-kit` is rebuilt on every
 push to main (workflow *Kits*): the installers above, script kits for Windows, macOS and Linux and

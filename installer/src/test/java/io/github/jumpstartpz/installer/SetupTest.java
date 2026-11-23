@@ -80,7 +80,7 @@ class SetupTest {
     }
 
     private Setup setup(GameLocation loc) {
-        return new Setup(loc, new Texts(false), log::add, () -> steamRunning);
+        return new Setup(loc, new Texts(false), log::add, () -> steamRunning, Optional.empty());
     }
 
     @Test
@@ -93,7 +93,7 @@ class SetupTest {
         assertEquals(Setup.LaunchResult.NOT_NEEDED, setup.launchOptions(true));
         Setup.Status s = setup.status();
         assertTrue(s.installed(), s.toString());
-        assertEquals(Optional.of("0.2.0"), s.jumpstartVersion());
+        assertEquals(Optional.of("test-1"), s.jumpstartVersion(), "the version the installer put there");
         assertTrue(Setup.isFork(loc.zombieBuddyJar()));
         assertTrue(Files.readString(loc.launchJson()).contains("ZombieBuddy.jar=hotswap=true"));
         assertTrue(Files.isRegularFile(loc.modsDir().resolve("ZombieBuddy/libs/ZombieBuddy.jar")));
@@ -186,6 +186,70 @@ class SetupTest {
         setup.installFiles(payload());
         assertEquals(Setup.LaunchResult.NO_STEAM_CONFIG, setup.launchOptions(true));
         assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true --", setup.suggestedLaunchOptions(true));
+    }
+
+    private Path steamConfig(String launchOptions) throws IOException {
+        Path vdf = tmp.resolve("Steam/userdata/123/config/localconfig.vdf");
+        Files.createDirectories(vdf.getParent());
+        Files.writeString(vdf, "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n"
+                + "\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"108600\"\n\t\t\t\t\t{\n"
+                + (launchOptions == null ? "" : "\t\t\t\t\t\t\"LaunchOptions\"\t\t\"" + LocalConfigVdf.escape(launchOptions) + "\"\n")
+                + "\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n", StandardCharsets.UTF_8);
+        return vdf;
+    }
+
+    @Test
+    void windowsWithAutomaticUpdatesKeepsBiteChecksWrapper() throws IOException {
+        GameLocation loc = windows();
+        String bitecheck = "\"C:\\Users\\me\\AppData\\Local\\BiteCheck\\BiteCheck.exe\" --wrap %command% -agentlib:zbNative --";
+        steamConfig(bitecheck);
+        String wrapper = "\"C:\\Users\\me\\AppData\\Local\\Jumpstart\\Jumpstart.exe\" --wrap";
+        Setup setup = new Setup(loc, new Texts(false), log::add, () -> steamRunning, Optional.of(wrapper));
+        setup.installFiles(payload());
+        assertEquals(Optional.of("test-1"), setup.installedVersion());
+
+        steamRunning = true;
+        assertEquals(Setup.LaunchResult.STEAM_RUNNING, setup.launchOptions(true));
+        steamRunning = false;
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true));
+        Setup.Status s = setup.status();
+        assertTrue(s.installed() && s.autoUpdate(), s.toString());
+        assertEquals(Optional.of(wrapper + " " + bitecheck), s.launchOptions(), "Jumpstart first, then BiteCheck");
+
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(false));
+        setup.uninstallFiles();
+        assertEquals(Optional.of(bitecheck), setup.status().launchOptions(), "BiteCheck's options are back as they were");
+    }
+
+    @Test
+    void windowsWithoutSteamConfigStillInstalls() throws IOException {
+        Setup setup = setup(windows());
+        setup.installFiles(payload());
+        assertEquals(Setup.LaunchResult.NOT_NEEDED, setup.launchOptions(true), "no wrapper wanted: nothing to set");
+        assertEquals(Setup.LaunchResult.NOT_NEEDED, setup.launchOptions(false));
+    }
+
+    @Test
+    void repairPutsHotswapBackAfterAGameUpdate() throws IOException {
+        GameLocation loc = windows();
+        Setup setup = setup(loc);
+        setup.installFiles(payload());
+        String original = "{\r\n\t\"vmArgs\": [\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n";
+        Files.writeString(loc.launchJson(), original); // Steam's update
+        assertTrue(setup.repair());
+        assertTrue(LaunchJson.hasHotswap(Files.readString(loc.launchJson())));
+        assertFalse(setup.repair(), "nothing left to repair");
+    }
+
+    @Test
+    void automaticUpdateKeepsTheModList() throws IOException {
+        GameLocation loc = windows();
+        Setup setup = setup(loc);
+        setup.installFiles(payload());
+        String off = ModList.disable(Files.readString(loc.modList()), "Jumpstart");
+        Files.writeString(loc.modList(), off); // the player switched it off in the mod menu
+        setup.installFiles(payload(), false);
+        assertEquals(off, Files.readString(loc.modList()));
     }
 
     @Test

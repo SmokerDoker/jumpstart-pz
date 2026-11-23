@@ -1,7 +1,9 @@
 # Builds the downloads and publishes them:
 #   Jumpstart-windows-x64.msi, Jumpstart-macos-arm64.dmg, Jumpstart-macos-x64.dmg,
 #   Jumpstart-linux-x64.deb, Jumpstart-linux-x64.rpm   one-click installers with their own Java
-#   JumpstartSetup.jar                                  the same installer for any Java 21+ (Steam Deck)
+#   JumpstartSetup.jar                                  the same installer for any Java 21+ (Steam Deck, servers)
+#   jumpstart-payload.zip, jumpstart-release.txt(.sig)  tags only: what the automatic updates install,
+#                                                       signed with the JUMPSTART_SIGNING_KEY secret
 #   jumpstart-windows-<v>.zip, jumpstart-macos-<v>.tar.gz, jumpstart-linux-<v>.tar.gz (script kits)
 #   jumpstart-server-<v>.zip (dedicated servers)
 # Each holds the ZombieBuddy fork (built here from SmokerDoker/zombiebuddy-jumpstart, branch
@@ -106,6 +108,7 @@ jobs:
         run: |
           JAVA_HOME="$JAVA_HOME_21_X64" ./gradlew --no-daemon :installer:installerJar             "-PzombieBuddyMod=$PWD/dist-mods/ZombieBuddy" "-PkitVersion=$KIT_VERSION"
           cp installer/build/setup/JumpstartSetup.jar dist/
+          cp installer/build/payload/payload.zip dist/jumpstart-payload.zip
           # the installer installs into a fake game and Zomboid folder and removes it again
           home="$RUNNER_TEMP/home"; game="$RUNNER_TEMP/game/projectzomboid"; mkdir -p "$home" "$game"
           echo game > "$game/projectzomboid.jar"
@@ -178,12 +181,37 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+      - uses: actions/checkout@v7
+        with:
+          path: repo
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Collect and checksum
         run: |
           mkdir dist
           find artifacts -type f -exec cp {} dist/ \;
           rm -f dist/SHA256SUMS.txt
           cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Sign the release for the automatic updates (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          JUMPSTART_SIGNING_KEY: ${{ secrets.JUMPSTART_SIGNING_KEY }}
+          KIT_VERSION: ${{ needs.kits.outputs.kit_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$JUMPSTART_SIGNING_KEY" ]; then
+            echo "::error::The secret JUMPSTART_SIGNING_KEY is missing: a release without a signature would never reach anybody through the automatic updates. See kit/RELEASING.md."
+            exit 1
+          fi
+          java repo/kit/ReleaseSign.java manifest dist "$KIT_VERSION" "$GITHUB_REF_NAME"
+          java repo/kit/ReleaseSign.java sign dist/jumpstart-release.txt
+          # the signature must fit the key built into the installers
+          key="$(grep -o 'PUBLIC = "[^"]*"' repo/installer/src/main/java/io/github/jumpstartpz/installer/ReleaseKey.java | cut -d'"' -f2)"
+          java repo/kit/ReleaseSign.java verify dist/jumpstart-release.txt "$key"
+          cd dist && rm -f SHA256SUMS.txt && sha256sum * > SHA256SUMS.txt
 
       - name: Publish
         env:
@@ -192,7 +220,7 @@ jobs:
           KIT_VERSION: ${{ needs.kits.outputs.kit_version }}
         run: |
           set -euo pipefail
-          notes="Install with one click: Jumpstart-windows-x64.msi, Jumpstart-macos-arm64.dmg (Apple Silicon), Jumpstart-macos-x64.dmg (Intel), Jumpstart-linux-x64.deb or .rpm, or JumpstartSetup.jar with any Java 21+ (Steam Deck). They bring the ZombieBuddy fork along: no Workshop subscription, no ZombieBuddy installer. Script kits for Windows, macOS, Linux and dedicated servers as before (TESTPLAN.md, SERVER.md). Built from ${GITHUB_SHA::7}; ZombieBuddy fork from SmokerDoker/zombiebuddy-jumpstart (jumpstart/hotswap)."
+          notes="Automatic updates: installed with the box ticked, Jumpstart updates itself before every game start to the newest signed release (not to test-kit). Install with one click: Jumpstart-windows-x64.msi, Jumpstart-macos-arm64.dmg (Apple Silicon), Jumpstart-macos-x64.dmg (Intel), Jumpstart-linux-x64.deb or .rpm, or JumpstartSetup.jar with any Java 21+ (Steam Deck). They bring the ZombieBuddy fork along: no Workshop subscription, no ZombieBuddy installer. Script kits for Windows, macOS, Linux and dedicated servers as before (TESTPLAN.md, SERVER.md). Built from ${GITHUB_SHA::7}; ZombieBuddy fork from SmokerDoker/zombiebuddy-jumpstart (jumpstart/hotswap)."
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             gh release create "$GITHUB_REF_NAME" dist/* --repo "$REPO" --title "Jumpstart $KIT_VERSION" --notes "$notes"
           else

@@ -43,8 +43,8 @@ common=(
     --description "Installs Jumpstart (live mods for Project Zomboid) and the ZombieBuddy fork"
     --copyright "GPL-3.0-or-later, https://github.com/SmokerDoker/jumpstart-pz"
     --license-file "$(win "$ROOT/LICENSE")"
-    # the window (Swing) and files; no network, no crypto needed
-    --add-modules java.base,java.desktop
+    # the window (Swing); HTTP and Ed25519 (jdk.crypto.ec on JDK 21) for the signed automatic updates
+    --add-modules java.base,java.desktop,java.net.http,jdk.crypto.ec
     --jlink-options "--strip-debug --no-header-files --no-man-pages"
 )
 

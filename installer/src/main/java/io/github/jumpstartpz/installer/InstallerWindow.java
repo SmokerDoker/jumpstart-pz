@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -42,6 +43,8 @@ final class InstallerWindow {
     private final JLabel gameValue = new JLabel();
     private final JLabel stateValue = new JLabel();
     private final JLabel biteCheckValue = new JLabel();
+    private final JLabel updateValue = new JLabel();
+    private final JCheckBox autoUpdate;
     private final JLabel payloadLabel = new JLabel(" ");
     private final JTextArea log = new JTextArea(10, 70);
     private final JButton choose;
@@ -61,6 +64,7 @@ final class InstallerWindow {
         this.install = new JButton(t.get("install"));
         this.uninstall = new JButton(t.get("uninstall"));
         this.play = new JButton(t.get("play"));
+        this.autoUpdate = new JCheckBox(t.get("autoUpdate.check"), true);
     }
 
     static void open(Texts t, Optional<Path> gameDir, Optional<Path> payloadDir) {
@@ -89,7 +93,14 @@ final class InstallerWindow {
         JPanel facts = new JPanel(new GridBagLayout());
         row(facts, 0, t.get("game"), gameValue, choose);
         row(facts, 1, t.get("state"), stateValue, null);
-        row(facts, 2, t.get("bitecheck"), biteCheckValue, null);
+        row(facts, 2, t.get("autoUpdate"), updateValue, null);
+        row(facts, 3, t.get("bitecheck"), biteCheckValue, null);
+        GridBagConstraints cc = new GridBagConstraints();
+        cc.gridx = 1;
+        cc.gridy = 4;
+        cc.gridwidth = 2;
+        cc.anchor = GridBagConstraints.WEST;
+        facts.add(autoUpdate, cc);
 
         log.setEditable(false);
         log.setLineWrap(true);
@@ -152,7 +163,7 @@ final class InstallerWindow {
     }
 
     private void loadPayload() {
-        background(() -> InstallerMain.payload(payloadDir), p -> {
+        background(() -> payloadDir.isPresent() ? Optional.of(Payload.of(payloadDir.get())) : Payload.bundled(), p -> {
             payload = p.orElse(null);
             payloadLabel.setText(payload == null ? t.get("error.noPayload") : t.get("payload", payload.version()));
             payloadLabel.setForeground(payload == null ? RED : Color.GRAY);
@@ -164,13 +175,14 @@ final class InstallerWindow {
     private void refresh() {
         background(() -> {
             Optional<GameLocation> loc = GameLocation.find(gameDir);
-            return loc.map(l -> new Setup(l, t, this::append));
+            return loc.map(l -> new Setup(l, t, this::append, Optional.empty()));
         }, s -> {
             setup = s.orElse(null);
             if (setup == null) {
                 gameValue.setText(t.get("game.missing"));
                 gameValue.setForeground(RED);
                 stateValue.setText("–");
+                updateValue.setText("–");
                 biteCheckValue.setText("–");
                 append(t.get("error.noGame"));
                 updateButtons();
@@ -178,6 +190,10 @@ final class InstallerWindow {
             }
             gameValue.setText(setup.location().javaDir().toString());
             gameValue.setForeground(GREEN);
+            if (!Wrapper.available()) {
+                autoUpdate.setSelected(false);
+                autoUpdate.setEnabled(false);
+            }
             background(setup::status, this::showStatus);
         });
     }
@@ -198,6 +214,8 @@ final class InstallerWindow {
             stateValue.setText(t.get("state.none"));
             stateValue.setForeground(Color.DARK_GRAY);
         }
+        updateValue.setText(t.get(s.autoUpdate() ? "autoUpdate.on" : "autoUpdate.off"));
+        updateValue.setForeground(s.autoUpdate() ? GREEN : Color.DARK_GRAY);
         biteCheckValue.setText(t.get(s.biteCheck() ? "bitecheck.yes" : "bitecheck.no"));
         biteCheckValue.setForeground(s.biteCheck() ? GREEN : Color.DARK_GRAY);
         install.setText(t.get(s.anything() ? "update" : "install"));
@@ -238,10 +256,32 @@ final class InstallerWindow {
 
     private void install() {
         busy();
+        // with the auto-update box: Jumpstart's wrapper goes into the launch options too
+        Setup installer = new Setup(setup.location(), t, this::append,
+                autoUpdate.isSelected() ? Wrapper.prefix(setup.location().os()) : Optional.empty());
+        background(() -> InstallerMain.choosePayload(payloadDir, this::append, t), chosen -> {
+            Optional<String> installed = installer.installedVersion();
+            if (InstallerMain.isDowngrade(chosen.version(), installed)) {
+                int answer = JOptionPane.showConfirmDialog(frame, t.get("error.downgrade", installed.orElse("?"), chosen.version()),
+                        t.get("title"), JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (answer != JOptionPane.YES_OPTION) {
+                    refresh();
+                    return;
+                }
+            }
+            installWith(installer, chosen);
+        });
+    }
+
+    private void installWith(Setup installer, Payload chosen) {
+        Setup previous = setup;
+        setup = installer; // the launch step below shows this setup's launch options
         background(() -> {
-            setup.installFiles(payload);
-            return setup.launchOptions(true);
+            append(t.get("payload", chosen.version()));
+            installer.installFiles(chosen);
+            return installer.launchOptions(true);
         }, r -> launchStep(true, r, () -> {
+            setup = previous;
             append(t.get("done.install"));
             refresh();
             JOptionPane.showMessageDialog(frame, t.get("done.install"), t.get("title"), JOptionPane.INFORMATION_MESSAGE);

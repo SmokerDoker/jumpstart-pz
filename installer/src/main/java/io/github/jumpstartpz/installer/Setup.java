@@ -38,12 +38,14 @@ public final class Setup {
     static final String BACKUP = ".before-jumpstart";
     /** In the fork's mod folder: the installer replaces and removes only a folder with this file. */
     static final String FORK_MARKER = "jumpstart-fork.txt";
+    /** In the Jumpstart mod folder: the version the installer put there (for automatic updates). */
+    static final String VERSION_FILE = "jumpstart-version.txt";
     private static final String FORK_CLASS = "me/zed_0xff/zombie_buddy/Hotswap.class";
     /** Byte for byte: localconfig.vdf is kept unchanged outside the launch options. */
     private static final Charset VDF = StandardCharsets.ISO_8859_1;
 
     public enum LaunchResult {
-        /** Windows: the options are in ProjectZomboid64.json. */
+        /** Nothing to set: Windows without automatic updates (the options are in ProjectZomboid64.json). */
         NOT_NEEDED,
         /** Set (or already right). */
         DONE,
@@ -55,7 +57,8 @@ public final class Setup {
 
     /** What is in place now. */
     public record Status(boolean forkJar, boolean jumpstartMod, Optional<String> jumpstartVersion, boolean zombieBuddyMod,
-            boolean launchReady, Optional<String> launchOptions, boolean biteCheck, boolean zombieBuddyFromWorkshop) {
+            boolean launchReady, Optional<String> launchOptions, boolean biteCheck, boolean zombieBuddyFromWorkshop,
+            boolean autoUpdate) {
 
         public boolean installed() {
             return forkJar && jumpstartMod && zombieBuddyMod && launchReady;
@@ -70,16 +73,19 @@ public final class Setup {
     private final Texts t;
     private final Consumer<String> log;
     private final BooleanSupplier steamRunning;
+    /** Jumpstart's wrapper for the launch options ({@code "<app>" --wrap}), or empty: no automatic updates. */
+    private final Optional<String> wrapper;
 
-    public Setup(GameLocation loc, Texts t, Consumer<String> log) {
-        this(loc, t, log, () -> Steam.isRunning(loc.os()));
+    public Setup(GameLocation loc, Texts t, Consumer<String> log, Optional<String> wrapper) {
+        this(loc, t, log, () -> Steam.isRunning(loc.os()), wrapper);
     }
 
-    Setup(GameLocation loc, Texts t, Consumer<String> log, BooleanSupplier steamRunning) {
+    Setup(GameLocation loc, Texts t, Consumer<String> log, BooleanSupplier steamRunning, Optional<String> wrapper) {
         this.loc = loc;
         this.t = t;
         this.log = log;
         this.steamRunning = steamRunning;
+        this.wrapper = wrapper;
     }
 
     public GameLocation location() {
@@ -90,21 +96,61 @@ public final class Setup {
         Path mod = loc.modsDir().resolve("Jumpstart");
         Path zbMod = loc.modsDir().resolve("ZombieBuddy");
         boolean launchReady;
-        Optional<String> options = Optional.empty();
+        List<String> all = currentLaunchOptions();
         if (windows()) {
             launchReady = read(loc.launchJson(), StandardCharsets.UTF_8).map(LaunchJson::hasHotswap).orElse(false);
         } else {
-            List<String> all = currentLaunchOptions();
             launchReady = !all.isEmpty() && all.stream().allMatch(LaunchOptions::hasJumpstart);
-            options = all.stream().findFirst();
         }
-        return new Status(isFork(loc.zombieBuddyJar()), Files.isRegularFile(mod.resolve("42/mod.info")), modVersion(mod),
-                Files.isRegularFile(zbMod.resolve("42/mod.info")) || loc.zombieBuddyFromWorkshop(), launchReady, options,
-                Files.isDirectory(Path.of(System.getProperty("user.home"), ".bitecheck")), loc.zombieBuddyFromWorkshop());
+        boolean autoUpdate = !all.isEmpty() && all.stream().allMatch(LaunchOptions::hasWrapper);
+        return new Status(isFork(loc.zombieBuddyJar()), Files.isRegularFile(mod.resolve("42/mod.info")),
+                installedVersion().or(() -> modVersion(mod)),
+                Files.isRegularFile(zbMod.resolve("42/mod.info")) || loc.zombieBuddyFromWorkshop(), launchReady,
+                all.stream().findFirst(), Files.isDirectory(Path.of(System.getProperty("user.home"), ".bitecheck")),
+                loc.zombieBuddyFromWorkshop(), autoUpdate);
     }
 
-    /** Everything except the Steam launch options. */
+    /** The version the installer (or an automatic update) put in place; empty for older installs. */
+    public Optional<String> installedVersion() {
+        return read(loc.modsDir().resolve("Jumpstart").resolve(VERSION_FILE), StandardCharsets.UTF_8)
+                .map(String::strip).filter(v -> !v.isEmpty());
+    }
+
+    /** True if Jumpstart's files are in place (the fork and the Jumpstart mod). */
+    public boolean isInstalled() {
+        return isFork(loc.zombieBuddyJar()) && Files.isDirectory(loc.modsDir().resolve("Jumpstart"));
+    }
+
+    /**
+     * After a game update Steam may have replaced ProjectZomboid64.json (Windows): puts hotswap=true
+     * back if Jumpstart is installed. True if it changed something.
+     */
+    public boolean repair() throws IOException {
+        if (!windows() || !isInstalled()) {
+            return false;
+        }
+        Path json = loc.launchJson();
+        String text = Files.readString(json, StandardCharsets.UTF_8);
+        String changed = LaunchJson.withHotswap(text, loc.zombieBuddyJar());
+        if (changed == null || changed.equals(text)) {
+            return false;
+        }
+        write(json, changed, StandardCharsets.UTF_8);
+        log.accept(t.get("log.json"));
+        return true;
+    }
+
+    /** Everything except the Steam launch options, and both mods on in the mod list. */
     public void installFiles(Payload payload) throws IOException {
+        installFiles(payload, true);
+    }
+
+    /**
+     * Everything except the Steam launch options.
+     *
+     * @param enableMods false for an automatic update: the player's mod list stays as it is
+     */
+    public void installFiles(Payload payload, boolean enableMods) throws IOException {
         Path jar = loc.zombieBuddyJar();
         Path jarBackup = sibling(jar, BACKUP);
         if (Files.isRegularFile(jar) && !isFork(jar) && !Files.exists(jarBackup)) {
@@ -132,6 +178,7 @@ public final class Setup {
         Path mod = loc.modsDir().resolve("Jumpstart");
         deleteTree(mod);
         copyTree(payload.jumpstartMod(), mod);
+        write(mod.resolve(VERSION_FILE), payload.version() + "\n", StandardCharsets.UTF_8);
         log.accept(t.get("log.mod", mod));
 
         Path zbMod = loc.modsDir().resolve("ZombieBuddy");
@@ -148,6 +195,9 @@ public final class Setup {
         copyTree(payload.zombieBuddyMod(), zbMod);
         log.accept(t.get("log.zbmod", zbMod));
 
+        if (!enableMods) {
+            return;
+        }
         Path list = loc.modList();
         String text = Files.isRegularFile(list) ? Files.readString(list, StandardCharsets.UTF_8)
                 : (windows() ? ModList.EMPTY.replace("\n", "\r\n") : ModList.EMPTY);
@@ -170,16 +220,33 @@ public final class Setup {
 
     /** The launch options the player should have after installing (shown when they set them by hand). */
     public String suggestedLaunchOptions(boolean install) {
-        String current = currentLaunchOptions().stream().findFirst().orElse("");
-        return install ? LaunchOptions.withJumpstart(current) : LaunchOptions.withoutJumpstart(current, keepZombieBuddy());
+        return wanted(currentLaunchOptions().stream().findFirst().orElse(""), install, keepZombieBuddy());
     }
 
     /**
-     * macOS and Linux: sets (or removes) Jumpstart's launch option in every Steam account that has
-     * played Project Zomboid. Only while Steam is closed; Steam would overwrite the file on exit.
+     * Jumpstart's part of the launch options: on macOS and Linux ZombieBuddy with hotswap=true (Windows
+     * has that in ProjectZomboid64.json); everywhere Jumpstart's wrapper for automatic updates, if wanted.
+     */
+    private String wanted(String current, boolean install, boolean keepZombieBuddy) {
+        String s = current;
+        if (!windows()) {
+            s = install ? LaunchOptions.withJumpstart(s) : LaunchOptions.withoutJumpstart(s, keepZombieBuddy);
+        }
+        if (install && wrapper.isPresent()) {
+            s = LaunchOptions.withWrapper(s, wrapper.get());
+        } else if (!install) {
+            s = LaunchOptions.withoutWrapper(s);
+        }
+        return s;
+    }
+
+    /**
+     * Sets (or removes) Jumpstart's launch options in every Steam account that has played Project
+     * Zomboid: on macOS and Linux ZombieBuddy's hotswap=true, everywhere the wrapper for automatic
+     * updates. Only while Steam is closed; Steam would overwrite the file on exit.
      */
     public LaunchResult launchOptions(boolean install) throws IOException {
-        if (windows()) {
+        if (windows() && install && wrapper.isEmpty()) {
             return LaunchResult.NOT_NEEDED;
         }
         boolean keep = keepZombieBuddy();
@@ -194,7 +261,7 @@ public final class Setup {
             }
             any = true;
             String current = LocalConfigVdf.launchOptions(text).orElse("");
-            String wanted = install ? LaunchOptions.withJumpstart(current) : LaunchOptions.withoutJumpstart(current, keep);
+            String wanted = wanted(current, install, keep);
             if (!wanted.equals(current)) {
                 files.add(vdf);
                 texts.add(LocalConfigVdf.withLaunchOptions(text, wanted).orElseThrow());
@@ -202,7 +269,8 @@ public final class Setup {
             }
         }
         if (!any) {
-            return LaunchResult.NO_STEAM_CONFIG;
+            // Windows works without launch options (ProjectZomboid64.json); only the updates need them
+            return windows() && !install ? LaunchResult.NOT_NEEDED : LaunchResult.NO_STEAM_CONFIG;
         }
         if (files.isEmpty()) {
             log.accept(t.get("log.launchOk"));
@@ -397,6 +465,18 @@ public final class Setup {
         try (Stream<Path> files = Files.walk(dir)) {
             for (Path p : files.sorted((a, b) -> b.getNameCount() - a.getNameCount()).toList()) {
                 deleteFile(p);
+            }
+        }
+    }
+
+    /** Deletes a folder with everything in it (no "in use" message; for servers and updates). */
+    static void removeTree(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> files = Files.walk(dir)) {
+            for (Path p : files.sorted((a, b) -> b.getNameCount() - a.getNameCount()).toList()) {
+                Files.deleteIfExists(p);
             }
         }
     }

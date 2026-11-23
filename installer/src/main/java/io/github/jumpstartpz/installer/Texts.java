@@ -65,7 +65,25 @@ final class Texts {
             Map.entry("error.noGame", "Project Zomboid was not found. Choose its folder."),
             Map.entry("error.inUse", "%s is in use. Close Project Zomboid and try again."),
             Map.entry("error.json", "ProjectZomboid64.json has no vmArgs list; it was not changed."),
-            Map.entry("error", "Error: %s"));
+            Map.entry("error.downgrade", "Installed is %s, this installer has the older %s. Install it anyway (--force)?"),
+            Map.entry("error", "Error: %s"),
+            Map.entry("autoUpdate", "Updates"),
+            Map.entry("autoUpdate.check", "Update automatically before every game start (signed releases only)"),
+            Map.entry("autoUpdate.on", "automatic, before every game start"),
+            Map.entry("autoUpdate.off", "off (this installer updates)"),
+            Map.entry("update.running", "Jumpstart is updating to %s…"),
+            Map.entry("update.none", "Jumpstart is up to date (%s)."),
+            Map.entry("update.newer", "Newer signed release found: %s"),
+            Map.entry("update.unavailable", "Could not check for updates: %s"),
+            Map.entry("server.notFound", "No Project Zomboid dedicated server in %s (%s expected)."),
+            Map.entry("server.noJava", "%s does not start java.exe; add -javaagent:ZombieBuddy.jar=hotswap=true after java.exe by hand."),
+            Map.entry("server.agent", "%s: -javaagent ZombieBuddy (Jumpstart fork), options %s"),
+            Map.entry("server.agentRemoved", "%s: -javaagent removed"),
+            Map.entry("server.ini", "%s: %s"),
+            Map.entry("server.noIni", "No single server .ini in %s: add ZombieBuddy;Jumpstart to Mods= yourself, or pass --name."),
+            Map.entry("server.approved", "Jumpstart.jar approved ahead in %s (the server has no console to ask)"),
+            Map.entry("server.repaired", "Start configuration repaired (a game update had replaced it)."),
+            Map.entry("server.selfUpdate", "JumpstartSetup.jar updated to %s for the next run."));
 
     private static final Map<String, String> DE = Map.ofEntries(
             Map.entry("subtitle", "Mods für Project Zomboid installieren, aktualisieren und schalten, während das Spiel läuft"),
@@ -121,7 +139,16 @@ final class Texts {
             Map.entry("error.noGame", "Project Zomboid wurde nicht gefunden. Bitte den Ordner wählen."),
             Map.entry("error.inUse", "%s wird gerade benutzt. Project Zomboid schließen und noch einmal versuchen."),
             Map.entry("error.json", "ProjectZomboid64.json hat keine vmArgs-Liste und wurde nicht geändert."),
-            Map.entry("error", "Fehler: %s"));
+            Map.entry("error.downgrade", "Installiert ist %s, dieser Installer hat die ältere %s. Trotzdem installieren (--force)?"),
+            Map.entry("error", "Fehler: %s"),
+            Map.entry("autoUpdate", "Updates"),
+            Map.entry("autoUpdate.check", "Vor jedem Spielstart automatisch aktualisieren (nur signierte Releases)"),
+            Map.entry("autoUpdate.on", "automatisch, vor jedem Spielstart"),
+            Map.entry("autoUpdate.off", "aus (über diesen Installer)"),
+            Map.entry("update.running", "Jumpstart wird auf %s aktualisiert…"),
+            Map.entry("update.none", "Jumpstart ist aktuell (%s)."),
+            Map.entry("update.newer", "Neueres signiertes Release gefunden: %s"),
+            Map.entry("update.unavailable", "Updates konnten nicht geprüft werden: %s"));
 
     private final boolean german;
 

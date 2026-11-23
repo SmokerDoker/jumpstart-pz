@@ -91,6 +91,45 @@ final class LaunchOptions {
         return rest;
     }
 
+    /**
+     * Jumpstart's own wrapper at the start of the options ({@code "<Jumpstart app>" --wrap}), which
+     * updates Jumpstart before every game start: the app, or a Java plus {@code -jar JumpstartSetup.jar}.
+     */
+    private static final Pattern OUR_WRAPPER = Pattern.compile(
+            "^(?:\"[^\"]*\"\\s+-jar\\s+)?\"(?:[^\"]*[/\\\\])?[^\"/\\\\]*[Jj]umpstart[^\"/\\\\]*\"\\s+--wrap(?:\\s+|$)");
+
+    static boolean hasWrapper(String options) {
+        return OUR_WRAPPER.matcher(options == null ? "" : options.strip()).find();
+    }
+
+    /**
+     * The options with Jumpstart's wrapper in front, before any other wrapper (BiteCheck's too):
+     * Jumpstart updates first, then BiteCheck checks what will load.
+     *
+     * @param wrapper e.g. {@code "C:\...\Jumpstart.exe" --wrap}
+     */
+    static String withWrapper(String current, String wrapper) {
+        String s = withoutWrapper(current);
+        if (s.contains(COMMAND)) {
+            return wrapper + " " + s;
+        }
+        return wrapper + " " + COMMAND + (s.isEmpty() ? "" : " " + s);
+    }
+
+    /** The options without Jumpstart's wrapper. */
+    static String withoutWrapper(String current) {
+        String s = current == null ? "" : current.strip();
+        s = OUR_WRAPPER.matcher(s).replaceFirst("").strip();
+        if (s.equals(COMMAND)) {
+            return "";
+        }
+        if (s.startsWith(COMMAND + " ")) {
+            // without any wrapper left, Steam appends options to the command anyway
+            return s.substring(COMMAND.length() + 1).strip();
+        }
+        return s;
+    }
+
     private static List<String> options(String group) {
         List<String> opts = new ArrayList<>();
         if (group != null) {
