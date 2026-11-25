@@ -902,6 +902,18 @@ final class GameActions implements Actions {
         }
 
         @Override
+        public long[] progress(long itemId) {
+            try {
+                Object ws = instance();
+                long[] info = new long[2];
+                Boolean ok = (Boolean) ws.getClass().getMethod("GetItemDownloadInfo", long.class, long[].class).invoke(ws, itemId, info);
+                return Boolean.TRUE.equals(ok) && info[1] > 0 ? info : null;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return null;
+            }
+        }
+
+        @Override
         public boolean download(long itemId) {
             try {
                 Object ws = instance();

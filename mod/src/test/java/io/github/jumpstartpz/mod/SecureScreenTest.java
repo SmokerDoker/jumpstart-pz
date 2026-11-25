@@ -335,7 +335,7 @@ class SecureScreenTest {
         assertTrue(actions.calls.isEmpty(), "nothing loads while Steam downloads");
 
         actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
-        frame();
+        frame(); settle();
         assertEquals(List.of("Verified"), actions.activated);
         assertEquals(List.of("install Verified NONE"), actions.calls, "verified: loaded without a question");
         assertEquals(SecureScreen.Tab.INSTALLED, screen.tab());
@@ -372,7 +372,7 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_ENTER);
         tap(SecureScreen.KEY_ENTER);
         actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
-        frame();
+        frame(); settle();
         assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "BiteCheck asks about the unknown jar");
         assertTrue(actions.luaLoaded.isEmpty(), "no Lua before the player said yes and the Java part runs");
         now += SecureScreen.FIRST_DELAY_MS;
@@ -391,7 +391,7 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_ENTER);
         tap(SecureScreen.KEY_ENTER);
         actions.workshop.states.put(111L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
-        frame();
+        frame(); settle();
         tap(SecureScreen.KEY_N);
         assertTrue(actions.luaLoaded.isEmpty());
     }
@@ -407,6 +407,45 @@ class SecureScreenTest {
         assertTrue(actions.calls.isEmpty(), String.valueOf(actions.calls));
         assertEquals("on, until restart", actions.states.get("Jumpstart"));
         assertTrue(screen.describe().contains("This is Jumpstart itself"), screen.describe());
+    }
+
+    @Test
+    void theScreenSaysWhatRunsBeforeTheGameStandsStill() {
+        actions.luaMods.add("Minimap");
+        actions.luaStates.put("Minimap", "on");
+        openScreen();
+        selectInstalled("Minimap");
+        game.down.add(SecureScreen.KEY_A);
+        frame();
+        game.down.remove(SecureScreen.KEY_A);
+        assertTrue(game.drew("Switching off Minimap (Lua)..."), "the notice is the picture while the work runs");
+        assertTrue(game.drew("the game stands still"));
+        assertTrue(actions.deactivated.isEmpty(), "the work waits for the next frame");
+        game.down.add(SecureScreen.KEY_A);
+        frame(); // a second A meanwhile does nothing
+        game.down.remove(SecureScreen.KEY_A);
+        assertEquals(List.of("Minimap"), actions.deactivated);
+        frame();
+        frame();
+        assertEquals(List.of("Minimap"), actions.deactivated, "the second A was not taken");
+        assertEquals(null, screen.busyText());
+        assertTrue(screen.describe().contains("event handlers stopped"), screen.describe());
+    }
+
+    @Test
+    void aDownloadShowsItsProgressOnEveryTabAndWithTheScreenClosed() {
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        actions.workshop.progress.put(201L, new long[] {450, 1000});
+        frame();
+        assertTrue(game.drew("Downloading Lua Mod  45 %"), String.valueOf(game.drawn));
+        tap(SecureScreen.KEY_ESCAPE);
+        frame();
+        assertTrue(game.drew("Jumpstart: Downloading Lua Mod  45 %"), "a line at the top while it is closed");
     }
 
     @Test
@@ -554,7 +593,7 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_DOWN);
         tap(SecureScreen.KEY_ENTER);
         actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
-        frame();
+        frame(); settle();
     }
 
     @Test
@@ -574,7 +613,7 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_J);
         assertEquals(List.of(555L), actions.workshop.subscribed, "the required item first");
         actions.workshop.states.put(555L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
-        frame(); // 555 is in: its mods go on, then the item itself downloads
+        frame(); settle(); // 555 is in: its mods go on, then the item itself downloads
         frame();
         assertEquals(List.of(555L, 201L), actions.workshop.subscribed);
     }
@@ -704,7 +743,7 @@ class SecureScreenTest {
         assertTrue(actions.luaLoaded.isEmpty(), "nothing loads before Steam has it");
         actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
         now += 2500;
-        frame();
+        frame(); settle();
         assertEquals(List.of("server:LuaMod"), actions.luaLoaded, "its Lua joins the running game");
         assertEquals("ready {mod=LuaMod, sha=, token=T}", link.sent.get(link.sent.size() - 1));
     }
@@ -944,6 +983,14 @@ class SecureScreenTest {
         frame();
         game.down.remove(key);
         frame();
+        settle();
+    }
+
+    /** Frames until the work the screen announced ("Switching off ...") has run, as a player waits. */
+    private void settle() {
+        for (int i = 0; i < 6 && screen.busyText() != null; i++) {
+            frame();
+        }
     }
 
     /** Clicks the button (or tab, or row) whose label starts with {@code label}: down and up on it. */
@@ -959,6 +1006,7 @@ class SecureScreenTest {
         frame();
         game.mouseDown = false;
         frame();
+        settle();
     }
 
     private void type(String text) {
@@ -1291,7 +1339,9 @@ class SecureScreenTest {
     private static final class FakeWorkshop implements Workshop {
         final Map<Long, Long> states = new HashMap<>();
         final List<Long> subscribed = new ArrayList<>();
+        final Map<Long, long[]> progress = new HashMap<>();
 
+        @Override public long[] progress(long itemId) { return progress.get(itemId); }
         @Override public String unavailableReason() { return null; }
         @Override public long state(long itemId) { return states.getOrDefault(itemId, 0L); }
 

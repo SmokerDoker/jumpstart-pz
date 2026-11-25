@@ -25,6 +25,11 @@ interface Workshop {
         return subscribeAndDownload(itemId);
     }
 
+    /** Bytes downloaded and in total while Steam downloads the item ({downloaded, total}), else null. */
+    default long[] progress(long itemId) {
+        return null;
+    }
+
     /** The item's folder once it is installed, else null. */
     String installFolder(long itemId);
 }
