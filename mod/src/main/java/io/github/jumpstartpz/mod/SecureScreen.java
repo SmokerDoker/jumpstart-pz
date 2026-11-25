@@ -278,22 +278,111 @@ public final class SecureScreen {
 
     // --- one frame -----------------------------------------------------------------------------
 
+    // --- work that holds the game for a moment: shown first, done in the next frame ----------------
+
+    /** What is about to run (switching, loading, uninstalling...): drawn this frame, run in the next. */
+    private Runnable busyWork;
+    private String busyText;
+    /** The busy notice has been on screen for one frame: the work may run (the game stands still meanwhile). */
+    private boolean busyShown;
+
+    /**
+     * Runs {@code work} after the screen showed {@code text} for one frame. The work runs on the game's
+     * main thread and may hold the game for a moment; the last picture before that is the notice,
+     * not the old state. Keys and clicks wait meanwhile.
+     */
+    private void busy(String text, Runnable work) {
+        if (busyWork != null) {
+            return; // one at a time; the keys that would start another wait anyway
+        }
+        busyText = text;
+        busyWork = work;
+        busyShown = false;
+    }
+
+    String busyText() {
+        return busyText;
+    }
+
+    private void runBusyWork() {
+        if (busyWork == null || !busyShown) {
+            return;
+        }
+        Runnable work = busyWork;
+        busyWork = null;
+        busyText = null;
+        try {
+            work.run();
+        } catch (RuntimeException e) {
+            say(String.valueOf(e), false);
+        }
+    }
+
+    /** The notice in the middle of the screen, over everything. */
+    private void drawBusy(long now) {
+        if (busyText == null) {
+            return;
+        }
+        String wait = texts.get("busy.wait");
+        int w = Math.min(game.width() - 40, Math.max(game.textWidth(GameScreen.Font.LARGE, busyText),
+                game.textWidth(GameScreen.Font.SMALL, wait)) + 64);
+        int h = game.fontHeight(GameScreen.Font.LARGE) + game.fontHeight(GameScreen.Font.SMALL) + 40;
+        int x = (game.width() - w) / 2;
+        int y = (game.height() - h) / 2;
+        game.rect(0, 0, game.width(), game.height(), 0f, 0f, 0f, 0.35f);
+        game.rect(x, y, w, h, 0.09f, 0.11f, 0.14f, 0.98f);
+        game.rect(x, y, w, 4, 0.35f, 0.75f, 0.45f, 1f);
+        game.text(GameScreen.Font.LARGE, x + 32, y + 14, fit(GameScreen.Font.LARGE, busyText, w - 64), 1f, 1f, 1f, 1f);
+        game.text(GameScreen.Font.SMALL, x + 32, y + 22 + game.fontHeight(GameScreen.Font.LARGE),
+                fit(GameScreen.Font.SMALL, wait, w - 64), 0.7f, 0.7f, 0.7f, 1f);
+    }
+
+    /** "Downloading <title> 45 %  (2 more waiting)", or null when nothing downloads. */
+    String downloadStatus() {
+        Download d = download;
+        if (d == null) {
+            return null;
+        }
+        long[] p = actions.workshop().progress(d.item().id());
+        String percent = p != null && p[1] > 0 ? "  " + Math.min(100, p[0] * 100 / p[1]) + " %" : "";
+        String more = downloadQueue.isEmpty() ? "" : "  " + String.format(Locale.ROOT, texts.get("download.more"), downloadQueue.size());
+        return String.format(Locale.ROOT, texts.get("download.status"), d.item().title()) + percent + more;
+    }
+
+    /** With the screen closed: a small line at the top while a download runs. */
+    private void drawDownloadLine() {
+        String status = downloadStatus();
+        if (status == null) {
+            return;
+        }
+        String text = "Jumpstart: " + status;
+        int w = Math.min(game.width() - 40, game.textWidth(GameScreen.Font.SMALL, text) + 24);
+        int h = game.fontHeight(GameScreen.Font.SMALL) + 10;
+        int x = game.width() - w - 20;
+        game.rect(x, 12, w, h, 0.07f, 0.09f, 0.11f, 0.85f);
+        game.text(GameScreen.Font.SMALL, x + 12, 17, fit(GameScreen.Font.SMALL, text, w - 24), 0.75f, 0.95f, 0.8f, 1f);
+    }
+
     void frame(long now) {
         if (texts == null) {
             texts = new Texts(game.language());
         }
         frameTime = now;
         runMainThreadWork();
+        runBusyWork();
         followGuard(now);
         session.tick();
         Set<Integer> pressed = poll();
         if (mode != Mode.CLOSED) {
             pollMouse(pressed);
         }
-        if (download != null) {
+        if (busyWork != null) {
+            pressed.clear(); // something is about to run: no second action on top of it
+        }
+        if (download != null && busyWork == null) {
             followDownload(now);
         }
-        if (download == null && !downloadQueue.isEmpty() && (mode == Mode.LIST || mode == Mode.CLOSED)) {
+        if (download == null && busyWork == null && !downloadQueue.isEmpty() && (mode == Mode.LIST || mode == Mode.CLOSED)) {
             nextDownload(now); // the next required item (or the item itself) once the last one is in
         }
         if (session.update != null) {
@@ -324,6 +413,7 @@ public final class SecureScreen {
             listArea = null;
             detailArea = null;
             draw(now);
+            drawBusy(now);
             game.drawCursor(); // the game's cursor (if it draws one) on top of the screen
             lastHits = hits;
             lastListArea = listArea;
@@ -332,6 +422,11 @@ public final class SecureScreen {
             lastHits = List.of();
             mouseDown = false;
             pressedHit = null;
+            drawDownloadLine();
+            drawBusy(now); // work started with the screen closed (a download that came in) shows too
+        }
+        if (busyWork != null) {
+            busyShown = true; // on screen now: the next frame runs it
         }
     }
 
@@ -727,9 +822,12 @@ public final class SecureScreen {
                 return;
             }
             snapshotConfirm = -1;
-            String r = actions.restoreSnapshot(snapshotSelected);
-            say(r.startsWith("OK") ? String.format(texts.get("snapshot.restored"), label) : r, r.startsWith("OK"));
-            snapshotList = actions.snapshots();
+            int index = snapshotSelected;
+            busy(String.format(Locale.ROOT, texts.get("busy.restore"), label), () -> {
+                String r = actions.restoreSnapshot(index);
+                say(r.startsWith("OK") ? String.format(texts.get("snapshot.restored"), label) : r, r.startsWith("OK"));
+                snapshotList = actions.snapshots();
+            });
         }
     }
 
@@ -770,8 +868,11 @@ public final class SecureScreen {
             selected = Math.max(0, Math.min(mods.size() - 1, selected + 10));
         }
         if (pressed.contains(KEY_R)) {
-            say(actions.refreshIndex(), true);
-            checks.clear();
+            busy(texts.get("busy.index"), () -> {
+                say(actions.refreshIndex(), true);
+                checks.clear();
+            });
+            return;
         }
         Actions.InstalledMod mod = selectedMod();
         if (mod == null) {
@@ -795,19 +896,21 @@ public final class SecureScreen {
             return;
         }
         if (toggle) {
-            toggleWithDeps(mod, now);
+            String what = texts.get(switchesOff(mod) ? "busy.off" : "busy.on");
+            busy(String.format(Locale.ROOT, what, mod.name()), () -> toggleWithDeps(mod, frameTime));
             return;
         }
         if (mod.java() == null) {
             if (enter && switchesOff(mod)) {
                 toggleLua(mod, true); // running already: Enter only says so
             } else if (enter) {
-                toggleWithDeps(mod, now); // Enter on a Lua mod that is off switches it on, with what it needs
+                // Enter on a Lua mod that is off switches it on, with what it needs
+                busy(String.format(Locale.ROOT, texts.get("busy.on"), mod.name()), () -> toggleWithDeps(mod, frameTime));
             }
             return;
         }
         if (enter) {
-            start(mod.java(), now, false);
+            busy(String.format(Locale.ROOT, texts.get("busy.check"), mod.name()), () -> start(mod.java(), frameTime, false));
         }
     }
 
@@ -1093,7 +1196,11 @@ public final class SecureScreen {
         }
         depQuestion = null;
         mode = Mode.LIST;
-        (yes ? q.yes() : q.no()).run(); // may ask the next question
+        if (yes) {
+            busy(texts.get("busy.switching"), q.yes()); // may ask the next question
+        } else {
+            q.no().run();
+        }
     }
 
     private void drawDepQuestion(int x, int y, int width, int bottom) {
@@ -1166,6 +1273,10 @@ public final class SecureScreen {
         Actions.InstalledMod mod = uninstalling;
         uninstalling = null;
         mode = Mode.LIST;
+        busy(String.format(Locale.ROOT, texts.get("busy.uninstall"), mod.name()), () -> uninstallNow(mod));
+    }
+
+    private void uninstallNow(Actions.InstalledMod mod) {
         String result = actions.uninstall(mod.id());
         if (result.startsWith("OK workshop")) {
             say(String.format(Locale.ROOT, texts.get("uninstalled.workshop"), mod.name()) + result.substring("OK workshop".length()).replaceFirst("^ \\d+", ""), true);
@@ -1264,6 +1375,10 @@ public final class SecureScreen {
         Pending p = pending;
         pending = null;
         mode = Mode.LIST;
+        busy(String.format(Locale.ROOT, texts.get(p.update() ? "busy.update" : "busy.load"), p.mod().name()), () -> runNow(p, consent));
+    }
+
+    private void runNow(Pending p, BiteCheckGate.Consent consent) {
         String shownHash = p.check().sha256();
         LiveInstaller.ConsentSource answer = check -> check.sha256().equals(shownHash) ? consent : null;
         LiveInstaller.Outcome outcome = p.update() ? actions.update(p.mod(), answer) : actions.install(p.mod(), answer);
@@ -1509,6 +1624,11 @@ public final class SecureScreen {
             return;
         }
         download = null;
+        busy(String.format(Locale.ROOT, texts.get("busy.install"), d.item().title()), () -> installDownloaded(d, frameTime));
+    }
+
+    /** Steam has the item: its mods join the mod list and load (a Java mod through BiteCheck's check). */
+    private void installDownloaded(Download d, long now) {
         String folder = actions.workshop().installFolder(d.item().id());
         List<Actions.FolderMod> found = folder == null ? List.of() : actions.modsInFolder(folder);
         if (found.isEmpty()) {
@@ -1972,6 +2092,11 @@ public final class SecureScreen {
         y = drawTabs(x, y);
         game.text(GameScreen.Font.SMALL, x, bottom - small, texts.get("help." + tab.name()), 0.7f, 0.7f, 0.7f, 1f);
         int contentBottom = bottom - small - 12;
+        String downloading = downloadStatus();
+        if (downloading != null) { // on every tab: what Steam is downloading for Jumpstart right now
+            contentBottom -= small + 6;
+            game.text(GameScreen.Font.SMALL, x, contentBottom + 6, fit(GameScreen.Font.SMALL, downloading, width), 0.6f, 1f, 0.7f, 1f);
+        }
         if (!message.isEmpty()) {
             int lines = Math.min(3, game.textWidth(GameScreen.Font.SMALL, message) / Math.max(1, width) + 1);
             contentBottom -= lines * (small + 2) + 6;
@@ -2409,6 +2534,9 @@ public final class SecureScreen {
         }
         if (pending != null) {
             sb.append(" asking=").append(pending.check().verdict());
+        }
+        if (busyText != null) {
+            sb.append(" busy=").append(busyText);
         }
         if (download != null) {
             sb.append(" downloading=").append(download.item().id());
