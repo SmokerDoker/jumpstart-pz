@@ -69,8 +69,8 @@ class UpdaterTest {
     private static byte[] payloadZip() throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
-            for (String[] e : new String[][] {{"VERSION", "0.2.0\n"}, {"mods/Jumpstart/42/mod.info", "id=Jumpstart\n"},
-                    {"mods/ZombieBuddy/42/mod.info", "id=ZombieBuddy\n"}, {"mods/ZombieBuddy/libs/ZombieBuddy.jar", "jar"}}) {
+            for (String[] e : new String[][] {{"VERSION", "0.2.0\n"}, {"Jumpstart.jar", "jar"},
+                    {"mods/ZombieBuddy/42/mod.info", "id=ZombieBuddy\n"}}) {
                 zip.putNextEntry(new ZipEntry(e[0]));
                 zip.write(e[1].getBytes(StandardCharsets.UTF_8));
                 zip.closeEntry();
@@ -113,7 +113,7 @@ class UpdaterTest {
         assertEquals("2026-11-24", r.builtDay().toString());
         Payload p = updater().payload(r);
         assertEquals("0.2.0", p.version());
-        assertTrue(Files.isRegularFile(p.zombieBuddyJar()));
+        assertTrue(Files.isRegularFile(p.jumpstartJar()));
     }
 
     @Test

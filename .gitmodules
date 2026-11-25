@@ -1,3 +1,7 @@
 [submodule "third_party/bitecheck-pz"]
 	path = third_party/bitecheck-pz
 	url = https://github.com/SmokerDoker/bitecheck-pz
+[submodule "third_party/zombiebuddy-jumpstart"]
+	path = third_party/zombiebuddy-jumpstart
+	url = https://github.com/SmokerDoker/zombiebuddy-jumpstart.git
+	branch = jumpstart/hotswap

@@ -20,7 +20,8 @@ key.
    (`Zomboid/jumpstart-update.log` says why).
 3. Servers: `JumpstartSetup.jar --server … --update` in `ExecStartPre` does the same (see SERVER.md).
 
-What updates: the ZombieBuddy fork (agent jar and mod folder), the Jumpstart mod, and the installer
+What updates: Jumpstart.jar (the agent: the ZombieBuddy fork with Jumpstart inside), the fork's mod
+folder, and the installer
 itself: the release's `JumpstartSetup.jar` (SHA-256 from the signed manifest) goes to
 `~/.jumpstart/versions/`, and every start, of the wrapper and of the installed app, hands over to the
 newest one there (checked again before use). Only the Java runtime inside the installed app stays as

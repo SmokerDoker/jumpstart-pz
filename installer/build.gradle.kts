@@ -1,12 +1,15 @@
 // Jumpstart's installer: a small window with one button (or --install on the command line) that puts
-// the ZombieBuddy fork and the Jumpstart mod in place. kit/package-installer.sh turns
-// JumpstartSetup.jar into native installers (.msi, .dmg, .deb, .rpm) with their own Java runtime.
+// Jumpstart.jar (the ZombieBuddy fork with Jumpstart inside) and the fork's mod folder in place.
+// kit/package-installer.sh turns JumpstartSetup.jar into native installers (.msi, .dmg, .deb, .rpm)
+// with their own Java runtime.
 //
-//   ./gradlew :installer:installerJar -PzombieBuddyMod=<folder from kit/zombiebuddy-mod.sh> [-PkitVersion=...]
+//   ./gradlew :installer:installerJar -PforkJar=<the fork's shadowJar> //       -PzombieBuddyMod=<folder from kit/zombiebuddy-mod.sh> [-PkitVersion=...]
 
 plugins {
     application
 }
+
+evaluationDependsOn(":mod") // the payload takes Jumpstart.jar from :mod:agentJar
 
 val junitVersion = "6.1.3"
 
@@ -41,22 +44,24 @@ val payloadVersion by tasks.registering {
     doLast { out.get().asFile.writeText(kitVersion.get() + "\n") }
 }
 
-// What the installer puts in place: mods/ZombieBuddy (the fork, libs/ZombieBuddy.jar is the agent),
-// mods/Jumpstart, VERSION.
+// What the installer puts in place: Jumpstart.jar (the agent: the fork with Jumpstart inside, from
+// :mod:agentJar), mods/ZombieBuddy (the fork's Lua, no jar), VERSION.
 val payloadZip by tasks.registering(Zip::class) {
     group = "build"
-    description = "Packs the ZombieBuddy fork and the Jumpstart mod for the installer."
+    description = "Packs Jumpstart.jar and the fork's mod folder for the installer."
     archiveFileName.set("payload.zip")
     destinationDirectory.set(layout.buildDirectory.dir("payload"))
-    dependsOn(":mod:modFolder")
+    from(project(":mod").tasks.named("agentJar"))
     from({ zombieBuddyMod.orNull?.let { file(it) } ?: emptyList<File>() }) { into("mods/ZombieBuddy") }
-    from(rootProject.file("mod/build/mod/Jumpstart")) { into("mods/Jumpstart") }
     from(payloadVersion)
     doFirst {
         val dir = zombieBuddyMod.orNull?.let { file(it) }
             ?: throw GradleException("-PzombieBuddyMod=<folder> is missing (build it with kit/zombiebuddy-mod.sh)")
-        if (!dir.resolve("libs/ZombieBuddy.jar").isFile || !dir.resolve("42/mod.info").isFile) {
-            throw GradleException("$dir is not the fork's ZombieBuddy mod folder (libs/ZombieBuddy.jar, 42/mod.info)")
+        if (!dir.resolve("42/mod.info").isFile || !dir.resolve("jumpstart-fork.txt").isFile) {
+            throw GradleException("$dir is not the fork's ZombieBuddy mod folder (42/mod.info, jumpstart-fork.txt)")
+        }
+        if (dir.resolve("libs/ZombieBuddy.jar").exists() || dir.resolve("42/mod.info").readText().contains("javaJarFile")) {
+            throw GradleException("$dir still has a jar; Jumpstart.jar is the only one (kit/zombiebuddy-mod.sh)")
         }
     }
 }

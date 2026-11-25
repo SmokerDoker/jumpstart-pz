@@ -128,7 +128,7 @@ final class Updater {
         return file;
     }
 
-    /** Downloads and unpacks the release's payload (ZombieBuddy fork and Jumpstart mod). */
+    /** Downloads and unpacks the release's payload (Jumpstart.jar and the fork's mod folder). */
     Payload payload(Release r) throws IOException {
         Path dir = Files.createTempDirectory("jumpstart-update");
         Runtime.getRuntime().addShutdownHook(new Thread(() -> Payload.deleteQuietly(dir)));

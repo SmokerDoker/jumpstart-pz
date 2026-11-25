@@ -204,8 +204,7 @@ final class InstallerWindow {
             stateValue.setForeground(GREEN);
         } else if (s.anything()) {
             StringBuilder missing = new StringBuilder();
-            addIf(missing, !s.forkJar(), t.get("part.jar"));
-            addIf(missing, !s.jumpstartMod(), t.get("part.mod"));
+            addIf(missing, !s.jumpstartJar(), t.get("part.jar"));
             addIf(missing, !s.zombieBuddyMod(), t.get("part.zbmod"));
             addIf(missing, !s.launchReady(), t.get("part.launch"));
             stateValue.setText(t.get("state.incomplete", missing));
@@ -294,7 +293,7 @@ final class InstallerWindow {
             return;
         }
         busy();
-        // launch options first: they decide whether ZombieBuddy.jar may go
+        // launch options first: they decide whether Jumpstart.jar may go
         background(() -> setup.launchOptions(false), r -> launchStep(false, r, () -> background(() -> {
             setup.uninstallFiles();
             if (!setup.status().autoUpdate()) {
