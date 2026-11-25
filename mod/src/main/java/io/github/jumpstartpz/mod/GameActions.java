@@ -512,6 +512,14 @@ final class GameActions implements Actions {
             return LuaLive.Result.of(LuaLive.Status.RESUMED);
         }
         String dir = downloadedModDirs.get(modId);
+        if (luaGame.inGame() && !luaGame.multiplayer() && !luaGame.isActive(modId)) {
+            // tables kept aside when it was uninstalled come back first: its OnInitGlobalModData
+            // handler then finds them instead of making new ones
+            int back = ModDataJournal.restore(modId);
+            if (back > 0) {
+                System.out.println("[Jumpstart] " + modId + ": " + back + " ModData tables back in the save");
+            }
+        }
         LuaLive.Result result = LuaLive.load(luaGame, modId, dir, forServer);
         if (result.status() == LuaLive.Status.LOADED) {
             journals.computeIfAbsent(modId, k -> new ModJournal()).changes = result.changes();
@@ -583,7 +591,15 @@ final class GameActions implements Actions {
         if (forgot != null && !forgot.startsWith("OK")) {
             System.out.println("[Jumpstart] ZombieBuddy could not forget " + modId + ": " + forgot);
         }
+        List<String> dirs = luaGame.modDirs(modId); // before the folder goes
         unloadLua(modId);
+        // what the mod left outside its folder: its ModData tables leave the save (back on reinstall),
+        // files it created go to the archive; files that existed before stay where they are
+        int tables = luaGame.inGame() && !luaGame.multiplayer() ? ModDataJournal.stash(modId, dirs) : 0;
+        int files = FileJournal.archive(modId, dirs);
+        if (tables + files > 0) {
+            System.out.println("[Jumpstart] " + modId + ": " + tables + " ModData tables kept aside, " + files + " files archived");
+        }
         String problem = setActive(modId, false);
         if (problem != null) {
             return problem;

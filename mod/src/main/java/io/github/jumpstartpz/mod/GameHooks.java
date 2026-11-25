@@ -49,6 +49,8 @@ final class GameHooks {
      */
     static void install(Instrumentation instrumentation) {
         checkVisible(SecureScreen.class);
+        checkVisible(FileJournal.class);
+        checkVisible(ModDataJournal.class);
         run(instrumentation, new AgentBuilder.Default()
                 .disableClassFormatChanges()
                 .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -69,7 +71,43 @@ final class GameHooks {
                                 .method(named("setXY").and(takesArguments(2)), GameHooks::returnWhileBlocked)))
                 .type(named("zombie.network.GameClient")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
-                                .method(named("receiveClientCommand"), (t, m, mv, c, p, w, r) -> redirect(mv, TRIGGER3, "clientEvent")))));
+                                .method(named("receiveClientCommand"), (t, m, mv, c, p, w, r) -> redirect(mv, TRIGGER3, "clientEvent"))))
+                // clean removal: which mod's Lua writes which file, and makes which ModData table
+                .type(named("zombie.Lua.LuaManager$GlobalObject")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("getFileWriter").and(takesArguments(3)),
+                                        (t, m, mv, c, p, w, r) -> callOnEntry(mv, FILES, "onFileWriter", "(Ljava/lang/String;)V", 0))
+                                .method(named("getModFileWriter").and(takesArguments(4)),
+                                        (t, m, mv, c, p, w, r) -> callOnEntry(mv, FILES, "onModFileWriter",
+                                                "(Ljava/lang/String;Ljava/lang/String;)V", 0, 1))))
+                .type(named("zombie.world.moddata.GlobalModData")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("getOrCreate").and(takesArguments(String.class))
+                                                .or(named("create").and(takesArguments(String.class)))
+                                                .or(named("add").and(takesArguments(2))),
+                                        (t, m, mv, c, p, w, r) -> callOnEntry(mv, MODDATA, "onKey", "(Ljava/lang/String;)V", 1)))));
+    }
+
+    private static final String FILES = "io/github/jumpstartpz/mod/FileJournal";
+    private static final String MODDATA = "io/github/jumpstartpz/mod/ModDataJournal";
+
+    /** At the method's start: target(the given reference arguments). No jump, so no new stack map frame. */
+    private static MethodVisitor callOnEntry(MethodVisitor mv, String owner, String name, String descriptor, int... slots) {
+        return new MethodVisitor(Opcodes.ASM9, mv) {
+            @Override
+            public void visitCode() {
+                super.visitCode();
+                for (int slot : slots) {
+                    super.visitVarInsn(Opcodes.ALOAD, slot);
+                }
+                super.visitMethodInsn(Opcodes.INVOKESTATIC, owner, name, descriptor, false);
+            }
+
+            @Override
+            public void visitMaxs(int maxStack, int maxLocals) {
+                super.visitMaxs(Math.max(maxStack, slots.length), maxLocals);
+            }
+        };
     }
 
     /**
