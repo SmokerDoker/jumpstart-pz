@@ -132,12 +132,75 @@ class LiveInstallerTest {
     }
 
     @Test
-    void aPlayerWhoSaysNoGetsNothingLoadedOrApproved() throws Exception {
+    void aPlayerWhoSaysNoGetsNothingLoadedAndTheLauncherKeepsItOff() throws Exception {
         LiveInstaller.Outcome outcome = installer(GENERATED).install(cleanJar, "pkg", "CleanMod", null,
                 (LiveInstaller.ConsentSource) check -> null);
         assertEquals(LiveInstaller.Kind.DECLINED, outcome.kind());
         assertTrue(backend.calls.isEmpty());
-        assertFalse(Files.exists(zombieBuddyDir.resolve("mod_approvals.json")), "nothing recorded");
+        String sha = Hashing.sha256Hex(cleanJar);
+        assertEquals(Boolean.FALSE, ZombieBuddyApprovals.load(zombieBuddyDir).decision(sha));
+        LauncherState state = LauncherState.load(biteCheckDir.resolve("state.toml"));
+        assertTrue(state.refused().containsKey(sha), "the launcher does not ask again");
+        assertFalse(state.allowedAnyway().containsKey(sha));
+
+        // installing it again in game asks again, and a yes replaces the no
+        LiveInstaller.Outcome again = installer(GENERATED).install(cleanJar, "pkg", "CleanMod", null, Consent.CONFIRMED);
+        assertEquals(LiveInstaller.Kind.DONE, again.kind(), again.message());
+        state = LauncherState.load(biteCheckDir.resolve("state.toml"));
+        assertFalse(state.refused().containsKey(sha));
+        assertTrue(state.allowedAnyway().containsKey(sha));
+    }
+
+    @Test
+    void anUnverifiedJarAllowedInGameIsNotAskedAboutAgainByTheLauncher() throws Exception {
+        LiveInstaller.Outcome done = installer(GENERATED).install(cleanJar, "pkg", "CleanMod", null, Consent.CONFIRMED);
+        assertEquals(LiveInstaller.Kind.DONE, done.kind(), done.message());
+        LauncherState state = LauncherState.load(biteCheckDir.resolve("state.toml"));
+        assertFalse(state.tampered());
+        assertTrue(state.allowedAnyway().containsKey(Hashing.sha256Hex(cleanJar)),
+                "the launcher reads allowed_anyway, not mod_approvals.json");
+    }
+
+    @Test
+    void modApprovalsAloneDoNotAllowAJar() throws Exception {
+        // any mod can write mod_approvals.json; BiteCheck does not trust it, so the gate does not either
+        ZombieBuddyApprovals approvals = ZombieBuddyApprovals.load(zombieBuddyDir);
+        approvals.set("CleanMod", null, Hashing.sha256Hex(cleanJar), true);
+        approvals.save();
+        LiveInstaller.Outcome outcome = installer(GENERATED).install(cleanJar, "pkg", "CleanMod", null, Consent.NONE);
+        assertEquals(LiveInstaller.Kind.NEEDS_CONFIRMATION, outcome.kind(), outcome.message());
+    }
+
+    @Test
+    void keepsTheLaunchersAnswersAndItsCheckValue() throws Exception {
+        // answers the launcher saved before the game started
+        String refusedSha = "a".repeat(64);
+        LauncherState before = LauncherState.load(biteCheckDir.resolve("state.toml"));
+        before.refused().put(refusedSha, "OtherMod - not allowed by the player");
+        before.trusted().put("OtherMod/other.jar",
+                new LauncherState.Trusted("OtherMod/other.jar", "b".repeat(64), "1.0", null));
+        before.save();
+
+        installer(GENERATED).install(cleanJar, "pkg", "CleanMod", null, Consent.CONFIRMED);
+
+        LauncherState after = LauncherState.load(biteCheckDir.resolve("state.toml"));
+        assertFalse(after.tampered(), "Jumpstart's save carries BiteCheck's check value");
+        assertTrue(after.refused().containsKey(refusedSha));
+        assertTrue(after.trusted().containsKey("OtherMod/other.jar"));
+        assertTrue(after.allowedAnyway().containsKey(Hashing.sha256Hex(cleanJar)));
+    }
+
+    @Test
+    void doesNotHideAnswersChangedOutsideBiteCheck() throws Exception {
+        LauncherState launcher = LauncherState.load(biteCheckDir.resolve("state.toml"));
+        launcher.refused().put("a".repeat(64), "OtherMod - not allowed by the player");
+        launcher.save();
+        Path file = biteCheckDir.resolve("state.toml");
+        Files.writeString(file, Files.readString(file).replace("not allowed", "edited"));
+
+        installer(GENERATED).gate().check(verifiedJar); // fetches the index, as in game
+
+        assertTrue(LauncherState.load(file).tampered(), "the launcher can still warn about it");
     }
 
     @Test

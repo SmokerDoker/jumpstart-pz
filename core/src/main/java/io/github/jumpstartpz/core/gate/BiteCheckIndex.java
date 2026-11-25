@@ -63,7 +63,11 @@ public final class BiteCheckIndex implements IndexSource {
             IndexClient.Outcome outcome = client.fetch(clock.get());
             notes.addAll(outcome.notes());
             index = outcome.index();
-            state.save(); // keeps the rollback protection shared with the launcher
+            // Keeps the rollback protection shared with the launcher. Not if the saved answers were
+            // changed outside BiteCheck: saving would hide that, and the launcher warns about it.
+            if (!state.tampered()) {
+                state.save();
+            }
         } catch (IOException e) {
             notes.add("BiteCheck index not available: " + e.getMessage());
             index = Optional.empty();
