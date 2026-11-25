@@ -24,6 +24,16 @@ public final class Main {
     private Main() {
     }
 
+    /** The game's data folder (Zomboid, or what -cachedir says). */
+    static java.nio.file.Path cacheDir() {
+        try {
+            Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+            return java.nio.file.Path.of((String) fs.getClass().getMethod("getCacheDir").invoke(fs));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return java.nio.file.Path.of(System.getProperty("user.home"), "Zomboid");
+        }
+    }
+
     public static void main(String[] args) {
         ZombieBuddyFork zombieBuddy = ZombieBuddyFork.current();
         LiveInstaller installer = LiveInstaller.forGame();
@@ -87,6 +97,8 @@ public final class Main {
             if (patched) {
                 return; // main() ran again (Lua reloaded); the game is patched already
             }
+            FileJournal.setRoot(cacheDir().resolve("jumpstart"));
+            GameActions.removeLeftovers(); // folders of mods uninstalled while the game held them
             GameHooks.install(instrumentation());
             patched = true;
             System.out.println("[Jumpstart] secure screen ready: Ctrl+Shift+J"

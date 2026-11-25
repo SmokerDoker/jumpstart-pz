@@ -63,6 +63,82 @@ class SecureScreenTest {
     }
 
     @Test
+    void crashProtectionShowsABannerStopsTheLuaAndMarksTheMod() {
+        frame();
+        assertEquals(1, actions.guardPolls, "one cheap poll per frame");
+        assertEquals(0, actions.guardFetches, "nothing to fetch without events");
+
+        // a mod loaded with the save threw before Jumpstart's first frame: still reported
+        actions.guardEvents.add("1\tUnknown\tadvice\tUIManager.render\tjava.lang.NullPointerException: x\tlogged");
+        actions.guardEvents.add("2\tUnknown\tadvice\tUIManager.render\tjava.lang.NullPointerException: x\toff");
+        actions.guardStatus.put("Unknown", "2\toff-by-guard");
+        actions.states.put("Unknown", "off");
+        frame();
+        assertEquals(1, actions.guardFetches);
+        assertTrue(game.drew("Unknown caused an error (NullPointerException in UIManager.render) and was switched off. Ctrl+Shift+J: details"));
+        assertEquals(List.of("Unknown"), actions.unloaded, "its Lua side stops too");
+        assertTrue(screen.describe().contains("banner=Unknown caused an error"), screen.describe());
+
+        frame();
+        assertEquals(1, actions.guardFetches, "the same events are not fetched again");
+
+        openScreen();
+        assertTrue(game.drew("off (crash protection, 2 errors)"), "the list says why it is off");
+
+        now += SecureScreen.BANNER_MS + 1;
+        frame();
+        assertFalse(screen.describe().contains("banner="), "the banner goes after a few seconds");
+    }
+
+    @Test
+    void aModThatFailedToStartIsReportedButNotStoppedAgain() {
+        actions.guardEvents.add("1\tShady\tmain\tShady.Main.main\tjava.lang.IllegalStateException\trefused");
+        frame();
+        assertTrue(game.drew("Shady failed to start (IllegalStateException) and was not loaded. Ctrl+Shift+J: details"));
+        assertTrue(actions.unloaded.isEmpty());
+    }
+
+    @Test
+    void withoutAGuardNothingIsShown() {
+        actions.noGuard = true; // an older fork
+        frame();
+        assertEquals(0, actions.guardFetches);
+        assertFalse(screen.describe().contains("banner="));
+    }
+
+    @Test
+    void whileTheSaveIsCopiedNothingSwitchesAndTheScreenStaysOpen() {
+        openScreen();
+        actions.snapshotState = "running";
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_ESCAPE);
+        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "Esc waits: closing would let the game write its save");
+        assertTrue(actions.calls.isEmpty(), "nothing was loaded or switched: " + actions.calls);
+        assertTrue(game.drew("Your save is being copied first (a snapshot). One moment, then try again."));
+        actions.snapshotState = "done";
+        frame();
+        assertTrue(game.drew("A snapshot of your save was made. To go back to it: main menu, Jumpstart, tab Snapshots."));
+        tap(SecureScreen.KEY_ESCAPE);
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode());
+    }
+
+    @Test
+    void theMainMenuRestoresASnapshotOnlyAfterASecondEnter() {
+        actions.snapshotLabels.add("Sandbox/My save   2026-11-25 10:00:00");
+        actions.snapshotLabels.add("Sandbox/My save   2026-11-24 09:00:00");
+        openScreen();
+        for (int i = 0; i < 4 && screen.tab() != SecureScreen.Tab.SNAPSHOTS; i++) {
+            tap(SecureScreen.KEY_TAB);
+        }
+        assertEquals(SecureScreen.Tab.SNAPSHOTS, screen.tab(), "offered in the main menu");
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        assertTrue(actions.restored.isEmpty(), "the first Enter only asks");
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals(List.of(1), actions.restored);
+    }
+
+    @Test
     void keyPressesFromLuaAreRefusedOutsideTests() {
         assertFalse(screen.inject(SecureScreen.OPEN));
         frame();
@@ -840,6 +916,49 @@ class SecureScreenTest {
         final List<String> uninstalled = new ArrayList<>();
         final Map<String, Details> details = new HashMap<>();
         Details page = Details.NONE;
+        /** The fork's guard: events (one line each) and status per mod; null lastSeq = no guard. */
+        final List<String> guardEvents = new ArrayList<>();
+        final Map<String, String> guardStatus = new HashMap<>();
+        int guardPolls;
+        int guardFetches;
+        boolean noGuard;
+        String snapshotState;
+        final List<String> snapshotLabels = new ArrayList<>();
+        final List<Integer> restored = new ArrayList<>();
+
+        @Override
+        public String snapshotState() {
+            return snapshotState;
+        }
+
+        @Override
+        public List<String> snapshots() {
+            return List.copyOf(snapshotLabels);
+        }
+
+        @Override
+        public String restoreSnapshot(int index) {
+            restored.add(index);
+            return "OK";
+        }
+
+        @Override
+        public String guardLastSeq() {
+            guardPolls++;
+            return noGuard ? null : Integer.toString(guardEvents.size());
+        }
+
+        @Override
+        public String guardEvents(String sinceSeq) {
+            guardFetches++;
+            int since = Integer.parseInt(sinceSeq);
+            return String.join("\n", guardEvents.subList(Math.min(since, guardEvents.size()), guardEvents.size()));
+        }
+
+        @Override
+        public String guardStatus(String modId) {
+            return guardStatus.getOrDefault(modId, "");
+        }
 
         @Override
         public Details details(String modId) {

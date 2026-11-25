@@ -67,6 +67,15 @@ interface Actions {
     /** Stops a running mod's Lua: takes its event handlers away (kept for {@link #loadLua}); returns how many. */
     int unloadLua(String modId);
 
+    /**
+     * What stayed of a mod's Lua after the last {@link #unloadLua}: "" if nothing,
+     * "kept:N:a, b" (changed again by another mod since) or "start:N:a, b" (it came with the save,
+     * so its functions could only be named).
+     */
+    default String luaLeftovers(String modId) {
+        return "";
+    }
+
     /** {@link #loadLua} in a multiplayer round the server started (install for everybody). */
     LuaLive.Result loadLuaForServer(String modId);
 
@@ -106,6 +115,47 @@ interface Actions {
      */
     default Details workshopDetails(long workshopId) {
         return Details.NONE;
+    }
+
+    // --- crash protection (the ZombieBuddy fork's guard) ---
+
+    /** The newest guard event's number, "0" if none; null when this ZombieBuddy has no guard. Cheap. */
+    default String guardLastSeq() {
+        return null;
+    }
+
+    /** Guard events after {@code sinceSeq}, one per line: seq, mod id, kind, where, exception, action (tabs). */
+    default String guardEvents(String sinceSeq) {
+        return "";
+    }
+
+    /** "count TAB state" (ok, off-by-guard, probation), or "" when the mod had no error. */
+    default String guardStatus(String modId) {
+        return "";
+    }
+
+    // --- save snapshots (single player) ---
+
+    /**
+     * Before the first switch: saves the game and copies the save in the background (see
+     * {@link SaveSnapshots}). Does nothing outside a single player game or when snapshots are off.
+     */
+    default void beginSnapshot() {
+    }
+
+    /** null (none running or wanted), "running", "done", "skipped" or "failed reason". */
+    default String snapshotState() {
+        return null;
+    }
+
+    /** The snapshots there are, newest first, as the player reads them. Main menu. */
+    default List<String> snapshots() {
+        return List.of();
+    }
+
+    /** Restores snapshot {@code index} of {@link #snapshots()}; main menu only. "OK text" or what went wrong. */
+    default String restoreSnapshot(int index) {
+        return "not available";
     }
 
     // --- voluntary sharing (BiteCheck's UsageSharing) ---

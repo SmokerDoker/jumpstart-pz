@@ -30,6 +30,9 @@ param(
     # The player jar has no Lua server.
     [string]$AgentJar = (Join-Path $PSScriptRoot "..\mod\build\agent\Jumpstart.jar"),
     [string]$TestDir = "$env:USERPROFILE\Zomboid-jumpstart-gate-test",
+    # the fork's crash test mod folder (mod id ZBCrashTest, Lua global zbCrashArm() makes its patch throw);
+    # empty: the crash protection part is skipped
+    [string]$CrashMod = "",
     [switch]$KeepRunning
 )
 $ErrorActionPreference = "Stop"
@@ -93,8 +96,18 @@ $changed = "$changedMod\42\media\java\client\ZBHelloWorld.jar"
 
 # no mod active at start; Jumpstart.jar is the agent, so it needs no approval
 $modsTxt = "VERSION = 1,`r`n`r`nmods`r`n{`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n"
+$approvals = '{"formatVersion": 2, "mods": []}'
+if ($CrashMod) {
+    # the crash test mod loads with the game (crash protection must also cover mods loaded at start)
+    if (Test-Path "$t\mods\ZBCrashTest") { Remove-Item "$t\mods\ZBCrashTest" -Recurse -Force }
+    Copy-Item (Resolve-Path $CrashMod) "$t\mods\ZBCrashTest" -Recurse
+    $modsTxt = "VERSION = 1,`r`n`r`nmods`r`n{`r`n    mod = ZBCrashTest,`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n"
+    $entries = Get-ChildItem "$t\mods\ZBCrashTest" -Recurse -Filter *.jar | ForEach-Object {
+        '{"id": "ZBCrashTest", "jar_hash": "' + (Sha $_.FullName) + '", "decision": true}' }
+    $approvals = '{"formatVersion": 2, "mods": [' + ($entries -join ',') + ']}'
+}
 [IO.File]::WriteAllText("$t\mods\default.txt", $modsTxt)
-[IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", '{"formatVersion": 2, "mods": []}')
+[IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", $approvals)
 
 $agent = "-javaagent:$t\Jumpstart.jar=hotswap=true,hotswap_lua=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
 $start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true -Djumpstart.cloudUrl=http://localhost:8787 -Djava.awt.headless=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -Dzomboid.znetlog=1 -XX:-CreateCoredumpOnCrash -XX:-OmitStackTraceInFastThrow -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
@@ -232,6 +245,21 @@ Check "game still running" "" ([bool](GameProcess))
 $hooked = Select-String -Path "$t\game-out.txt" -Pattern 'hooks in zombie.input.Mouse' -Quiet
 $refused = Select-String -Path "$t\game-out.txt" -Pattern 'VerifyError|could not patch zombie.input.Mouse' -Quiet
 Check "Mouse.setXY is blocked while the screen is open" "" ($hooked -and -not $refused)
+
+# --- crash protection: a mod loaded at start throws in its render patch ---------------------------
+if ($CrashMod) {
+    $r = Lua "return tostring(zbCrashArm ~= nil)"
+    Check "the crash test mod loaded with the game" $r ($r -eq "true")
+    Lua "zbCrashArm(3) return 1" | Out-Null # throws in every main menu frame for 3 s
+    Start-Sleep 4
+    $r = Lua "return 'pong'"
+    Check "the game survives the throwing patch" $r ($r -eq "pong")
+    $r = Screen
+    Check "a banner names the mod" $r ($r -like "*banner=ZBCrashTest *")
+    $r = Lua "return Jumpstart.stateOf('ZBCrashTest')"
+    Check "the crash protection switched it off" $r ($r -eq "off")
+    Check "game still running after the crash test" "" ([bool](GameProcess))
+}
 
 Log "Jumpstart log lines:"
 Select-String -Path "$t\game-out.txt" -Pattern 'Jumpstart|hotswap:' | ForEach-Object { Log ("  " + $_.Line) }

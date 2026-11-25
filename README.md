@@ -96,6 +96,23 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
 - [x] **One jar:** `Jumpstart.jar` is the game's only Java agent: the ZombieBuddy fork with Jumpstart
   and its BiteCheck classes built in (the fork loads Jumpstart from the jar's `embedded-mod/` entries,
   plain classes BiteCheck scans like any other). BiteCheck asks about this one jar
+- [x] **Crash protection** (roadmap 2): the fork catches what a mod's patch throws, so the game keeps
+  running, and switches the mod off after repeated errors (at once right after a live load). Jumpstart
+  shows a banner with the mod and the error, stops the mod's Lua side too and marks it in the list
+  ("off (crash protection)"); also for mods loaded with the save
+- [x] **Clean removal** (roadmap 2): switching a mod's Lua off takes back what it changed in Lua's
+  globals (new globals, replaced functions; a function another mod wrapped since stays and is named),
+  parks its event handlers and closes windows of its own classes; switching it on puts it all back.
+  Uninstalling archives the files it created (`Zomboid/jumpstart/archive/`) and takes the ModData
+  tables it created and nobody else used out of the save (back on reinstall). For a mod that came with
+  the save its functions can only be named
+- [x] **Save snapshots** (roadmap 2, single player): before switching, Jumpstart saves the game and
+  zips the save (`Zomboid/jumpstart/snapshots/`, the newest 5 per save); the main menu's
+  *Snapshots* tab restores one. `snapshots=auto|on|off` in `Zomboid/jumpstart/settings.properties`
+  (auto skips saves of 500 MB or more). In-game tests: `tools\gametest.ps1 -CrashMod ...`,
+  `tools\cleanremovaltest.ps1`
+- [ ] Roadmap 2, still open: values a mod's Java code wrote into game classes (fork side), in-process
+  restart for *reload* mods
 - [x] The cloud Worker runs at <https://jumpstart-cloud.smokerdoker.workers.dev> (D1 database in
   Western Europe) and is the default for Jumpstart and BiteCheck (`cloud_url` overrides it)
 

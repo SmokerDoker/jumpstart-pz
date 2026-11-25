@@ -140,6 +140,120 @@ final class ReflectiveLuaGame implements LuaLive.Game {
         Class.forName("zombie.core.Translator").getMethod("loadFiles").invoke(null);
     }
 
+    // --- Lua's globals (LuaJournal) ------------------------------------------------------------------
+
+    private static final String TABLE = "se.krka.kahlua.vm.KahluaTable";
+
+    @Override
+    public Object globalTable() {
+        try {
+            return Class.forName("zombie.Lua.LuaManager").getField("env").get(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    @Override
+    public boolean isTable(Object value) {
+        try {
+            return value != null && Class.forName(TABLE).isInstance(value);
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public Map<Object, Object> entries(Object table) {
+        if (!isTable(table)) {
+            return Map.of();
+        }
+        try {
+            // KahluaTableImpl keeps its entries in a public map: one copy, no Lua iteration
+            Object delegate = table.getClass().getField("delegate").get(table);
+            if (delegate instanceof Map<?, ?> map) {
+                return new HashMap<>(map);
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            // another table type: iterate
+        }
+        Map<Object, Object> result = new HashMap<>();
+        try {
+            Object it = Class.forName(TABLE).getMethod("iterator").invoke(table);
+            Class<?> itClass = Class.forName("se.krka.kahlua.vm.KahluaTableIterator");
+            Method advance = itClass.getMethod("advance");
+            Method key = itClass.getMethod("getKey");
+            Method value = itClass.getMethod("getValue");
+            while ((Boolean) advance.invoke(it)) {
+                result.put(key.invoke(it), value.invoke(it));
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot read a Lua table: " + e);
+        }
+        return result;
+    }
+
+    @Override
+    public Object get(Object table, Object key) {
+        try {
+            return Class.forName(TABLE).getMethod("rawget", Object.class).invoke(table, key);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    @Override
+    public void set(Object table, Object key, Object value) {
+        try {
+            Class.forName(TABLE).getMethod("rawset", Object.class, Object.class).invoke(table, key, value);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot set the Lua value " + key + ": " + e);
+        }
+    }
+
+    @Override
+    public String sourceOf(Object value) {
+        return value != null && value.getClass().getName().equals("se.krka.kahlua.vm.LuaClosure") ? sourceFile(value) : null;
+    }
+
+    /**
+     * Closes the windows of classes a mod added: elements in the game's UI list whose Lua class
+     * (metatable, up to three levels, which is how ISPanel:derive builds classes) is one of
+     * {@code modClasses}. Only classes the mod added count, not game classes it patched: a mod that
+     * replaced ISPanel.render must not close every window. Returns how many.
+     */
+    int closeWindows(java.util.Set<Object> modClasses) {
+        if (modClasses.isEmpty()) {
+            return 0;
+        }
+        int closed = 0;
+        try {
+            Class<?> manager = Class.forName("zombie.ui.UIManager");
+            Class<?> element = Class.forName("zombie.ui.UIElement");
+            Field tableField = element.getField("table");
+            Method remove = manager.getMethod("RemoveElement", Class.forName("zombie.ui.UIElementInterface"));
+            Method metatable = Class.forName(TABLE).getMethod("getMetatable");
+            List<?> ui = new ArrayList<>((List<?>) manager.getField("UI").get(null));
+            for (Object e : ui) {
+                if (!element.isInstance(e)) {
+                    continue;
+                }
+                Object t = tableField.get(e);
+                for (int level = 0; level < 4 && t != null; level++) {
+                    Object meta = metatable.invoke(t);
+                    if (meta != null && modClasses.contains(meta)) {
+                        remove.invoke(null, e);
+                        closed++;
+                        break;
+                    }
+                    t = meta == t ? null : meta;
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot close the windows of a mod: " + e);
+        }
+        return closed;
+    }
+
     /** The folders a mod's files come from (common and version folder), normalized, ending in '/'. */
     List<String> modDirs(String modId) {
         List<String> dirs = new ArrayList<>();

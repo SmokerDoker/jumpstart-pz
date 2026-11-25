@@ -83,7 +83,7 @@ public final class SecureScreen {
     /** How long the player's "yes" to an admin's change does nothing. */
     static final long CONSENT_DELAY_MS = 2000;
 
-    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SERVER }
+    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SNAPSHOTS, SERVER }
 
     /** Jumpstart's own mod id: listed on the installed tab, never switched from in here. */
     static final String SELF = "Jumpstart";
@@ -122,6 +122,21 @@ public final class SecureScreen {
     private Download download;
     /** A downloaded Java mod whose Lua part follows once its Java part loaded: mod id, Workshop title. */
     private String[] luaAfterJava;
+
+    // crash protection: errors the ZombieBuddy fork caught in mods
+    private final GuardFeed guard = new GuardFeed();
+    /** Mod id to the fork's "count TAB state", for the list. */
+    private final Map<String, String> guardStates = new HashMap<>();
+    private String banner;
+    private long bannerUntil;
+    static final long BANNER_MS = 10_000;
+
+    // snapshots tab (main menu only) and the snapshot taken before switching
+    private List<String> snapshotList = List.of();
+    private int snapshotSelected;
+    /** The snapshot the first Enter chose; a second Enter restores it. */
+    private int snapshotConfirm = -1;
+    private String lastSnapshotState;
 
     // sharing tab
     private boolean sharing;
@@ -264,6 +279,7 @@ public final class SecureScreen {
         }
         frameTime = now;
         runMainThreadWork();
+        followGuard(now);
         session.tick();
         Set<Integer> pressed = poll();
         if (mode != Mode.CLOSED) {
@@ -282,8 +298,11 @@ public final class SecureScreen {
                 }
                 if (pressed.contains(OPEN)) {
                     open();
-                } else if (!game.inGame()) {
-                    drawHint();
+                } else {
+                    if (!game.inGame()) {
+                        drawHint();
+                    }
+                    drawBanner(now);
                 }
             }
             case LIST -> onKeys(pressed, now);
@@ -398,6 +417,102 @@ public final class SecureScreen {
         if (tab == Tab.SHARING) {
             showSharing();
         }
+        if (tab == Tab.SNAPSHOTS) {
+            snapshotList = actions.snapshots();
+            snapshotSelected = 0;
+            snapshotConfirm = -1;
+        }
+    }
+
+    /**
+     * The fork switched a mod off (or refused it) after it threw: tell the player for a few seconds,
+     * and stop the mod's Lua side too, so nothing of it keeps running half way. Runs every frame;
+     * without new events it costs one call.
+     */
+    private void followGuard(long now) {
+        List<GuardFeed.Event> events;
+        try {
+            events = guard.poll(actions);
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (GuardFeed.Event e : events) {
+            System.out.println("[Jumpstart] crash protection: " + e.modId() + " " + e.kind() + " " + e.where()
+                    + " " + e.exception() + " -> " + e.action());
+            if (!e.notable()) {
+                continue;
+            }
+            banner = String.format(texts.get(e.action().equals("off") ? "guard.off" : "guard.refused"),
+                    e.modId(), shortException(e.exception()), e.where());
+            bannerUntil = now + BANNER_MS;
+            if (e.action().equals("off")) {
+                try {
+                    actions.unloadLua(e.modId()); // main thread: this is the render pass
+                } catch (RuntimeException ex) {
+                    System.out.println("[Jumpstart] cannot stop the Lua of " + e.modId() + ": " + ex);
+                }
+            }
+        }
+        if (!events.isEmpty() && mode != Mode.CLOSED) {
+            refreshStates();
+        }
+    }
+
+    /** What stayed of a mod's Lua after switching it off ({@link Actions#luaLeftovers}), for the player. */
+    String leftoversNote(String name, String leftovers) {
+        if (leftovers == null || leftovers.isEmpty()) {
+            return "";
+        }
+        String[] p = leftovers.split(":", 3);
+        if (p.length < 3) {
+            return "";
+        }
+        int count;
+        try {
+            count = Integer.parseInt(p[1]);
+        } catch (NumberFormatException e) {
+            return "";
+        }
+        return String.format(Locale.ROOT, texts.get(p[0].equals("kept") ? "lua.kept" : "lua.startLoaded"), name, count, p[2]);
+    }
+
+    /** "java.lang.NullPointerException: x" -> "NullPointerException". */
+    static String shortException(String exception) {
+        String s = exception == null ? "" : exception.strip();
+        int colon = s.indexOf(':');
+        if (colon > 0) {
+            s = s.substring(0, colon);
+        }
+        int dot = s.lastIndexOf('.');
+        return dot >= 0 ? s.substring(dot + 1) : s;
+    }
+
+    /** The banner line while it shows, else null. */
+    String banner(long now) {
+        return banner != null && now < bannerUntil ? banner : null;
+    }
+
+    private void drawBanner(long now) {
+        String text = banner(now);
+        if (text == null) {
+            return;
+        }
+        int w = Math.min(game.width() - 40, game.textWidth(GameScreen.Font.MEDIUM, text) + 32);
+        int h = game.fontHeight(GameScreen.Font.MEDIUM) + 16;
+        int x = (game.width() - w) / 2;
+        game.rect(x, 40, w, h, 0.25f, 0.06f, 0.05f, 0.92f);
+        game.text(GameScreen.Font.MEDIUM, x + 16, 48, fit(GameScreen.Font.MEDIUM, text, w - 32), 1f, 0.85f, 0.8f, 1f);
+    }
+
+    /** The list's state label, with what the crash protection did. */
+    private String stateLabel(String modId, String state) {
+        String guardStatus = guardStates.get(modId);
+        int count = GuardFeed.count(guardStatus);
+        if (GuardFeed.offByGuard(guardStatus) && state.equals("off")) {
+            return String.format(texts.get("guard.state"), count);
+        }
+        String label = texts.get("state." + state);
+        return count > 0 ? label + "  (" + String.format(texts.get("guard.errors"), count) + ")" : label;
     }
 
     private void runMainThreadWork() {
@@ -474,6 +589,9 @@ public final class SecureScreen {
             inBackground(() -> actions.shareIfDue(actions.unverifiedJars()), r -> System.out.println("[Jumpstart] sharing: " + r));
         }
         game.pause(true);
+        if (game.inGame()) {
+            actions.beginSnapshot(); // a copy of the save before anything is switched
+        }
     }
 
     private void close() {
@@ -495,6 +613,9 @@ public final class SecureScreen {
         states.clear();
         for (Actions.InstalledMod mod : mods) {
             states.put(mod.id(), mod.java() != null ? actions.stateOf(mod.id()) : "lua:" + actions.luaState(mod.id()));
+            if (mod.java() != null) {
+                guardStates.put(mod.id(), actions.guardStatus(mod.id()));
+            }
         }
     }
 
@@ -510,16 +631,50 @@ public final class SecureScreen {
         return states.getOrDefault(modId, "not loaded");
     }
 
+    /** Whether a tab is offered now: Server only in multiplayer, Snapshots only in the main menu. */
+    private boolean tabShown(Tab t) {
+        return switch (t) {
+            case SERVER -> session.connected();
+            case SNAPSHOTS -> !game.inGame() && !session.connected();
+            default -> true;
+        };
+    }
+
+    /**
+     * While the save is being copied, keys that switch mods (or close the screen, which lets the
+     * game run and write its save again) wait; the player hears why.
+     */
+    private Set<Integer> waitForSnapshot(Set<Integer> pressed) {
+        String state = actions.snapshotState();
+        if (state != null && !state.equals(lastSnapshotState)) {
+            lastSnapshotState = state;
+            if (state.equals("done")) {
+                say(texts.get("snapshot.done"), true);
+            } else if (state.startsWith("failed")) {
+                say(String.format(texts.get("snapshot.failed"), state.substring("failed".length()).strip()), false);
+            }
+        }
+        if (!"running".equals(state)) {
+            return pressed;
+        }
+        Set<Integer> waiting = new java.util.HashSet<>(pressed);
+        if (waiting.removeAll(Set.of(KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_A, KEY_U, KEY_Y))) {
+            say(texts.get("snapshot.wait"), false);
+        }
+        return waiting;
+    }
+
     private void onKeys(Set<Integer> pressed, long now) {
+        pressed = waitForSnapshot(pressed);
         if (pressed.contains(KEY_ESCAPE) && session.update == null) {
             close();
             return;
         }
         if (pressed.contains(KEY_TAB)) {
-            Tab next = Tab.values()[(tab.ordinal() + 1) % Tab.values().length];
-            if (next == Tab.SERVER && !session.connected()) {
-                next = Tab.INSTALLED; // the server tab exists only in multiplayer
-            }
+            Tab next = tab;
+            do {
+                next = Tab.values()[(next.ordinal() + 1) % Tab.values().length];
+            } while (!tabShown(next));
             switchTab(next);
             return;
         }
@@ -537,7 +692,56 @@ public final class SecureScreen {
             case INSTALLED -> onInstalled(pressed, now);
             case JAVA_LIBRARY, LUA_LIBRARY -> onLibrary(libraries.get(tab), pressed, now);
             case SHARING -> onSharing(pressed);
+            case SNAPSHOTS -> onSnapshots(pressed);
             case SERVER -> onServer(pressed);
+        }
+    }
+
+    // --- snapshots tab (main menu) -----------------------------------------------------------------
+
+    private void onSnapshots(Set<Integer> pressed) {
+        int before = snapshotSelected;
+        if (pressed.contains(KEY_UP) && snapshotSelected > 0) {
+            snapshotSelected--;
+        }
+        if (pressed.contains(KEY_DOWN) && snapshotSelected < snapshotList.size() - 1) {
+            snapshotSelected++;
+        }
+        if (snapshotSelected != before) {
+            snapshotConfirm = -1;
+        }
+        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && !snapshotList.isEmpty()) {
+            String label = snapshotList.get(snapshotSelected);
+            if (snapshotConfirm != snapshotSelected) {
+                snapshotConfirm = snapshotSelected; // the first Enter only asks
+                say(String.format(texts.get("snapshot.confirm"), label), false);
+                return;
+            }
+            snapshotConfirm = -1;
+            String r = actions.restoreSnapshot(snapshotSelected);
+            say(r.startsWith("OK") ? String.format(texts.get("snapshot.restored"), label) : r, r.startsWith("OK"));
+            snapshotList = actions.snapshots();
+        }
+    }
+
+    private void drawSnapshots(int x, int y, int width, int bottom) {
+        if (snapshotList.isEmpty()) {
+            wrapped(GameScreen.Font.MEDIUM, x, y, width, texts.get("snapshot.none"), 0.75f, 0.75f, 0.75f);
+            return;
+        }
+        int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        for (int i = 0; i < snapshotList.size() && y + line <= bottom; i++) {
+            boolean sel = i == snapshotSelected;
+            if (sel) {
+                game.rect(x, y, width, line, 0.2f, 0.32f, 0.24f, 1f);
+            }
+            game.text(GameScreen.Font.MEDIUM, x + 8, y + 4, fit(GameScreen.Font.MEDIUM, snapshotList.get(i), width - 16), 1f, 1f, 1f, sel ? 1f : 0.8f);
+            int index = i;
+            hits.add(new Hit(x, y, width, line, 0, () -> {
+                snapshotSelected = index;
+                snapshotConfirm = -1;
+            }));
+            y += line;
         }
     }
 
@@ -632,7 +836,9 @@ public final class SecureScreen {
                 return;
             }
             int stopped = actions.unloadLua(mod.id());
-            say(String.format(Locale.ROOT, texts.get(stopped > 0 ? "lua.stopped" : "lua.off"), mod.name(), stopped), true);
+            String said = String.format(Locale.ROOT, texts.get(stopped > 0 ? "lua.stopped" : "lua.off"), mod.name(), stopped);
+            String left = leftoversNote(mod.name(), actions.luaLeftovers(mod.id()));
+            say(left.isEmpty() ? said : said + " " + left, true);
         } else {
             String problem = actions.activate(mod.id());
             if (problem != null) {
@@ -1407,6 +1613,7 @@ public final class SecureScreen {
             case INSTALLED -> drawList(x, y, width, contentBottom);
             case JAVA_LIBRARY, LUA_LIBRARY -> drawLibrary(libraries.get(tab), x, y, width, contentBottom, now);
             case SHARING -> drawSharing(x, y, width, contentBottom);
+            case SNAPSHOTS -> drawSnapshots(x, y, width, contentBottom);
             case SERVER -> drawServer(x, y, width, contentBottom);
         }
     }
@@ -1415,7 +1622,7 @@ public final class SecureScreen {
         int cx = x;
         int h = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         for (Tab t : Tab.values()) {
-            if (t == Tab.SERVER && !session.connected()) {
+            if (!tabShown(t)) {
                 continue;
             }
             String label = texts.get("tab." + t.name());
@@ -1463,7 +1670,7 @@ public final class SecureScreen {
             boolean java = mod.java() != null;
             game.text(GameScreen.Font.SMALL, tx, y + 4, java ? "Java" : "Lua", java ? 0.95f : 0.55f, java ? 0.75f : 0.8f, java ? 0.35f : 1f, 1f);
             String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
-            String label = texts.get("state." + state);
+            String label = stateLabel(mod.id(), state);
             float[] c = stateColor(state);
             int w = game.textWidth(GameScreen.Font.SMALL, label);
             game.text(GameScreen.Font.SMALL, x + listWidth - w, y + 4, label, c[0], c[1], c[2], 1f);
@@ -1503,7 +1710,7 @@ public final class SecureScreen {
         y += game.fontHeight(GameScreen.Font.LARGE) + 6;
         String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
         float[] sc = stateColor(state);
-        game.text(GameScreen.Font.MEDIUM, tx, y, (mod.java() != null ? "Java   " : "Lua   ") + texts.get("state." + state), sc[0], sc[1], sc[2], 1f);
+        game.text(GameScreen.Font.MEDIUM, tx, y, (mod.java() != null ? "Java   " : "Lua   ") + stateLabel(mod.id(), state), sc[0], sc[1], sc[2], 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 6;
         if (mod.java() != null) {
             BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
@@ -1810,6 +2017,8 @@ public final class SecureScreen {
             sb.append(" status=").append(lib.status);
         } else if (tab == Tab.SHARING) {
             sb.append(" sharing=").append(sharing);
+        } else if (tab == Tab.SNAPSHOTS) {
+            sb.append(" snapshots=").append(snapshotList.size()).append(" selected=").append(snapshotSelected);
         } else if (tab == Tab.SERVER) {
             sb.append(" admin=").append(session.admin).append(" serverMods=").append(session.serverMods.size());
             if (session.update != null) {
@@ -1829,6 +2038,10 @@ public final class SecureScreen {
             sb.append(" downloading=").append(download.item().id());
         }
         sb.append(" message=").append(message);
+        String shown = banner(frameTime);
+        if (shown != null) {
+            sb.append(" banner=").append(shown);
+        }
         return sb.toString();
     }
 

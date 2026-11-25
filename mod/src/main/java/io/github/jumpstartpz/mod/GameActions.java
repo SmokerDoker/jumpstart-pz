@@ -38,8 +38,34 @@ final class GameActions implements Actions {
     private final ReflectiveLuaGame luaGame = new ReflectiveLuaGame();
     /** Mod id to its folder, for mods found in downloaded Workshop items and the mod folders. */
     private final Map<String, String> downloadedModDirs = new java.util.concurrent.ConcurrentHashMap<>();
-    /** Lua event handlers of mods switched off in this session, to give back when they come on again. */
-    private final Map<String, Map<String, List<Object>>> parkedLua = new java.util.concurrent.ConcurrentHashMap<>();
+    /** What each mod's Lua did in this session, to take back when it is switched off and give back when it comes on. */
+    private final Map<String, ModJournal> journals = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * A mod's Lua side in this session: the changes to Lua's globals it made while it loaded live
+     * (none for a mod that came with the save), and while it is off, its parked event handlers.
+     */
+    static final class ModJournal {
+        List<LuaJournal.Change> changes = List.of();
+        Map<String, List<Object>> parkedHandlers;
+        /** What could not be taken back on the last switch-off, for the player. */
+        String leftovers = "";
+
+        boolean parked() {
+            return parkedHandlers != null;
+        }
+
+        /** The Lua classes (tables) the mod added: their windows close with it. */
+        java.util.Set<Object> addedTables(LuaLive.Game game) {
+            java.util.Set<Object> tables = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (LuaJournal.Change c : changes) {
+                if (c.before() == LuaJournal.ABSENT && game.isTable(c.after())) {
+                    tables.add(c.after());
+                }
+            }
+            return tables;
+        }
+    }
 
     GameActions(LiveInstaller installer, ZombieBuddyFork zombieBuddy, Path biteCheckDir) {
         this.installer = installer;
@@ -204,6 +230,16 @@ final class GameActions implements Actions {
         return result;
     }
 
+    /** Leftover folders of uninstalled mods the game still held open (see {@link PendingRemoval}). */
+    static Path pendingRemovalFile() {
+        return cacheDir().resolve("jumpstart").resolve("pending-removal.txt");
+    }
+
+    /** At game start: removes what was left of mods uninstalled while the game held their files. */
+    static void removeLeftovers() {
+        PendingRemoval.cleanUp(pendingRemovalFile(), cacheDir().resolve("mods"));
+    }
+
     /** The game's data folder (Zomboid, or what -cachedir says). */
     private static java.nio.file.Path cacheDir() {
         try {
@@ -333,6 +369,23 @@ final class GameActions implements Actions {
     }
 
     @Override
+    public String guardLastSeq() {
+        return zombieBuddy.guardLastSeq();
+    }
+
+    @Override
+    public String guardEvents(String sinceSeq) {
+        String r = zombieBuddy.guardEvents(sinceSeq);
+        return r == null ? "" : r;
+    }
+
+    @Override
+    public String guardStatus(String modId) {
+        String r = zombieBuddy.guardStatus(modId);
+        return r == null ? "" : r;
+    }
+
+    @Override
     public String refreshIndex() {
         installer.gate().indexSource().refresh();
         return String.join("; ", installer.gate().indexSource().notes());
@@ -437,7 +490,8 @@ final class GameActions implements Actions {
             return enabled ? "on" : "off"; // the main menu: what the next load of a save gets
         }
         boolean loaded = luaGame.isActive(modId);
-        boolean parked = parkedLua.containsKey(modId);
+        ModJournal journal = journals.get(modId);
+        boolean parked = journal != null && journal.parked();
         if (parked || (loaded && !enabled)) {
             return enabled ? "on, next load" : "off, next load";
         }
@@ -458,13 +512,28 @@ final class GameActions implements Actions {
     }
 
     private LuaLive.Result loadLua(String modId, boolean forServer) {
-        Map<String, List<Object>> parked = parkedLua.remove(modId);
-        if (parked != null) {
-            luaGame.giveBack(parked);
+        ModJournal journal = journals.get(modId);
+        if (journal != null && journal.parked()) {
+            luaGame.giveBack(journal.parkedHandlers);
+            journal.parkedHandlers = null;
+            LuaJournal.Outcome redo = LuaJournal.redo(luaGame, journal.changes);
+            System.out.println("[Jumpstart] Lua of " + modId + " back: " + redo.done() + " globals"
+                    + (redo.kept().isEmpty() ? "" : "; changed meanwhile, left alone: " + redo.kept()));
             return LuaLive.Result.of(LuaLive.Status.RESUMED);
         }
         String dir = downloadedModDirs.get(modId);
+        if (luaGame.inGame() && !luaGame.multiplayer() && !luaGame.isActive(modId)) {
+            // tables kept aside when it was uninstalled come back first: its OnInitGlobalModData
+            // handler then finds them instead of making new ones
+            int back = ModDataJournal.restore(modId);
+            if (back > 0) {
+                System.out.println("[Jumpstart] " + modId + ": " + back + " ModData tables back in the save");
+            }
+        }
         LuaLive.Result result = LuaLive.load(luaGame, modId, dir, forServer);
+        if (result.status() == LuaLive.Status.LOADED) {
+            journals.computeIfAbsent(modId, k -> new ModJournal()).changes = result.changes();
+        }
         System.out.println("[Jumpstart] Lua of " + modId + ": " + result);
         return result;
     }
@@ -479,15 +548,40 @@ final class GameActions implements Actions {
         return unloadLua(modId, true);
     }
 
+    /**
+     * Stops a mod's Lua: its event handlers are parked, what it changed in Lua's globals goes back
+     * (only where nothing changed it again since), and windows of classes it added close. A mod that
+     * came with the save has no record from before it loaded: its functions are only named.
+     */
     private int unloadLua(String modId, boolean forServer) {
-        if (!luaGame.inGame() || (luaGame.multiplayer() && !forServer) || !luaGame.isActive(modId) || parkedLua.containsKey(modId)) {
+        ModJournal journal = journals.computeIfAbsent(modId, k -> new ModJournal());
+        if (!luaGame.inGame() || (luaGame.multiplayer() && !forServer) || !luaGame.isActive(modId) || journal.parked()) {
             return 0;
         }
-        Map<String, List<Object>> taken = luaGame.takeHandlers(luaGame.modDirs(modId));
-        parkedLua.put(modId, taken);
+        List<String> dirs = luaGame.modDirs(modId);
+        Map<String, List<Object>> taken = luaGame.takeHandlers(dirs);
+        journal.parkedHandlers = taken;
+        int windows = luaGame.closeWindows(journal.addedTables(luaGame));
+        LuaJournal.Outcome undo = LuaJournal.undo(luaGame, journal.changes);
+        if (!undo.kept().isEmpty()) {
+            journal.leftovers = "kept:" + undo.kept().size() + ":" + LuaJournal.shortList(undo.kept(), 5);
+        } else if (journal.changes.isEmpty()) {
+            List<String> stays = LuaJournal.functionsFrom(luaGame, file -> file != null && dirs.stream().anyMatch(file::startsWith));
+            journal.leftovers = stays.isEmpty() ? "" : "start:" + stays.size() + ":" + LuaJournal.shortList(stays, 5);
+        } else {
+            journal.leftovers = "";
+        }
         int count = taken.values().stream().mapToInt(List::size).sum();
-        System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet());
+        System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet()
+                + ", " + undo.done() + " globals back, " + windows + " windows closed"
+                + (journal.leftovers.isEmpty() ? "" : ", " + journal.leftovers));
         return count;
+    }
+
+    @Override
+    public String luaLeftovers(String modId) {
+        ModJournal journal = journals.get(modId);
+        return journal == null ? "" : journal.leftovers;
     }
 
     @Override
@@ -503,7 +597,19 @@ final class GameActions implements Actions {
         if ("on".equals(stateOf(modId))) {
             off(modId);
         }
+        String forgot = zombieBuddy.forget(modId); // the fork drops its record (Lua exposures, callbacks)
+        if (forgot != null && !forgot.startsWith("OK")) {
+            System.out.println("[Jumpstart] ZombieBuddy could not forget " + modId + ": " + forgot);
+        }
+        List<String> dirs = luaGame.modDirs(modId); // before the folder goes
         unloadLua(modId);
+        // what the mod left outside its folder: its ModData tables leave the save (back on reinstall),
+        // files it created go to the archive; files that existed before stay where they are
+        int tables = luaGame.inGame() && !luaGame.multiplayer() ? ModDataJournal.stash(modId, dirs) : 0;
+        int files = FileJournal.archive(modId, dirs);
+        if (tables + files > 0) {
+            System.out.println("[Jumpstart] " + modId + ": " + tables + " ModData tables kept aside, " + files + " files archived");
+        }
         String problem = setActive(modId, false);
         if (problem != null) {
             return problem;
@@ -531,11 +637,11 @@ final class GameActions implements Actions {
             Path folder = Path.of(dir);
             Path target = folder.getParent().resolveSibling("mods-uninstalled")
                     .resolve(folder.getFileName() + "-" + LocalDate.now());
-            Files.createDirectories(target.getParent());
-            Files.move(folder, target);
+            String rest = PendingRemoval.moveOut(folder, target, pendingRemovalFile());
             downloadedModDirs.remove(modId);
             resetModFolders();
-            System.out.println("[Jumpstart] uninstalled " + modId + "; folder moved to " + target);
+            System.out.println("[Jumpstart] uninstalled " + modId + "; folder moved to " + target
+                    + (rest == null ? "" : " (" + rest + ")"));
             return "OK local " + target;
         } catch (IOException | RuntimeException e) {
             return "cannot move " + dir + ": " + e;
@@ -548,6 +654,105 @@ final class GameActions implements Actions {
             fs.getClass().getMethod("resetModFolders").invoke(fs);
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.out.println("[Jumpstart] cannot refresh the mod folders: " + e);
+        }
+    }
+
+    // --- save snapshots ------------------------------------------------------------------------------
+
+    private final SaveSnapshots saveSnapshots = new SaveSnapshots(Main.cacheDir().resolve("jumpstart"));
+    private volatile String snapshotState;
+    /** The save the last snapshot was taken of, and when: a new one only after {@link #SNAPSHOT_AGAIN_MS}. */
+    private volatile Path snapshotOf;
+    private volatile long snapshotAt;
+    static final long SNAPSHOT_AGAIN_MS = 10 * 60 * 1000;
+
+    /**
+     * Saves the game on the main thread (the secure screen is open, so the game is paused), then
+     * waits in the background until the chunk saver is done and zips the save. Switching waits for
+     * it (the screen blocks its action keys meanwhile).
+     */
+    @Override
+    public void beginSnapshot() {
+        if (!luaGame.inGame() || luaGame.multiplayer() || luaGame.isServer() || "running".equals(snapshotState)) {
+            return;
+        }
+        Path save = ModDataJournal.saveDir();
+        if (save == null || (save.equals(snapshotOf) && System.currentTimeMillis() - snapshotAt < SNAPSHOT_AGAIN_MS)) {
+            return; // a recent one of this save is good enough
+        }
+        try {
+            if (!saveSnapshots.wanted(save)) {
+                snapshotState = "skipped";
+                snapshotOf = save;
+                snapshotAt = System.currentTimeMillis();
+                return;
+            }
+            snapshotState = "running";
+            Class.forName("zombie.GameWindow").getMethod("save", boolean.class).invoke(null, true);
+        } catch (IOException | ReflectiveOperationException | RuntimeException e) {
+            snapshotState = "failed " + e;
+            return;
+        }
+        Thread worker = new Thread(() -> {
+            try {
+                waitForChunkSaver();
+                Path savesRoot = Path.of((String) fileSystemCall("getSaveDir"));
+                Path zip = saveSnapshots.take(save, savesRoot);
+                snapshotOf = save;
+                snapshotAt = System.currentTimeMillis();
+                snapshotState = "done";
+                System.out.println("[Jumpstart] snapshot of the save: " + zip);
+            } catch (Exception e) {
+                snapshotState = "failed " + e;
+                System.out.println("[Jumpstart] no snapshot of the save: " + e);
+            }
+        }, "Jumpstart snapshot");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /** The game writes changed map chunks on its own thread: the copy waits until that queue is empty. */
+    private static void waitForChunkSaver() throws ReflectiveOperationException, InterruptedException {
+        Class<?> worker = Class.forName("zombie.iso.ChunkSaveWorker");
+        Object instance = worker.getField("instance").get(null);
+        java.util.Collection<?> queue = (java.util.Collection<?>) worker.getField("toSaveQueue").get(instance);
+        java.lang.reflect.Field saving = worker.getField("saving");
+        long until = System.currentTimeMillis() + 120_000;
+        while ((!queue.isEmpty() || saving.getBoolean(instance)) && System.currentTimeMillis() < until) {
+            Thread.sleep(100);
+        }
+    }
+
+    private static Object fileSystemCall(String method) throws ReflectiveOperationException {
+        Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+        return fs.getClass().getMethod(method).invoke(fs);
+    }
+
+    @Override
+    public String snapshotState() {
+        return snapshotState;
+    }
+
+    @Override
+    public List<String> snapshots() {
+        return saveSnapshots.list().stream().map(SaveSnapshots.Snapshot::label).toList();
+    }
+
+    @Override
+    public String restoreSnapshot(int index) {
+        if (luaGame.inGame()) {
+            return "only from the main menu";
+        }
+        List<SaveSnapshots.Snapshot> all = saveSnapshots.list();
+        if (index < 0 || index >= all.size()) {
+            return "no such snapshot";
+        }
+        try {
+            Path replaced = saveSnapshots.restore(all.get(index), Path.of((String) fileSystemCall("getSaveDir")));
+            snapshotOf = null;
+            return "OK" + (replaced == null ? "" : " " + replaced);
+        } catch (IOException | ReflectiveOperationException | RuntimeException e) {
+            return "cannot restore: " + e;
         }
     }
 
