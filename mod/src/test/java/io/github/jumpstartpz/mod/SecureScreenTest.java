@@ -107,6 +107,38 @@ class SecureScreenTest {
     }
 
     @Test
+    void whileTheSaveIsCopiedNothingSwitchesAndTheScreenStaysOpen() {
+        openScreen();
+        actions.snapshotState = "running";
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_ESCAPE);
+        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "Esc waits: closing would let the game write its save");
+        assertTrue(actions.calls.isEmpty(), "nothing was loaded or switched: " + actions.calls);
+        assertTrue(game.drew("Your save is being copied first (a snapshot). One moment, then try again."));
+        actions.snapshotState = "done";
+        frame();
+        assertTrue(game.drew("A snapshot of your save was made. To go back to it: main menu, Jumpstart, tab Snapshots."));
+        tap(SecureScreen.KEY_ESCAPE);
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode());
+    }
+
+    @Test
+    void theMainMenuRestoresASnapshotOnlyAfterASecondEnter() {
+        actions.snapshotLabels.add("Sandbox/My save   2026-11-25 10:00:00");
+        actions.snapshotLabels.add("Sandbox/My save   2026-11-24 09:00:00");
+        openScreen();
+        for (int i = 0; i < 4 && screen.tab() != SecureScreen.Tab.SNAPSHOTS; i++) {
+            tap(SecureScreen.KEY_TAB);
+        }
+        assertEquals(SecureScreen.Tab.SNAPSHOTS, screen.tab(), "offered in the main menu");
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        assertTrue(actions.restored.isEmpty(), "the first Enter only asks");
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals(List.of(1), actions.restored);
+    }
+
+    @Test
     void keyPressesFromLuaAreRefusedOutsideTests() {
         assertFalse(screen.inject(SecureScreen.OPEN));
         frame();
@@ -890,6 +922,25 @@ class SecureScreenTest {
         int guardPolls;
         int guardFetches;
         boolean noGuard;
+        String snapshotState;
+        final List<String> snapshotLabels = new ArrayList<>();
+        final List<Integer> restored = new ArrayList<>();
+
+        @Override
+        public String snapshotState() {
+            return snapshotState;
+        }
+
+        @Override
+        public List<String> snapshots() {
+            return List.copyOf(snapshotLabels);
+        }
+
+        @Override
+        public String restoreSnapshot(int index) {
+            restored.add(index);
+            return "OK";
+        }
 
         @Override
         public String guardLastSeq() {

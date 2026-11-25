@@ -134,6 +134,30 @@ interface Actions {
         return "";
     }
 
+    // --- save snapshots (single player) ---
+
+    /**
+     * Before the first switch: saves the game and copies the save in the background (see
+     * {@link SaveSnapshots}). Does nothing outside a single player game or when snapshots are off.
+     */
+    default void beginSnapshot() {
+    }
+
+    /** null (none running or wanted), "running", "done", "skipped" or "failed reason". */
+    default String snapshotState() {
+        return null;
+    }
+
+    /** The snapshots there are, newest first, as the player reads them. Main menu. */
+    default List<String> snapshots() {
+        return List.of();
+    }
+
+    /** Restores snapshot {@code index} of {@link #snapshots()}; main menu only. "OK text" or what went wrong. */
+    default String restoreSnapshot(int index) {
+        return "not available";
+    }
+
     // --- voluntary sharing (BiteCheck's UsageSharing) ---
 
     boolean sharingEnabled();

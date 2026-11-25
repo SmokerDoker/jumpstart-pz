@@ -83,7 +83,7 @@ public final class SecureScreen {
     /** How long the player's "yes" to an admin's change does nothing. */
     static final long CONSENT_DELAY_MS = 2000;
 
-    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SERVER }
+    enum Tab { INSTALLED, JAVA_LIBRARY, LUA_LIBRARY, SHARING, SNAPSHOTS, SERVER }
 
     /** Jumpstart's own mod id: listed on the installed tab, never switched from in here. */
     static final String SELF = "Jumpstart";
@@ -130,6 +130,13 @@ public final class SecureScreen {
     private String banner;
     private long bannerUntil;
     static final long BANNER_MS = 10_000;
+
+    // snapshots tab (main menu only) and the snapshot taken before switching
+    private List<String> snapshotList = List.of();
+    private int snapshotSelected;
+    /** The snapshot the first Enter chose; a second Enter restores it. */
+    private int snapshotConfirm = -1;
+    private String lastSnapshotState;
 
     // sharing tab
     private boolean sharing;
@@ -410,6 +417,11 @@ public final class SecureScreen {
         if (tab == Tab.SHARING) {
             showSharing();
         }
+        if (tab == Tab.SNAPSHOTS) {
+            snapshotList = actions.snapshots();
+            snapshotSelected = 0;
+            snapshotConfirm = -1;
+        }
     }
 
     /**
@@ -577,6 +589,9 @@ public final class SecureScreen {
             inBackground(() -> actions.shareIfDue(actions.unverifiedJars()), r -> System.out.println("[Jumpstart] sharing: " + r));
         }
         game.pause(true);
+        if (game.inGame()) {
+            actions.beginSnapshot(); // a copy of the save before anything is switched
+        }
     }
 
     private void close() {
@@ -616,16 +631,50 @@ public final class SecureScreen {
         return states.getOrDefault(modId, "not loaded");
     }
 
+    /** Whether a tab is offered now: Server only in multiplayer, Snapshots only in the main menu. */
+    private boolean tabShown(Tab t) {
+        return switch (t) {
+            case SERVER -> session.connected();
+            case SNAPSHOTS -> !game.inGame() && !session.connected();
+            default -> true;
+        };
+    }
+
+    /**
+     * While the save is being copied, keys that switch mods (or close the screen, which lets the
+     * game run and write its save again) wait; the player hears why.
+     */
+    private Set<Integer> waitForSnapshot(Set<Integer> pressed) {
+        String state = actions.snapshotState();
+        if (state != null && !state.equals(lastSnapshotState)) {
+            lastSnapshotState = state;
+            if (state.equals("done")) {
+                say(texts.get("snapshot.done"), true);
+            } else if (state.startsWith("failed")) {
+                say(String.format(texts.get("snapshot.failed"), state.substring("failed".length()).strip()), false);
+            }
+        }
+        if (!"running".equals(state)) {
+            return pressed;
+        }
+        Set<Integer> waiting = new java.util.HashSet<>(pressed);
+        if (waiting.removeAll(Set.of(KEY_ESCAPE, KEY_ENTER, KEY_KP_ENTER, KEY_A, KEY_U, KEY_Y))) {
+            say(texts.get("snapshot.wait"), false);
+        }
+        return waiting;
+    }
+
     private void onKeys(Set<Integer> pressed, long now) {
+        pressed = waitForSnapshot(pressed);
         if (pressed.contains(KEY_ESCAPE) && session.update == null) {
             close();
             return;
         }
         if (pressed.contains(KEY_TAB)) {
-            Tab next = Tab.values()[(tab.ordinal() + 1) % Tab.values().length];
-            if (next == Tab.SERVER && !session.connected()) {
-                next = Tab.INSTALLED; // the server tab exists only in multiplayer
-            }
+            Tab next = tab;
+            do {
+                next = Tab.values()[(next.ordinal() + 1) % Tab.values().length];
+            } while (!tabShown(next));
             switchTab(next);
             return;
         }
@@ -643,7 +692,56 @@ public final class SecureScreen {
             case INSTALLED -> onInstalled(pressed, now);
             case JAVA_LIBRARY, LUA_LIBRARY -> onLibrary(libraries.get(tab), pressed, now);
             case SHARING -> onSharing(pressed);
+            case SNAPSHOTS -> onSnapshots(pressed);
             case SERVER -> onServer(pressed);
+        }
+    }
+
+    // --- snapshots tab (main menu) -----------------------------------------------------------------
+
+    private void onSnapshots(Set<Integer> pressed) {
+        int before = snapshotSelected;
+        if (pressed.contains(KEY_UP) && snapshotSelected > 0) {
+            snapshotSelected--;
+        }
+        if (pressed.contains(KEY_DOWN) && snapshotSelected < snapshotList.size() - 1) {
+            snapshotSelected++;
+        }
+        if (snapshotSelected != before) {
+            snapshotConfirm = -1;
+        }
+        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && !snapshotList.isEmpty()) {
+            String label = snapshotList.get(snapshotSelected);
+            if (snapshotConfirm != snapshotSelected) {
+                snapshotConfirm = snapshotSelected; // the first Enter only asks
+                say(String.format(texts.get("snapshot.confirm"), label), false);
+                return;
+            }
+            snapshotConfirm = -1;
+            String r = actions.restoreSnapshot(snapshotSelected);
+            say(r.startsWith("OK") ? String.format(texts.get("snapshot.restored"), label) : r, r.startsWith("OK"));
+            snapshotList = actions.snapshots();
+        }
+    }
+
+    private void drawSnapshots(int x, int y, int width, int bottom) {
+        if (snapshotList.isEmpty()) {
+            wrapped(GameScreen.Font.MEDIUM, x, y, width, texts.get("snapshot.none"), 0.75f, 0.75f, 0.75f);
+            return;
+        }
+        int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        for (int i = 0; i < snapshotList.size() && y + line <= bottom; i++) {
+            boolean sel = i == snapshotSelected;
+            if (sel) {
+                game.rect(x, y, width, line, 0.2f, 0.32f, 0.24f, 1f);
+            }
+            game.text(GameScreen.Font.MEDIUM, x + 8, y + 4, fit(GameScreen.Font.MEDIUM, snapshotList.get(i), width - 16), 1f, 1f, 1f, sel ? 1f : 0.8f);
+            int index = i;
+            hits.add(new Hit(x, y, width, line, 0, () -> {
+                snapshotSelected = index;
+                snapshotConfirm = -1;
+            }));
+            y += line;
         }
     }
 
@@ -1515,6 +1613,7 @@ public final class SecureScreen {
             case INSTALLED -> drawList(x, y, width, contentBottom);
             case JAVA_LIBRARY, LUA_LIBRARY -> drawLibrary(libraries.get(tab), x, y, width, contentBottom, now);
             case SHARING -> drawSharing(x, y, width, contentBottom);
+            case SNAPSHOTS -> drawSnapshots(x, y, width, contentBottom);
             case SERVER -> drawServer(x, y, width, contentBottom);
         }
     }
@@ -1523,7 +1622,7 @@ public final class SecureScreen {
         int cx = x;
         int h = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         for (Tab t : Tab.values()) {
-            if (t == Tab.SERVER && !session.connected()) {
+            if (!tabShown(t)) {
                 continue;
             }
             String label = texts.get("tab." + t.name());
@@ -1918,6 +2017,8 @@ public final class SecureScreen {
             sb.append(" status=").append(lib.status);
         } else if (tab == Tab.SHARING) {
             sb.append(" sharing=").append(sharing);
+        } else if (tab == Tab.SNAPSHOTS) {
+            sb.append(" snapshots=").append(snapshotList.size()).append(" selected=").append(snapshotSelected);
         } else if (tab == Tab.SERVER) {
             sb.append(" admin=").append(session.admin).append(" serverMods=").append(session.serverMods.size());
             if (session.update != null) {

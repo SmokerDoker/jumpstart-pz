@@ -647,6 +647,105 @@ final class GameActions implements Actions {
         }
     }
 
+    // --- save snapshots ------------------------------------------------------------------------------
+
+    private final SaveSnapshots saveSnapshots = new SaveSnapshots(Main.cacheDir().resolve("jumpstart"));
+    private volatile String snapshotState;
+    /** The save the last snapshot was taken of, and when: a new one only after {@link #SNAPSHOT_AGAIN_MS}. */
+    private volatile Path snapshotOf;
+    private volatile long snapshotAt;
+    static final long SNAPSHOT_AGAIN_MS = 10 * 60 * 1000;
+
+    /**
+     * Saves the game on the main thread (the secure screen is open, so the game is paused), then
+     * waits in the background until the chunk saver is done and zips the save. Switching waits for
+     * it (the screen blocks its action keys meanwhile).
+     */
+    @Override
+    public void beginSnapshot() {
+        if (!luaGame.inGame() || luaGame.multiplayer() || luaGame.isServer() || "running".equals(snapshotState)) {
+            return;
+        }
+        Path save = ModDataJournal.saveDir();
+        if (save == null || (save.equals(snapshotOf) && System.currentTimeMillis() - snapshotAt < SNAPSHOT_AGAIN_MS)) {
+            return; // a recent one of this save is good enough
+        }
+        try {
+            if (!saveSnapshots.wanted(save)) {
+                snapshotState = "skipped";
+                snapshotOf = save;
+                snapshotAt = System.currentTimeMillis();
+                return;
+            }
+            snapshotState = "running";
+            Class.forName("zombie.GameWindow").getMethod("save", boolean.class).invoke(null, true);
+        } catch (IOException | ReflectiveOperationException | RuntimeException e) {
+            snapshotState = "failed " + e;
+            return;
+        }
+        Thread worker = new Thread(() -> {
+            try {
+                waitForChunkSaver();
+                Path savesRoot = Path.of((String) fileSystemCall("getSaveDir"));
+                Path zip = saveSnapshots.take(save, savesRoot);
+                snapshotOf = save;
+                snapshotAt = System.currentTimeMillis();
+                snapshotState = "done";
+                System.out.println("[Jumpstart] snapshot of the save: " + zip);
+            } catch (Exception e) {
+                snapshotState = "failed " + e;
+                System.out.println("[Jumpstart] no snapshot of the save: " + e);
+            }
+        }, "Jumpstart snapshot");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /** The game writes changed map chunks on its own thread: the copy waits until that queue is empty. */
+    private static void waitForChunkSaver() throws ReflectiveOperationException, InterruptedException {
+        Class<?> worker = Class.forName("zombie.iso.ChunkSaveWorker");
+        Object instance = worker.getField("instance").get(null);
+        java.util.Collection<?> queue = (java.util.Collection<?>) worker.getField("toSaveQueue").get(instance);
+        java.lang.reflect.Field saving = worker.getField("saving");
+        long until = System.currentTimeMillis() + 120_000;
+        while ((!queue.isEmpty() || saving.getBoolean(instance)) && System.currentTimeMillis() < until) {
+            Thread.sleep(100);
+        }
+    }
+
+    private static Object fileSystemCall(String method) throws ReflectiveOperationException {
+        Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
+        return fs.getClass().getMethod(method).invoke(fs);
+    }
+
+    @Override
+    public String snapshotState() {
+        return snapshotState;
+    }
+
+    @Override
+    public List<String> snapshots() {
+        return saveSnapshots.list().stream().map(SaveSnapshots.Snapshot::label).toList();
+    }
+
+    @Override
+    public String restoreSnapshot(int index) {
+        if (luaGame.inGame()) {
+            return "only from the main menu";
+        }
+        List<SaveSnapshots.Snapshot> all = saveSnapshots.list();
+        if (index < 0 || index >= all.size()) {
+            return "no such snapshot";
+        }
+        try {
+            Path replaced = saveSnapshots.restore(all.get(index), Path.of((String) fileSystemCall("getSaveDir")));
+            snapshotOf = null;
+            return "OK" + (replaced == null ? "" : " " + replaced);
+        } catch (IOException | ReflectiveOperationException | RuntimeException e) {
+            return "cannot restore: " + e;
+        }
+    }
+
     // --- voluntary sharing ---------------------------------------------------------------------------
 
     @Override
