@@ -32,6 +32,7 @@ public final class JumpstartLua {
             Map.entry("pgdn", SecureScreen.KEY_PAGE_DOWN), Map.entry("enter", SecureScreen.KEY_ENTER),
             Map.entry("esc", SecureScreen.KEY_ESCAPE), Map.entry("j", SecureScreen.KEY_J),
             Map.entry("n", SecureScreen.KEY_N), Map.entry("a", SecureScreen.KEY_A), Map.entry("r", SecureScreen.KEY_R),
+            Map.entry("u", SecureScreen.KEY_U), Map.entry("y", SecureScreen.KEY_Y),
             Map.entry("tab", SecureScreen.KEY_TAB), Map.entry("backspace", SecureScreen.KEY_BACKSPACE));
 
     private JumpstartLua() {
@@ -67,7 +68,7 @@ public final class JumpstartLua {
         }
     }
 
-    /** Tests only: presses a key of the secure screen ("open", "up", "down", "pgup", "pgdn", "enter", "esc", "j", "n", "a", "r"). */
+    /** Tests only: presses a key of the secure screen ("open", "up", "down", "pgup", "pgdn", "enter", "esc", "j", "n", "a", "r", "u", "y", "tab", "backspace"). */
     public static String testKey(String name) {
         SecureScreen screen = SecureScreen.current();
         Integer key = name == null ? null : TEST_KEYS.get(name.toLowerCase(Locale.ROOT));

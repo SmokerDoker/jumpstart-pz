@@ -98,6 +98,7 @@ public final class Main {
                 return; // main() ran again (Lua reloaded); the game is patched already
             }
             FileJournal.setRoot(cacheDir().resolve("jumpstart"));
+            GameActions.removeLeftovers(); // folders of mods uninstalled while the game held them
             GameHooks.install(instrumentation());
             patched = true;
             System.out.println("[Jumpstart] secure screen ready: Ctrl+Shift+J"

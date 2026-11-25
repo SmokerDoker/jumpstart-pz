@@ -230,6 +230,16 @@ final class GameActions implements Actions {
         return result;
     }
 
+    /** Leftover folders of uninstalled mods the game still held open (see {@link PendingRemoval}). */
+    static Path pendingRemovalFile() {
+        return cacheDir().resolve("jumpstart").resolve("pending-removal.txt");
+    }
+
+    /** At game start: removes what was left of mods uninstalled while the game held their files. */
+    static void removeLeftovers() {
+        PendingRemoval.cleanUp(pendingRemovalFile(), cacheDir().resolve("mods"));
+    }
+
     /** The game's data folder (Zomboid, or what -cachedir says). */
     private static java.nio.file.Path cacheDir() {
         try {
@@ -627,11 +637,11 @@ final class GameActions implements Actions {
             Path folder = Path.of(dir);
             Path target = folder.getParent().resolveSibling("mods-uninstalled")
                     .resolve(folder.getFileName() + "-" + LocalDate.now());
-            Files.createDirectories(target.getParent());
-            Files.move(folder, target);
+            String rest = PendingRemoval.moveOut(folder, target, pendingRemovalFile());
             downloadedModDirs.remove(modId);
             resetModFolders();
-            System.out.println("[Jumpstart] uninstalled " + modId + "; folder moved to " + target);
+            System.out.println("[Jumpstart] uninstalled " + modId + "; folder moved to " + target
+                    + (rest == null ? "" : " (" + rest + ")"));
             return "OK local " + target;
         } catch (IOException | RuntimeException e) {
             return "cannot move " + dir + ": " + e;

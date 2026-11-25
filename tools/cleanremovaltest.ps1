@@ -50,13 +50,21 @@ function SelectMod($id) {
     for ($i = 0; $i -lt 80; $i++) { $s = Screen; if ($s -like "* selected=$id *") { return $s }; Key down }
     return Screen
 }
+# a new game waits paused for its first click ("click to start"): no ticks run until then
+function Unpause() {
+    $s = Lua "if getGameSpeed() == 0 then setGameSpeed(1) end return tostring(getGameSpeed())"
+    if ($s -ne "1") { Log "     game speed: $s" }
+    Start-Sleep 1
+}
 function GameProcess() { Get-Process java -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$GameDir*" } }
 
 if (GameProcess) { throw "Project Zomboid is already running; close it first" }
 
 New-Item -ItemType Directory -Force "$t\mods", "$t\.zombie_buddy", "$t\.bitecheck", "$t\jumpstart" | Out-Null
 Remove-Item $result -ErrorAction SilentlyContinue
-foreach ($old in "$t\mods\JSTCleanTest", "$t\mods-uninstalled", "$t\jumpstart\archive", "$t\Lua\jstcleantest.txt") {
+# a clean start: no save or mod list of an earlier run (the test mod must come on live, not with the save)
+foreach ($old in "$t\mods\JSTCleanTest", "$t\mods-uninstalled", "$t\jumpstart\archive", "$t\jumpstart\snapshots",
+        "$t\Lua\jstcleantest.txt", "$t\Saves", "$t\mods\default.txt") {
     if (Test-Path $old) { Remove-Item $old -Recurse -Force }
 }
 Copy-Item (Resolve-Path $TestMod) "$t\mods\JSTCleanTest" -Recurse
@@ -75,7 +83,7 @@ $deadline = (Get-Date).AddMinutes(4)
 do { Start-Sleep 5; $ping = Lua "return 'pong'" } until ($ping -eq "pong" -or (Get-Date) -gt $deadline)
 Check "game and Lua server up" $ping ($ping -eq "pong")
 
-Write-Host "Start a new single player game (or load one) in the game window now. Waiting up to $WaitForSaveMinutes minutes..."
+Write-Host "Start a NEW single player game in the game window now (any settings). Waiting up to $WaitForSaveMinutes minutes..."
 $deadline = (Get-Date).AddMinutes($WaitForSaveMinutes)
 do { Start-Sleep 5; $player = Lua "return tostring(getPlayer() ~= nil)" } until ($player -eq "true" -or (Get-Date) -gt $deadline)
 Check "a single player game runs" $player ($player -eq "true")
@@ -86,8 +94,10 @@ $gameFn = Lua "return tostring(luautils.stringStarts)"
 Key open
 $deadline = (Get-Date).AddMinutes(3)
 # the screen says when the copy is done (or failed); no key is pressed meanwhile
-do { Start-Sleep 2; $s = Screen } until ($s -like "*snapshot of your save was made*" -or $s -like "*No snapshot*" -or (Get-Date) -gt $deadline)
-Check "the screen says the snapshot is done" $s ($s -like "*snapshot of your save was made*")
+# English or German, whichever language the game runs in
+$done = { param($x) $x -like "*snapshot of your save was made*" -or $x -like "*Spielstand wurde gesichert*" }
+do { Start-Sleep 2; $s = Screen } until ((& $done $s) -or $s -like "*No snapshot*" -or $s -like "*Keine Sicherung*" -or (Get-Date) -gt $deadline)
+Check "the screen says the snapshot is done" $s (& $done $s)
 $zip = Get-ChildItem "$t\jumpstart\snapshots" -Recurse -Filter *.zip -ErrorAction SilentlyContinue | Select-Object -First 1
 Check "a snapshot of the save was made" "$($zip.FullName)" ($null -ne $zip)
 Key esc
@@ -97,6 +107,9 @@ Key open
 $r = SelectMod "JSTCleanTest"
 Check "select the test mod" $r ($r -like "*selected=JSTCleanTest *")
 Key a
+Start-Sleep 3
+# the open screen pauses the game: close it, so ticks run and windows are part of the game's UI again
+Key esc
 Start-Sleep 3
 $r = Lua "return tostring(JST_Marker) .. ' ' .. type(JSTCleanTest) .. ' ' .. tostring(luautils.stringStarts ~= nil)"
 Check "on: its globals are there" $r ($r -like "true table true")
@@ -108,9 +121,18 @@ Check "on: its window is open" $r ($r -eq "true")
 $r = Lua "return tostring(ModData.exists('JSTest'))"
 Check "on: its ModData table exists" $r ($r -eq "true")
 Check "on: its file was written" "" (Test-Path "$t\Lua\jstcleantest.txt")
+Unpause
+$t1 = Lua "return tostring(JST_TableRef.ticks)"
+Start-Sleep 2
+$t2 = Lua "return tostring(JST_TableRef.ticks)"
+Check "on: its OnTick handler runs" "$t1 -> $t2" ($t1 -ne $t2)
 
 # --- off -------------------------------------------------------------------------------------------
+Key open
+SelectMod "JSTCleanTest" | Out-Null
 Key a
+Start-Sleep 2
+Key esc
 Start-Sleep 2
 $r = Lua "return tostring(JST_Marker) .. ' ' .. tostring(JSTCleanTest)"
 Check "off: its globals are gone" $r ($r -eq "nil nil")
@@ -118,28 +140,38 @@ $r = Lua "return tostring(luautils.stringStarts)"
 Check "off: the game's luautils.stringStarts is back" $r ($r -eq $gameFn)
 $r = Lua "return tostring(UIManager.getUI():contains(JST_PanelRef))"
 Check "off: its window is closed" $r ($r -eq "false")
+Unpause
 $t1 = Lua "return tostring(JST_TableRef.ticks)"
 Start-Sleep 2
 $t2 = Lua "return tostring(JST_TableRef.ticks)"
 Check "off: its OnTick handler is stopped" "$t1 -> $t2" ($t1 -eq $t2)
 
 # --- on again --------------------------------------------------------------------------------------
+Key open
+SelectMod "JSTCleanTest" | Out-Null
 Key a
+Start-Sleep 2
+Key esc
 Start-Sleep 2
 $r = Lua "return tostring(JST_Marker) .. ' ' .. tostring(luautils.stringStarts)"
 Check "on again: its globals and function are back" $r ($r -eq "true $modFn")
+Unpause
 $t1 = Lua "return tostring(JST_TableRef.ticks)"
 Start-Sleep 2
 $t2 = Lua "return tostring(JST_TableRef.ticks)"
 Check "on again: its OnTick handler runs" "$t1 -> $t2" ($t1 -ne $t2)
 
 # --- uninstall -------------------------------------------------------------------------------------
+# the screen takes an answer only after 3 s (first question) and 5 s (second one)
+Key open
+SelectMod "JSTCleanTest" | Out-Null
 Key u
-Start-Sleep 2
-Key j
 Start-Sleep 4
 Key j
-Start-Sleep 3
+Start-Sleep 6
+Key j
+Start-Sleep 4
+Log "     screen after uninstall: $(Screen)"
 $r = Lua "return tostring(ModData.exists('JSTest'))"
 Check "uninstalled: its ModData table left the save" $r ($r -eq "false")
 Check "uninstalled: its file left Zomboid\Lua" "" (-not (Test-Path "$t\Lua\jstcleantest.txt"))
