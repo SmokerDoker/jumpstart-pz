@@ -6,6 +6,7 @@ JST_Marker = true -- a new global
 JSTCleanTest = { ticks = 0 } -- a new table; the tick counter lives here, not in a global set later
 
 local original = luautils.stringStarts
+JSTCleanTest.gameStringStarts = original -- for the tests: the game's function, to compare after switching off
 luautils.stringStarts = function(s, prefix) -- replaces a game function
     return original(s, prefix)
 end

@@ -122,6 +122,10 @@ public final class SecureScreen {
     private Download download;
     /** A downloaded Java mod whose Lua part follows once its Java part loaded: mod id, Workshop title. */
     private String[] luaAfterJava;
+    /** The other mods of that Workshop item: their Lua follows too (they may use the Java part). */
+    private List<String> luaAlsoAfterJava = List.of();
+    /** Mods that were on in the mod list but not running, which A already tried to load live. */
+    private final Set<String> liveTried = new HashSet<>();
 
     // crash protection: errors the ZombieBuddy fork caught in mods
     private final GuardFeed guard = new GuardFeed();
@@ -250,6 +254,7 @@ public final class SecureScreen {
 
     /** Called by the game at the end of every UI render pass. */
     public static void onRender() {
+        LuaStartJournal.onFrame(); // the first frame after the game loaded its Lua ends that record
         SecureScreen screen = current;
         if (screen == null) {
             return;
@@ -825,7 +830,10 @@ public final class SecureScreen {
     /** A (or Enter on a mod that is off): a Lua mod on or off, in the mod list and, in a game, live. */
     private void toggleLua(Actions.InstalledMod mod, boolean enter) {
         String state = actions.luaState(mod.id());
-        if (state.startsWith("on")) {
+        // on in the mod list, but its Lua does not run yet (enabled, not loaded live): A loads it now,
+        // once; if that cannot work, the next A switches it off
+        boolean waiting = state.equals("on, next load") && liveTried.add(mod.id());
+        if (state.startsWith("on") && !waiting) {
             if (enter) {
                 say(String.format(Locale.ROOT, texts.get("lua.running"), mod.name()), true);
                 return;
@@ -836,7 +844,9 @@ public final class SecureScreen {
                 return;
             }
             int stopped = actions.unloadLua(mod.id());
-            String said = String.format(Locale.ROOT, texts.get(stopped > 0 ? "lua.stopped" : "lua.off"), mod.name(), stopped);
+            boolean complete = "off".equals(actions.luaState(mod.id()));
+            String key = complete && stopped > 0 ? "lua.offNow" : stopped > 0 ? "lua.stopped" : "lua.off";
+            String said = String.format(Locale.ROOT, texts.get(key), mod.name(), stopped);
             String left = leftoversNote(mod.name(), actions.luaLeftovers(mod.id()));
             say(left.isEmpty() ? said : said + " " + left, true);
         } else {
@@ -978,7 +988,9 @@ public final class SecureScreen {
         refreshStates();
         say(outcome.kind() + " " + outcome.message(), outcome.kind() == LiveInstaller.Kind.DONE);
         String[] lua = luaAfterJava;
+        List<String> also = luaAlsoAfterJava;
         luaAfterJava = null;
+        luaAlsoAfterJava = List.of();
         if (!p.server() && outcome.kind() == LiveInstaller.Kind.DONE) {
             // the Java part runs: the mod joins the mod list, then its Lua part, which may use the Java part
             boolean downloaded = lua != null && lua[0].equals(p.mod().id());
@@ -987,6 +999,12 @@ public final class SecureScreen {
             }
             String title = downloaded ? lua[1] : p.mod().name();
             String note = luaNote(title, actions.loadLua(p.mod().id()));
+            if (downloaded) {
+                for (String other : also) { // the item's other mods, enabled by the download too
+                    String n = luaNote(other, actions.loadLua(other));
+                    note = n.isEmpty() ? note : note.isEmpty() ? n : note + "  " + n;
+                }
+            }
             if (!note.isEmpty()) {
                 say(outcome.kind() + " " + outcome.message() + "  " + note, true);
             }
@@ -1183,6 +1201,13 @@ public final class SecureScreen {
             }
             say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);
             luaAfterJava = new String[] {java.id(), d.item().title()};
+            List<String> others = new ArrayList<>();
+            for (Actions.FolderMod mod : found) {
+                if (!mod.id().equals(java.id())) {
+                    others.add(mod.id());
+                }
+            }
+            luaAlsoAfterJava = others;
             start(java, now, false);
         } else if (java != null) {
             say(String.format(Locale.ROOT, texts.get("downloadedJava"), d.item().title()), true);

@@ -257,13 +257,22 @@ final class ReflectiveLuaGame implements LuaLive.Game {
     /** The folders a mod's files come from (common and version folder), normalized, ending in '/'. */
     List<String> modDirs(String modId) {
         List<String> dirs = new ArrayList<>();
+        for (java.io.File dir : modFolders(modId)) {
+            dirs.add(normalize(dir.getPath()) + "/");
+        }
+        return dirs;
+    }
+
+    /** The same folders as they are on disk (absolute, original case), for reading them. */
+    List<java.io.File> modFolders(String modId) {
+        List<java.io.File> dirs = new ArrayList<>();
         try {
             Object mod = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("getAvailableModDetails", String.class).invoke(null, modId);
             if (mod != null) {
                 for (String getter : List.of("getCommonDir", "getVersionDir")) {
                     String dir = (String) mod.getClass().getMethod(getter).invoke(mod);
                     if (dir != null && !dir.isBlank()) {
-                        dirs.add(normalize(new java.io.File(dir).getAbsolutePath()) + "/");
+                        dirs.add(new java.io.File(dir).getAbsoluteFile());
                     }
                 }
             }
