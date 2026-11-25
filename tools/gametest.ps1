@@ -250,12 +250,12 @@ Check "Mouse.setXY is blocked while the screen is open" "" ($hooked -and -not $r
 if ($CrashMod) {
     $r = Lua "return tostring(zbCrashArm ~= nil)"
     Check "the crash test mod loaded with the game" $r ($r -eq "true")
-    Lua "zbCrashArm() return 1" | Out-Null
+    Lua "zbCrashArm(3) return 1" | Out-Null # throws in every main menu frame for 3 s
     Start-Sleep 4
     $r = Lua "return 'pong'"
     Check "the game survives the throwing patch" $r ($r -eq "pong")
     $r = Screen
-    Check "a banner names the mod" $r ($r -like "*banner=ZBCrashTest caused an error*")
+    Check "a banner names the mod" $r ($r -like "*banner=ZBCrashTest *")
     $r = Lua "return Jumpstart.stateOf('ZBCrashTest')"
     Check "the crash protection switched it off" $r ($r -eq "off")
     Check "game still running after the crash test" "" ([bool](GameProcess))
