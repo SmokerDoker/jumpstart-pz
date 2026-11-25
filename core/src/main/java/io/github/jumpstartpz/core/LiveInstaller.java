@@ -110,6 +110,11 @@ public final class LiveInstaller {
         BiteCheckGate.Consent consent = check.allows(BiteCheckGate.Consent.NONE)
                 ? BiteCheckGate.Consent.NONE : player.consentFor(check);
         if (consent == null) {
+            try {
+                gate.deny(check, modId, workshopId);
+            } catch (IOException e) {
+                // the jar stays off either way; BiteCheck asks again at the next start
+            }
             return new Outcome(Kind.DECLINED, check, modId + " not loaded: the player said no");
         }
         if (!check.allows(consent)) {

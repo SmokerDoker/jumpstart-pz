@@ -29,8 +29,12 @@ import io.github.bitecheckpz.launcher.ZombieBuddyApprovals;
  * </table>
  *
  * An index older than BiteCheck allows still blocks, but no longer verifies. A jar the player
- * already allowed in mod_approvals.json (unverified) or allowed anyway in BiteCheck (flagged or
- * suspicious) is not asked about again.
+ * already allowed in BiteCheck's state ({@code allowed_anyway} in state.toml, written by the launcher
+ * or by this gate) is not asked about again. ZombieBuddy's mod_approvals.json alone does not count:
+ * any mod can write it, so BiteCheck does not trust it either.
+ *
+ * <p>Every answer is written to BiteCheck's state, so the launcher does not ask about the same
+ * jar again at the next start, and to mod_approvals.json, which ZombieBuddy reads to load the jar.
  */
 public final class BiteCheckGate {
 
@@ -104,10 +108,7 @@ public final class BiteCheckGate {
             case FLAGGED -> Verdict.CONFIRM_TWICE;
             case UNVERIFIED -> suspicious ? Verdict.CONFIRM_TWICE : Verdict.CONFIRM;
         };
-        if (verdict == Verdict.CONFIRM_TWICE && allowedAnyway(sha)) {
-            verdict = Verdict.ALLOW;
-            info = info + "; allowed anyway earlier";
-        } else if (verdict == Verdict.CONFIRM && Boolean.TRUE.equals(approvals().decision(sha))) {
+        if ((verdict == Verdict.CONFIRM || verdict == Verdict.CONFIRM_TWICE) && allowedAnyway(sha)) {
             verdict = Verdict.ALLOW;
             info = info + "; allowed earlier";
         }
@@ -115,17 +116,18 @@ public final class BiteCheckGate {
     }
 
     /**
-     * Records that the jar may load: an allow decision in mod_approvals.json, and for a flagged or
-     * suspicious jar also "allowed anyway" in BiteCheck's state, so the launcher keeps it allowed at
-     * the next start instead of denying it again. Refuses when the consent is not enough.
+     * Records that the jar may load: for a jar the player confirmed, "allowed" in BiteCheck's state
+     * (so the launcher does not ask again at the next start), and an allow decision in
+     * mod_approvals.json for ZombieBuddy. Refuses when the consent is not enough.
      */
     public void approve(Check check, String modId, String workshopId, Consent consent) throws IOException {
         if (!check.allows(consent)) {
             throw new IOException(check.jar().getFileName() + ": " + check.verdict() + " needs more than " + consent);
         }
-        if (check.verdict() == Verdict.CONFIRM_TWICE) {
-            LauncherState state = LauncherState.load(biteCheckDir.resolve("state.toml"));
-            state.allowedAnyway().put(check.sha256(), modId + " " + check.jar().getFileName() + " (allowed in game)");
+        if (check.verdict() == Verdict.CONFIRM || check.verdict() == Verdict.CONFIRM_TWICE) {
+            LauncherState state = state();
+            state.refused().remove(check.sha256());
+            state.allowedAnyway().put(check.sha256(), modId + " - allowed by the player in game");
             state.save();
         }
         ZombieBuddyApprovals approvals = approvals();
@@ -133,11 +135,25 @@ public final class BiteCheckGate {
         approvals.save();
     }
 
-    /** Records that the jar must not load, for example after BiteCheck blocked it. */
+    /**
+     * Records that the jar must not load: the player said no, or BiteCheck blocked it. A "no" is
+     * kept in BiteCheck's state, so the launcher keeps the jar off without asking again; a later
+     * install in game asks again, because the player starts it.
+     */
     public void deny(Check check, String modId, String workshopId) throws IOException {
+        if (check.verdict() == Verdict.CONFIRM || check.verdict() == Verdict.CONFIRM_TWICE) {
+            LauncherState state = state();
+            state.allowedAnyway().remove(check.sha256());
+            state.refused().put(check.sha256(), modId + " - not allowed by the player in game");
+            state.save();
+        }
         ZombieBuddyApprovals approvals = approvals();
         approvals.set(modId, workshopId, check.sha256(), false);
         approvals.save();
+    }
+
+    private LauncherState state() throws IOException {
+        return LauncherState.load(biteCheckDir.resolve("state.toml"));
     }
 
     private ZombieBuddyApprovals approvals() throws IOException {
@@ -145,7 +161,7 @@ public final class BiteCheckGate {
     }
 
     private boolean allowedAnyway(String sha) throws IOException {
-        return LauncherState.load(biteCheckDir.resolve("state.toml")).allowedAnyway().containsKey(sha);
+        return state().allowedAnyway().containsKey(sha);
     }
 
     private static String describe(Scanner.Report scan) {
