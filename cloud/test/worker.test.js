@@ -10,7 +10,7 @@ let mf;
 let steamRequests;
 let today;
 
-function steamItem(id, title, { java = false, subs = 10, tags = ["Build 42"], desc = "desc" } = {}) {
+function steamItem(id, title, { java = false, subs = 10, tags = ["Build 42"], desc = "desc", needs = [] } = {}) {
   return {
     publishedfileid: id,
     title,
@@ -18,7 +18,7 @@ function steamItem(id, title, { java = false, subs = 10, tags = ["Build 42"], de
     subscriptions: subs,
     time_updated: 1763700000,
     tags: tags.map((t) => ({ tag: t, display_name: t })),
-    children: java ? [{ publishedfileid: ZB, sortorder: 1, file_type: 0 }] : [],
+    children: [...(java ? [ZB] : []), ...needs].map((id, i) => ({ publishedfileid: id, sortorder: i + 1, file_type: 0 })),
   };
 }
 
@@ -46,7 +46,7 @@ beforeEach(async () => {
       assert.equal(url.host, "api.steampowered.com");
       const javaQuery = url.searchParams.get("child_publishedfileid") === ZB;
       const items = javaQuery
-        ? [steamItem("111", "Java\tMod\nOne", { java: true, subs: 500 }), steamItem("112", "Java Mod Two", { java: true })]
+        ? [steamItem("111", "Java\tMod\nOne", { java: true, subs: 500, needs: ["555", "x"] }), steamItem("112", "Java Mod Two", { java: true })]
         : [
             steamItem("201", "Lua Mod", { desc: "a lua mod" }),
             steamItem("111", "Java\tMod\nOne", { java: true }),
@@ -82,7 +82,7 @@ test("the Java library asks Steam for items that depend on ZombieBuddy", async (
   const lines = (await res.text()).trim().split("\n");
   assert.equal(lines[0], "jumpstart-library 1");
   assert.equal(lines[2], "next\tNEXT+/=");
-  assert.deepEqual(lines[3].split("\t"), ["item", "111", "Java Mod One", "500", "1763700000", "1", "Build 42", "desc"]);
+  assert.deepEqual(lines[3].split("\t"), ["item", "111", "Java Mod One", "500", "1763700000", "1", "Build 42", "desc", "555"]);
   assert.equal(lines.length, 5);
 
   const q = steamRequests[0].searchParams;

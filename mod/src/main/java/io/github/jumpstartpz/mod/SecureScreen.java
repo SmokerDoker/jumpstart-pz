@@ -74,7 +74,7 @@ public final class SecureScreen {
     /** How long a Workshop download may take. */
     static final long DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
-    enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE, SERVER_CONSENT, UNINSTALL_ONCE, UNINSTALL_TWICE }
+    enum Mode { CLOSED, LIST, CONFIRM_ONCE, CONFIRM_TWICE, SERVER_CONSENT, UNINSTALL_ONCE, UNINSTALL_TWICE, DEPENDENCY }
 
     /** How long the answer key does nothing in the two uninstall questions. */
     static final long UNINSTALL_FIRST_DELAY_MS = 1500;
@@ -293,6 +293,9 @@ public final class SecureScreen {
         if (download != null) {
             followDownload(now);
         }
+        if (download == null && !downloadQueue.isEmpty() && (mode == Mode.LIST || mode == Mode.CLOSED)) {
+            nextDownload(now); // the next required item (or the item itself) once the last one is in
+        }
         if (session.update != null) {
             followServerUpdate(now);
         }
@@ -314,6 +317,7 @@ public final class SecureScreen {
             case CONFIRM_ONCE, CONFIRM_TWICE -> onQuestion(pressed, now);
             case SERVER_CONSENT -> onServerConsent(pressed, now);
             case UNINSTALL_ONCE, UNINSTALL_TWICE -> onUninstallQuestion(pressed, now);
+            case DEPENDENCY -> onDepQuestion(pressed);
         }
         if (mode != Mode.CLOSED) {
             hits = new ArrayList<>();
@@ -790,13 +794,30 @@ public final class SecureScreen {
             questionSince = now;
             return;
         }
+        if (toggle) {
+            toggleWithDeps(mod, now);
+            return;
+        }
         if (mod.java() == null) {
-            if (toggle || enter) {
-                toggleLua(mod, enter);
+            if (enter && switchesOff(mod)) {
+                toggleLua(mod, true); // running already: Enter only says so
+            } else if (enter) {
+                toggleWithDeps(mod, now); // Enter on a Lua mod that is off switches it on, with what it needs
             }
             return;
         }
-        if (toggle) {
+        if (enter) {
+            start(mod.java(), now, false);
+        }
+    }
+
+    /** A on one mod, as before the dependency questions: Lua on/off, or Java on/off/load. */
+    private void plainToggle(Actions.InstalledMod mod, long now) {
+        if (mod.java() == null) {
+            toggleLua(mod, false);
+            return;
+        }
+        {
             String state = stateOf(mod.id());
             if (state.equals("on")) {
                 String r = actions.off(mod.id());
@@ -822,9 +843,271 @@ public final class SecureScreen {
                 say(texts.get("java.untilRestart"), false); // loaded at start without hotswap: no switch
             }
             refreshStates();
-        } else if (enter) {
-            start(mod.java(), now, false);
         }
+    }
+
+    // --- dependencies (mod.info require=) --------------------------------------------------------
+
+    /** A yes/no question about mods that need each other. */
+    private record DepQuestion(String title, String text, Runnable yes, Runnable no) {
+    }
+
+    private DepQuestion depQuestion;
+    /** Mods switched off together with a library (library id -> those mods), offered back when it comes on. */
+    private final Map<String, List<String>> offWith = new HashMap<>();
+
+    private Map<String, List<String>> depMap() {
+        Map<String, List<String>> map = new java.util.LinkedHashMap<>();
+        for (Actions.InstalledMod m : mods) {
+            map.put(m.id(), m.requires());
+        }
+        return map;
+    }
+
+    private Actions.InstalledMod modById(String id) {
+        for (Actions.InstalledMod m : mods) {
+            if (m.id().equals(id)) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    /** In use: in the mod list (Lua) or loaded (Java). */
+    private boolean isOn(String id) {
+        Actions.InstalledMod m = modById(id);
+        if (m == null) {
+            return false;
+        }
+        return m.java() == null ? actions.luaState(id).startsWith("on") : actions.stateOf(id).startsWith("on");
+    }
+
+    /** A toggles this mod off (not on: also not a Lua mod that is listed but waits for its live load). */
+    private boolean switchesOff(Actions.InstalledMod mod) {
+        if (mod.java() == null) {
+            String s = actions.luaState(mod.id());
+            return s.startsWith("on") && !(s.equals("on, next load") && !liveTried.contains(mod.id()));
+        }
+        return actions.stateOf(mod.id()).equals("on");
+    }
+
+    /** One mod off without questions; null when done, else why not. */
+    private String switchOff(Actions.InstalledMod m) {
+        if (m.java() != null) {
+            if (!actions.stateOf(m.id()).equals("on")) {
+                return String.format(Locale.ROOT, texts.get("deps.cannotSwitch"), m.name());
+            }
+            String r = actions.off(m.id());
+            if (!r.startsWith("OK")) {
+                return r;
+            }
+        }
+        String problem = actions.deactivate(m.id());
+        if (problem != null) {
+            return problem;
+        }
+        actions.unloadLua(m.id());
+        return null;
+    }
+
+    /** One mod on without questions; null when done, else why not (a Java mod not loaded yet needs its check). */
+    private String switchOn(Actions.InstalledMod m) {
+        if (m.java() != null) {
+            String state = actions.stateOf(m.id());
+            if (state.equals("not loaded")) {
+                return String.format(Locale.ROOT, texts.get("deps.javaFirst"), m.name());
+            }
+            if (state.equals("off")) {
+                String r = actions.on(m.id());
+                if (!r.startsWith("OK")) {
+                    return r;
+                }
+            }
+        }
+        String problem = actions.activate(m.id());
+        if (problem != null) {
+            return problem;
+        }
+        actions.loadLua(m.id());
+        return null;
+    }
+
+    private String names(List<String> ids) {
+        List<String> out = new ArrayList<>();
+        for (String id : ids) {
+            Actions.InstalledMod m = modById(id);
+            out.add(m == null ? id : m.name());
+        }
+        return String.join(", ", out);
+    }
+
+    private void ask(String title, String text, Runnable yes, Runnable no) {
+        depQuestion = new DepQuestion(title, text, yes, no);
+        mode = Mode.DEPENDENCY;
+    }
+
+    /**
+     * A on a mod, with its dependencies: off asks to take the mods that need it along, on switches
+     * the mods it needs on first; afterwards libraries nobody needs any more, or mods that went off
+     * with this one, are offered.
+     */
+    private void toggleWithDeps(Actions.InstalledMod mod, long now) {
+        Map<String, List<String>> deps = depMap();
+        if (switchesOff(mod)) {
+            List<String> dependents = ModDeps.dependentsOn(mod.id(), deps, this::isOn);
+            if (dependents.isEmpty()) {
+                plainToggle(mod, now);
+                if (!isOn(mod.id())) {
+                    afterOff(List.of(mod.id()));
+                }
+                return;
+            }
+            ask(texts.get("deps.offTitle"),
+                    String.format(Locale.ROOT, texts.get("deps.offText"), mod.name(), names(dependents)),
+                    () -> {
+                        List<String> gone = new ArrayList<>();
+                        List<String> problems = new ArrayList<>();
+                        for (String id : dependents) {
+                            String p = switchOff(modById(id));
+                            if (p == null) {
+                                gone.add(id);
+                            } else {
+                                problems.add(p);
+                            }
+                        }
+                        if (problems.isEmpty()) {
+                            String p = switchOff(mod);
+                            if (p == null) {
+                                gone.add(mod.id());
+                                offWith.put(mod.id(), new ArrayList<>(dependents));
+                            } else {
+                                problems.add(p);
+                            }
+                        }
+                        refreshStates();
+                        say(problems.isEmpty()
+                                ? String.format(Locale.ROOT, texts.get("deps.offDone"), mod.name(), names(dependents))
+                                : String.join("; ", problems), problems.isEmpty());
+                        afterOff(gone);
+                    },
+                    () -> say(texts.get("deps.cancelled"), false));
+            return;
+        }
+        ModDeps.Needs needs = ModDeps.needs(mod.id(), deps, this::isOn);
+        if (!needs.missing().isEmpty()) {
+            say(String.format(Locale.ROOT, texts.get("deps.missing"), mod.name(), String.join(", ", needs.missing())), false);
+            return;
+        }
+        for (String id : needs.off()) {
+            String p = switchOn(modById(id));
+            if (p != null) {
+                refreshStates();
+                say(p, false);
+                return;
+            }
+        }
+        plainToggle(mod, now);
+        if (!needs.off().isEmpty()) {
+            String said = message;
+            say(String.format(Locale.ROOT, texts.get("deps.onWith"), names(needs.off())) + "  " + said, messageGood);
+        }
+        if (isOn(mod.id())) {
+            afterOn(mod);
+        }
+    }
+
+    /** After mods went off: the libraries they needed that no mod that is on needs any more, offered. */
+    private void afterOff(List<String> gone) {
+        List<String> unneeded = ModDeps.unneeded(gone, depMap(), this::isOn);
+        if (unneeded.isEmpty()) {
+            return;
+        }
+        String before = message;
+        boolean good = messageGood;
+        ask(texts.get("deps.unneededTitle"), String.format(Locale.ROOT, texts.get("deps.unneededText"), names(unneeded)),
+                () -> {
+                    List<String> problems = new ArrayList<>();
+                    for (String id : unneeded) {
+                        String p = switchOff(modById(id));
+                        if (p != null) {
+                            problems.add(p);
+                        }
+                    }
+                    refreshStates();
+                    say(problems.isEmpty() ? String.format(Locale.ROOT, texts.get("deps.unneededDone"), names(unneeded))
+                            : String.join("; ", problems), problems.isEmpty());
+                },
+                () -> say(before, good));
+    }
+
+    /** After a mod came on: the mods that went off together with it, offered back. */
+    private void afterOn(Actions.InstalledMod mod) {
+        List<String> group = offWith.remove(mod.id());
+        if (group == null) {
+            return;
+        }
+        List<String> back = new ArrayList<>();
+        for (String id : group) {
+            if (modById(id) != null && !isOn(id)) {
+                back.add(id);
+            }
+        }
+        if (back.isEmpty()) {
+            return;
+        }
+        String before = message;
+        boolean good = messageGood;
+        ask(texts.get("deps.againTitle"), String.format(Locale.ROOT, texts.get("deps.againText"), mod.name(), names(back)),
+                () -> {
+                    List<String> problems = new ArrayList<>();
+                    for (String id : back) {
+                        ModDeps.Needs n = ModDeps.needs(id, depMap(), this::isOn);
+                        for (String lib : n.off()) {
+                            String p = switchOn(modById(lib));
+                            if (p != null) {
+                                problems.add(p);
+                            }
+                        }
+                        String p = switchOn(modById(id));
+                        if (p != null) {
+                            problems.add(p);
+                        }
+                    }
+                    refreshStates();
+                    say(problems.isEmpty() ? String.format(Locale.ROOT, texts.get("deps.againDone"), names(back))
+                            : String.join("; ", problems), problems.isEmpty());
+                },
+                () -> say(before, good));
+    }
+
+    private void onDepQuestion(Set<Integer> pressed) {
+        DepQuestion q = depQuestion;
+        if (q == null) {
+            mode = Mode.LIST;
+            return;
+        }
+        boolean yes = pressed.contains(KEY_J) || pressed.contains(KEY_Y);
+        boolean no = pressed.contains(KEY_N) || pressed.contains(KEY_ESCAPE);
+        if (!yes && !no) {
+            return;
+        }
+        depQuestion = null;
+        mode = Mode.LIST;
+        (yes ? q.yes() : q.no()).run(); // may ask the next question
+    }
+
+    private void drawDepQuestion(int x, int y, int width, int bottom) {
+        DepQuestion q = depQuestion;
+        if (q == null) {
+            return;
+        }
+        game.rect(x - 6, y - 4, width + 12, 3, 1f, 0.75f, 0.25f, 1f);
+        y += 8;
+        game.text(GameScreen.Font.LARGE, x, y, q.title(), 1f, 0.75f, 0.25f, 1f);
+        y += game.fontHeight(GameScreen.Font.LARGE) + 10;
+        wrapped(GameScreen.Font.MEDIUM, x, y, width, q.text(), 1f, 1f, 1f);
+        game.text(GameScreen.Font.MEDIUM, x, bottom - game.fontHeight(GameScreen.Font.MEDIUM), texts.get("deps.keys"), 1f, 1f, 1f, 1f);
+        answerButtons(x, bottom, 0);
     }
 
     /** A (or Enter on a mod that is off): a Lua mod on or off, in the mod list and, in a game, live. */
@@ -1086,7 +1369,7 @@ public final class SecureScreen {
             if (lib.searched == null || !query.equals(lib.searched)) {
                 search(lib, false);
             } else if (!lib.items.isEmpty()) {
-                startDownload(lib.items.get(lib.selected), now);
+                installWithRequirements(lib.items.get(lib.selected), now);
             }
         }
     }
@@ -1121,6 +1404,62 @@ public final class SecureScreen {
                 lib.status = texts.get("searchFailed") + ((Exception) result).getMessage();
             }
         });
+    }
+
+    /** Downloads waiting their turn: an item's required items first, then the item. */
+    private final Deque<LibraryClient.Item> downloadQueue = new ArrayDeque<>();
+
+    /**
+     * Enter on a library item: if it needs Workshop items that are not installed, asks whether to
+     * install them too (first); then downloads.
+     */
+    private void installWithRequirements(LibraryClient.Item item, long now) {
+        if (session.inMultiplayer() || download != null || !downloadQueue.isEmpty()
+                || actions.workshop().unavailableReason() != null) {
+            startDownload(item, now); // says why not, or the admin installs for everybody
+            return;
+        }
+        List<Long> missing = new ArrayList<>();
+        for (long id : item.requires()) {
+            if ((actions.workshop().state(id) & Workshop.INSTALLED) == 0) {
+                missing.add(id);
+            }
+        }
+        if (missing.isEmpty()) {
+            startDownload(item, now);
+            return;
+        }
+        say(texts.get("deps.lookingUp"), true);
+        inBackground(() -> actions.workshopTitles(missing), result -> {
+            @SuppressWarnings("unchecked")
+            Map<Long, String> titles = result instanceof Map<?, ?> m ? (Map<Long, String>) m : Map.of();
+            List<LibraryClient.Item> needed = new ArrayList<>();
+            List<String> shown = new ArrayList<>();
+            for (long id : missing) {
+                String title = titles.getOrDefault(id, "Workshop " + id);
+                needed.add(new LibraryClient.Item(id, title, 0, 0, false, List.of(), ""));
+                shown.add(title);
+            }
+            ask(texts.get("deps.installTitle"),
+                    String.format(Locale.ROOT, texts.get("deps.installText"), item.title(), String.join(", ", shown)),
+                    () -> {
+                        downloadQueue.addAll(needed);
+                        downloadQueue.add(item);
+                        nextDownload(frameTime);
+                    },
+                    () -> startDownload(item, frameTime));
+        });
+    }
+
+    /** Starts the next waiting download, if none runs; a download that cannot start ends the queue. */
+    private void nextDownload(long now) {
+        if (download != null || downloadQueue.isEmpty()) {
+            return;
+        }
+        startDownload(downloadQueue.poll(), now);
+        if (download == null) {
+            downloadQueue.clear();
+        }
     }
 
     /** Enter on a library item: subscribe and download it through Steam, then install it. */
@@ -1164,6 +1503,7 @@ public final class SecureScreen {
         if (!ready) {
             if (now - d.since() > DOWNLOAD_TIMEOUT_MS) {
                 download = null;
+                downloadQueue.clear();
                 say(texts.get("downloadTimeout"), false);
             }
             return;
@@ -1621,6 +1961,10 @@ public final class SecureScreen {
             drawUninstallQuestion(x, y, width, bottom, now);
             return;
         }
+        if (mode == Mode.DEPENDENCY) {
+            drawDepQuestion(x, y, width, bottom);
+            return;
+        }
         if (mode != Mode.LIST) {
             drawQuestion(x, y, width, bottom, now);
             return;
@@ -1753,6 +2097,13 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
         }
+        if (!mod.requires().isEmpty()) {
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("deps.requires") + names(mod.requires()), 0.6f, 0.8f, 1f);
+        }
+        List<String> neededBy = ModDeps.neededBy(mod.id(), depMap());
+        if (!neededBy.isEmpty()) {
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("deps.neededBy") + names(neededBy), 0.6f, 0.8f, 1f);
+        }
         y = Math.max(y, picture ? top + box : top) + 10;
         if (!mod.id().equals(SELF)) {
             int bx = x;
@@ -1845,7 +2196,7 @@ public final class SecureScreen {
         }
         y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get(item.java() ? "javaNote" : "luaLibraryNote"), 0.55f, 0.55f, 0.55f);
         y += 6;
-        button(x, y, texts.get("btn.install"), 0, () -> startDownload(item, frameTime), download == null);
+        button(x, y, texts.get("btn.install"), 0, () -> installWithRequirements(item, frameTime), download == null);
         y += buttonHeight() + 8;
         game.rect(x, y, width, 1, 0.3f, 0.3f, 0.3f, 1f);
         String description = page != null && !page.description().isBlank() ? page.description()

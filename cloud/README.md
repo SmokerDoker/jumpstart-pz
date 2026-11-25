@@ -22,7 +22,7 @@ All answers are plain text, one record per line, fields separated by tabs.
 
 | Request | Answer |
 | --- | --- |
-| `GET /v1/library?kind=java\|lua&q=TEXT&sort=popular\|recent\|trend&cursor=C&tag=T` | `jumpstart-library 1`, `total N`, `next CURSOR`, then `item ID TITLE SUBSCRIPTIONS UPDATED JAVA(0/1) TAGS DESCRIPTION` (30 per page, cached 1 h; `tag` defaults to `Build 42`) |
+| `GET /v1/library?kind=java\|lua&q=TEXT&sort=popular\|recent\|trend&cursor=C&tag=T` | `jumpstart-library 1`, `total N`, `next CURSOR`, then `item ID TITLE SUBSCRIPTIONS UPDATED JAVA(0/1) TAGS DESCRIPTION REQUIRES` (REQUIRES: the Workshop ids of its required items, comma-separated, without ZombieBuddy) (30 per page, cached 1 h; `tag` defaults to `Build 42`) |
 | `POST /v1/usage` (body below) | `OK n jars` or `ALREADY reported today` |
 | `GET /v1/usage/top?days=30` | `jumpstart-usage-top 1`, then `jar SHA256 INSTALLATIONS WORKSHOP_ID MOD_ID SIZE`, only jars that at least 3 installations reported |
 
