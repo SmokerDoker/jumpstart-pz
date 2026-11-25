@@ -164,6 +164,12 @@ async function library(url, env, ctx) {
       continue;
     }
     const tags = (item.tags ?? []).map((t) => field(t.tag, 40).replace(/,/g, " ")).join(",");
+    // the items it needs (Steam's "Required items"), without ZombieBuddy: Jumpstart brings that one
+    const requires = (item.children ?? [])
+      .map((c) => String(c.publishedfileid))
+      .filter((id) => /^[0-9]{1,20}$/.test(id) && id !== zombieBuddy)
+      .slice(0, 30)
+      .join(",");
     lines.push(
       [
         "item",
@@ -174,6 +180,7 @@ async function library(url, env, ctx) {
         java ? "1" : "0",
         field(tags, 300),
         field(item.short_description ?? "", 300),
+        requires,
       ].join("\t"),
     );
   }

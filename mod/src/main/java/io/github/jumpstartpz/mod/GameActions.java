@@ -117,7 +117,7 @@ final class GameActions implements Actions {
                     continue;
                 }
                 downloadedModDirs.putIfAbsent(mod.id(), dir);
-                mods.put(mod.id(), new InstalledMod(mod.id(), mod.name(), mod.java(), workshopIdOf(dir)));
+                mods.put(mod.id(), new InstalledMod(mod.id(), mod.name(), mod.java(), workshopIdOf(dir), requiresOf(dir)));
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             System.out.println("[Jumpstart] cannot list the mod folders: " + e);
@@ -133,6 +133,18 @@ final class GameActions implements Actions {
         return list;
     }
 
+    /** The mods this one requires (mod.info require=), cleaned; empty if the game cannot say. */
+    @SuppressWarnings("unchecked")
+    private static List<String> requiresOf(String dir) {
+        try {
+            Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("readModInfo", String.class).invoke(null, dir);
+            Object require = info == null ? null : info.getClass().getMethod("getRequire").invoke(info);
+            return require instanceof List<?> list ? ModDeps.cleaned((List<String>) list) : List.of();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return List.of();
+        }
+    }
+
     private static boolean availableHere(String dir) {
         try {
             Object info = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("readModInfo", String.class).invoke(null, dir);
@@ -145,6 +157,19 @@ final class GameActions implements Actions {
     private final Map<String, Details> details = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<Long, Details> workshopDetails = new java.util.concurrent.ConcurrentHashMap<>();
     private final io.github.jumpstartpz.core.market.WorkshopPage workshopPage = new io.github.jumpstartpz.core.market.WorkshopPage();
+
+    @Override
+    public Map<Long, String> workshopTitles(List<Long> ids) {
+        Map<Long, String> titles = new LinkedHashMap<>();
+        for (long id : ids) {
+            try {
+                workshopPage.fetch(id).ifPresent(p -> titles.put(id, p.title()));
+            } catch (IOException | RuntimeException e) {
+                // shown as "Workshop <id>"
+            }
+        }
+        return titles;
+    }
 
     @Override
     public Details details(String modId) {

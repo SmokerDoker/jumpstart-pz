@@ -428,6 +428,75 @@ class SecureScreenTest {
         assertTrue(actions.calls.isEmpty(), "a Lua mod never goes to the Java loader");
     }
 
+    /** damnlib is the library; car1 and car2 need it. */
+    private void carsAndTheirLibrary() {
+        for (String id : List.of("damnlib", "car1", "car2")) {
+            actions.luaMods.add(id);
+            actions.luaStates.put(id, "on");
+            actions.lua.put(id, LuaLive.Result.of(LuaLive.Status.RESUMED));
+        }
+        actions.luaRequires.put("car1", List.of("damnlib"));
+        actions.luaRequires.put("car2", List.of("damnlib"));
+    }
+
+    @Test
+    void aLibraryGoesOffOnlyTogetherWithTheModsThatNeedItAndTheyComeBackWithIt() {
+        carsAndTheirLibrary();
+        openScreen();
+        selectInstalled("damnlib");
+        assertTrue(game.drew("Needed by: car1 (Lua), car2 (Lua)"), "the detail pane names who needs it");
+        tap(SecureScreen.KEY_A);
+        assertEquals(SecureScreen.Mode.DEPENDENCY, screen.mode(), "asks first");
+        assertTrue(actions.deactivated.isEmpty(), "nothing goes off before the answer");
+        tap(SecureScreen.KEY_N);
+        assertTrue(actions.deactivated.isEmpty(), "No: nothing goes off");
+        assertEquals(SecureScreen.Mode.LIST, screen.mode());
+
+        tap(SecureScreen.KEY_A);
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("car1", "car2", "damnlib"), actions.deactivated, "the mods that need it first, then it");
+        assertTrue(screen.describe().contains("and with it: car1 (Lua), car2 (Lua)"), screen.describe());
+
+        tap(SecureScreen.KEY_A); // the library on again: the two are offered back
+        assertEquals(List.of("damnlib"), actions.activated);
+        assertEquals(SecureScreen.Mode.DEPENDENCY, screen.mode());
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("damnlib", "car1", "car2"), actions.activated);
+        assertEquals("on", actions.luaStates.get("car2"));
+    }
+
+    @Test
+    void aModComesOnWithItsLibraryAndTheUnneededLibraryIsOffered() {
+        carsAndTheirLibrary();
+        for (String id : List.of("damnlib", "car1", "car2")) {
+            actions.luaStates.put(id, "off");
+        }
+        openScreen();
+        selectInstalled("car1");
+        assertTrue(game.drew("Needs: damnlib (Lua)"));
+        tap(SecureScreen.KEY_A);
+        assertEquals(List.of("damnlib", "car1"), actions.activated, "the library first, without asking");
+        assertTrue(screen.describe().contains("Switched on first, as it needs them: damnlib (Lua)"), screen.describe());
+        assertEquals(SecureScreen.Mode.LIST, screen.mode());
+
+        tap(SecureScreen.KEY_A); // car1 off: nothing else that is on needs damnlib now
+        assertEquals(List.of("car1"), actions.deactivated);
+        assertEquals(SecureScreen.Mode.DEPENDENCY, screen.mode(), "offers to switch the library off too");
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of("car1", "damnlib"), actions.deactivated);
+    }
+
+    @Test
+    void aModWhoseLibraryIsNotInstalledStaysOff() {
+        actions.luaMods.add("car1");
+        actions.luaRequires.put("car1", List.of("damnlib"));
+        openScreen();
+        selectInstalled("car1");
+        tap(SecureScreen.KEY_A);
+        assertTrue(actions.activated.isEmpty());
+        assertTrue(screen.describe().contains("needs damnlib, which is not installed"), screen.describe());
+    }
+
     @Test
     void uninstallingNeedsTwoDelayedYeses() {
         actions.luaMods.add("Minimap");
@@ -486,6 +555,42 @@ class SecureScreenTest {
         tap(SecureScreen.KEY_ENTER);
         actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
         frame();
+    }
+
+    @Test
+    void aLibraryItemThatNeedsOtherItemsOffersToInstallThemFirst() {
+        actions.luaModRequires = List.of(555L, 556L);
+        actions.titles.put(555L, "damnlib");
+        actions.workshop.states.put(556L, Workshop.SUBSCRIBED | Workshop.INSTALLED); // already there
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals(SecureScreen.Mode.DEPENDENCY, screen.mode(), "asks before downloading anything");
+        assertTrue(game.drew("needs these Workshop items, which are not installed: damnlib."), "only the missing one, by name");
+        assertTrue(actions.workshop.subscribed.isEmpty());
+        tap(SecureScreen.KEY_J);
+        assertEquals(List.of(555L), actions.workshop.subscribed, "the required item first");
+        actions.workshop.states.put(555L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame(); // 555 is in: its mods go on, then the item itself downloads
+        frame();
+        assertEquals(List.of(555L, 201L), actions.workshop.subscribed);
+    }
+
+    @Test
+    void noToTheRequiredItemsInstallsOnlyTheItem() {
+        actions.luaModRequires = List.of(555L);
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        assertTrue(game.drew("not installed: Workshop 555."), "no title from Steam: its number");
+        tap(SecureScreen.KEY_N);
+        assertEquals(List.of(201L), actions.workshop.subscribed);
     }
 
     @Test
@@ -910,6 +1015,8 @@ class SecureScreenTest {
         boolean withSelf;
         /** Lua-only mods in the mod folders (shown after the Java ones). */
         final List<String> luaMods = new ArrayList<>();
+        /** mod.info require= of the Lua mods. */
+        final Map<String, List<String>> luaRequires = new HashMap<>();
         final Map<String, String> luaStates = new HashMap<>();
         final List<String> deactivated = new ArrayList<>();
         final List<String> unloaded = new ArrayList<>();
@@ -983,7 +1090,7 @@ class SecureScreenTest {
             }
             for (String id : luaMods) {
                 if (!uninstalled.contains(id)) {
-                    list.add(new InstalledMod(id, id + " (Lua)", null, 201));
+                    list.add(new InstalledMod(id, id + " (Lua)", null, 201, luaRequires.getOrDefault(id, List.of())));
                 }
             }
             return list;
@@ -1096,7 +1203,22 @@ class SecureScreenTest {
             searches.add(kind + " '" + query + "' " + cursor);
             return new LibraryClient.Page(2, "", List.of(
                     new LibraryClient.Item(111, "Java Mod One", 500, 0, true, List.of("Build 42"), "java"),
-                    new LibraryClient.Item(201, "Lua Mod", 7, 0, false, List.of(), "lua")));
+                    new LibraryClient.Item(201, "Lua Mod", 7, 0, false, List.of(), "lua", luaModRequires)));
+        }
+
+        /** The Workshop items "Lua Mod" (201) needs, and the titles Steam has for them. */
+        List<Long> luaModRequires = List.of();
+        final Map<Long, String> titles = new HashMap<>();
+
+        @Override
+        public Map<Long, String> workshopTitles(List<Long> ids) {
+            Map<Long, String> out = new HashMap<>();
+            for (long id : ids) {
+                if (titles.containsKey(id)) {
+                    out.put(id, titles.get(id));
+                }
+            }
+            return out;
         }
 
         @Override

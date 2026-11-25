@@ -22,9 +22,17 @@ public final class LibraryClient {
 
     public enum Sort { POPULAR, RECENT, TREND }
 
-    /** One Workshop item. */
+    /** One Workshop item; {@code requires}: the Workshop items it needs (without ZombieBuddy). */
     public record Item(long id, String title, long subscriptions, long updatedEpochSeconds, boolean java,
-                       List<String> tags, String description) {
+                       List<String> tags, String description, List<Long> requires) {
+        public Item {
+            requires = List.copyOf(requires);
+        }
+
+        public Item(long id, String title, long subscriptions, long updatedEpochSeconds, boolean java,
+                    List<String> tags, String description) {
+            this(id, title, subscriptions, updatedEpochSeconds, java, tags, description, List.of());
+        }
     }
 
     /** One page of results; {@code next} is the cursor for the next page, or empty at the end. */
@@ -82,7 +90,15 @@ public final class LibraryClient {
                         continue;
                     }
                     List<String> tags = f[6].isEmpty() ? List.of() : List.of(f[6].split(","));
-                    items.add(new Item(number(f, 1), f[2], number(f, 3), number(f, 4), f[5].equals("1"), tags, f[7]));
+                    List<Long> requires = new ArrayList<>();
+                    if (f.length > 8) {
+                        for (String id : f[8].split(",")) {
+                            if (id.strip().matches("[0-9]{1,18}")) {
+                                requires.add(Long.parseLong(id.strip()));
+                            }
+                        }
+                    }
+                    items.add(new Item(number(f, 1), f[2], number(f, 3), number(f, 4), f[5].equals("1"), tags, f[7], requires));
                 }
                 default -> {
                     // newer fields are ignored

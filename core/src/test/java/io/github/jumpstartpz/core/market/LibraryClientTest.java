@@ -18,7 +18,7 @@ class LibraryClientTest {
             "jumpstart-library 1",
             "total\t2",
             "next\tAoJ4+/=",
-            "item\t111\tJava Mod One\t500\t1763700000\t1\tBuild 42,Framework\tdesc one",
+            "item\t111\tJava Mod One\t500\t1763700000\t1\tBuild 42,Framework\tdesc one\t555,556,bad",
             "item\t201\tLua Mod\t7\t1763600000\t0\t\t",
             "future\tfield",
             "");
@@ -40,10 +40,12 @@ class LibraryClientTest {
         assertEquals("Java Mod One", java.title());
         assertTrue(java.java());
         assertEquals(List.of("Build 42", "Framework"), java.tags());
+        assertEquals(List.of(555L, 556L), java.requires(), "the Workshop items it needs");
         LibraryClient.Item lua = page.items().get(1);
         assertFalse(lua.java());
         assertEquals(List.of(), lua.tags());
         assertEquals("", lua.description());
+        assertEquals(List.of(), lua.requires(), "an answer from a Worker without the field");
     }
 
     @Test

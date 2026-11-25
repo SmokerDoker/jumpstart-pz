@@ -3,6 +3,7 @@ package io.github.jumpstartpz.mod;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import io.github.bitecheckpz.launcher.UsageSharing;
 import io.github.jumpstartpz.core.LiveInstaller;
@@ -89,8 +90,23 @@ interface Actions {
      */
     String uninstall(String modId);
 
-    /** A mod in the mod folders; {@code java} is null for a Lua-only mod, {@code workshopId} 0 for a local one. */
-    record InstalledMod(String id, String name, ModEntry java, long workshopId) {
+    /** The titles of Workshop items (for "needs ..." questions); items it cannot name are left out. Off the main thread. */
+    default Map<Long, String> workshopTitles(List<Long> ids) {
+        return Map.of();
+    }
+
+    /**
+     * A mod in the mod folders; {@code java} is null for a Lua-only mod, {@code workshopId} 0 for a
+     * local one; {@code requires}: the mods it needs (mod.info require=, see {@link ModDeps#cleaned}).
+     */
+    record InstalledMod(String id, String name, ModEntry java, long workshopId, List<String> requires) {
+        public InstalledMod {
+            requires = requires == null ? List.of() : List.copyOf(requires);
+        }
+
+        public InstalledMod(String id, String name, ModEntry java, long workshopId) {
+            this(id, name, java, workshopId, List.of());
+        }
     }
 
     record FolderMod(String id, String name, ModEntry java) {
