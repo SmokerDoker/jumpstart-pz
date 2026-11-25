@@ -333,6 +333,23 @@ final class GameActions implements Actions {
     }
 
     @Override
+    public String guardLastSeq() {
+        return zombieBuddy.guardLastSeq();
+    }
+
+    @Override
+    public String guardEvents(String sinceSeq) {
+        String r = zombieBuddy.guardEvents(sinceSeq);
+        return r == null ? "" : r;
+    }
+
+    @Override
+    public String guardStatus(String modId) {
+        String r = zombieBuddy.guardStatus(modId);
+        return r == null ? "" : r;
+    }
+
+    @Override
     public String refreshIndex() {
         installer.gate().indexSource().refresh();
         return String.join("; ", installer.gate().indexSource().notes());

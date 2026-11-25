@@ -89,6 +89,28 @@ public final class ZombieBuddyFork implements HotswapBackend {
         return callStrings("clientJavaModOf", commonDir, versionDir);
     }
 
+    // --- crash protection (the fork's ModGuard); null when this ZombieBuddy has none -------------------
+
+    /** The newest guard event's sequence number ("0" if none), or null without a guard. */
+    public String guardLastSeq() {
+        return callStrings("guardLastSeq");
+    }
+
+    /** Guard events after {@code sinceSeq}: lines "seq TAB modId TAB kind TAB where TAB exception TAB action". */
+    public String guardEvents(String sinceSeq) {
+        return callStrings("guardEvents", sinceSeq);
+    }
+
+    /** "count TAB state" (ok, off-by-guard, probation) for a mod, "" if it had no error, null without a guard. */
+    public String guardStatus(String modId) {
+        return callStrings("guardStatus", modId);
+    }
+
+    /** After uninstalling: the fork drops what it recorded for the mod (its journal). */
+    public String forget(String modId) {
+        return callStrings("forget", modId);
+    }
+
     private String callStrings(String name, String... args) {
         try {
             Class<?>[] types = new Class<?>[args.length];

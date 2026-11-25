@@ -123,6 +123,14 @@ public final class SecureScreen {
     /** A downloaded Java mod whose Lua part follows once its Java part loaded: mod id, Workshop title. */
     private String[] luaAfterJava;
 
+    // crash protection: errors the ZombieBuddy fork caught in mods
+    private final GuardFeed guard = new GuardFeed();
+    /** Mod id to the fork's "count TAB state", for the list. */
+    private final Map<String, String> guardStates = new HashMap<>();
+    private String banner;
+    private long bannerUntil;
+    static final long BANNER_MS = 10_000;
+
     // sharing tab
     private boolean sharing;
     private String sharingPreview = "";
@@ -264,6 +272,7 @@ public final class SecureScreen {
         }
         frameTime = now;
         runMainThreadWork();
+        followGuard(now);
         session.tick();
         Set<Integer> pressed = poll();
         if (mode != Mode.CLOSED) {
@@ -282,8 +291,11 @@ public final class SecureScreen {
                 }
                 if (pressed.contains(OPEN)) {
                     open();
-                } else if (!game.inGame()) {
-                    drawHint();
+                } else {
+                    if (!game.inGame()) {
+                        drawHint();
+                    }
+                    drawBanner(now);
                 }
             }
             case LIST -> onKeys(pressed, now);
@@ -400,6 +412,79 @@ public final class SecureScreen {
         }
     }
 
+    /**
+     * The fork switched a mod off (or refused it) after it threw: tell the player for a few seconds,
+     * and stop the mod's Lua side too, so nothing of it keeps running half way. Runs every frame;
+     * without new events it costs one call.
+     */
+    private void followGuard(long now) {
+        List<GuardFeed.Event> events;
+        try {
+            events = guard.poll(actions);
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (GuardFeed.Event e : events) {
+            System.out.println("[Jumpstart] crash protection: " + e.modId() + " " + e.kind() + " " + e.where()
+                    + " " + e.exception() + " -> " + e.action());
+            if (!e.notable()) {
+                continue;
+            }
+            banner = String.format(texts.get(e.action().equals("off") ? "guard.off" : "guard.refused"),
+                    e.modId(), shortException(e.exception()), e.where());
+            bannerUntil = now + BANNER_MS;
+            if (e.action().equals("off")) {
+                try {
+                    actions.unloadLua(e.modId()); // main thread: this is the render pass
+                } catch (RuntimeException ex) {
+                    System.out.println("[Jumpstart] cannot stop the Lua of " + e.modId() + ": " + ex);
+                }
+            }
+        }
+        if (!events.isEmpty() && mode != Mode.CLOSED) {
+            refreshStates();
+        }
+    }
+
+    /** "java.lang.NullPointerException: x" -> "NullPointerException". */
+    static String shortException(String exception) {
+        String s = exception == null ? "" : exception.strip();
+        int colon = s.indexOf(':');
+        if (colon > 0) {
+            s = s.substring(0, colon);
+        }
+        int dot = s.lastIndexOf('.');
+        return dot >= 0 ? s.substring(dot + 1) : s;
+    }
+
+    /** The banner line while it shows, else null. */
+    String banner(long now) {
+        return banner != null && now < bannerUntil ? banner : null;
+    }
+
+    private void drawBanner(long now) {
+        String text = banner(now);
+        if (text == null) {
+            return;
+        }
+        int w = Math.min(game.width() - 40, game.textWidth(GameScreen.Font.MEDIUM, text) + 32);
+        int h = game.fontHeight(GameScreen.Font.MEDIUM) + 16;
+        int x = (game.width() - w) / 2;
+        game.rect(x, 40, w, h, 0.25f, 0.06f, 0.05f, 0.92f);
+        game.text(GameScreen.Font.MEDIUM, x + 16, 48, fit(GameScreen.Font.MEDIUM, text, w - 32), 1f, 0.85f, 0.8f, 1f);
+    }
+
+    /** The list's state label, with what the crash protection did. */
+    private String stateLabel(String modId, String state) {
+        String guardStatus = guardStates.get(modId);
+        int count = GuardFeed.count(guardStatus);
+        if (GuardFeed.offByGuard(guardStatus) && state.equals("off")) {
+            return String.format(texts.get("guard.state"), count);
+        }
+        String label = texts.get("state." + state);
+        return count > 0 ? label + "  (" + String.format(texts.get("guard.errors"), count) + ")" : label;
+    }
+
     private void runMainThreadWork() {
         List<Runnable> work;
         synchronized (toMainThread) {
@@ -495,6 +580,9 @@ public final class SecureScreen {
         states.clear();
         for (Actions.InstalledMod mod : mods) {
             states.put(mod.id(), mod.java() != null ? actions.stateOf(mod.id()) : "lua:" + actions.luaState(mod.id()));
+            if (mod.java() != null) {
+                guardStates.put(mod.id(), actions.guardStatus(mod.id()));
+            }
         }
     }
 
@@ -1463,7 +1551,7 @@ public final class SecureScreen {
             boolean java = mod.java() != null;
             game.text(GameScreen.Font.SMALL, tx, y + 4, java ? "Java" : "Lua", java ? 0.95f : 0.55f, java ? 0.75f : 0.8f, java ? 0.35f : 1f, 1f);
             String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
-            String label = texts.get("state." + state);
+            String label = stateLabel(mod.id(), state);
             float[] c = stateColor(state);
             int w = game.textWidth(GameScreen.Font.SMALL, label);
             game.text(GameScreen.Font.SMALL, x + listWidth - w, y + 4, label, c[0], c[1], c[2], 1f);
@@ -1503,7 +1591,7 @@ public final class SecureScreen {
         y += game.fontHeight(GameScreen.Font.LARGE) + 6;
         String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
         float[] sc = stateColor(state);
-        game.text(GameScreen.Font.MEDIUM, tx, y, (mod.java() != null ? "Java   " : "Lua   ") + texts.get("state." + state), sc[0], sc[1], sc[2], 1f);
+        game.text(GameScreen.Font.MEDIUM, tx, y, (mod.java() != null ? "Java   " : "Lua   ") + stateLabel(mod.id(), state), sc[0], sc[1], sc[2], 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 6;
         if (mod.java() != null) {
             BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
@@ -1829,6 +1917,10 @@ public final class SecureScreen {
             sb.append(" downloading=").append(download.item().id());
         }
         sb.append(" message=").append(message);
+        String shown = banner(frameTime);
+        if (shown != null) {
+            sb.append(" banner=").append(shown);
+        }
         return sb.toString();
     }
 

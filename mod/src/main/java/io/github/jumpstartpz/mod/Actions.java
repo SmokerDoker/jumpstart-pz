@@ -108,6 +108,23 @@ interface Actions {
         return Details.NONE;
     }
 
+    // --- crash protection (the ZombieBuddy fork's guard) ---
+
+    /** The newest guard event's number, "0" if none; null when this ZombieBuddy has no guard. Cheap. */
+    default String guardLastSeq() {
+        return null;
+    }
+
+    /** Guard events after {@code sinceSeq}, one per line: seq, mod id, kind, where, exception, action (tabs). */
+    default String guardEvents(String sinceSeq) {
+        return "";
+    }
+
+    /** "count TAB state" (ok, off-by-guard, probation), or "" when the mod had no error. */
+    default String guardStatus(String modId) {
+        return "";
+    }
+
     // --- voluntary sharing (BiteCheck's UsageSharing) ---
 
     boolean sharingEnabled();

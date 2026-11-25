@@ -6,6 +6,12 @@ import java.util.Map;
 final class Texts {
     private static final Map<String, String> EN = Map.ofEntries(
             Map.entry("hint", "Jumpstart: Ctrl+Shift+J"),
+            Map.entry("guard.off", "%s caused an error (%s in %s) and was switched off. Ctrl+Shift+J: details"),
+            Map.entry("guard.refused", "%s failed to start (%s) and was not loaded. Ctrl+Shift+J: details"),
+            Map.entry("guard.state", "off (crash protection, %d errors)"),
+            Map.entry("guard.errors", "crash protection: %d errors caught"),
+            Map.entry("lua.kept", "%s: %d of its changes stay because another mod changed them again: %s"),
+            Map.entry("lua.startLoaded", "%s came with the save: %d of its Lua functions stay until the next load: %s"),
             Map.entry("title", "Jumpstart"),
             Map.entry("secure", "Secure screen: drawn by Jumpstart in Java and used only with your real keyboard and mouse. Lua mods can neither open nor control it."),
             Map.entry("btn.close", "Close (Esc)"),
@@ -164,6 +170,12 @@ final class Texts {
 
     private static final Map<String, String> DE = Map.ofEntries(
             Map.entry("hint", "Jumpstart: Strg+Umschalt+J"),
+            Map.entry("guard.off", "%s hat einen Fehler verursacht (%s in %s) und wurde abgeschaltet. Strg+Umschalt+J: Details"),
+            Map.entry("guard.refused", "%s ist beim Start fehlgeschlagen (%s) und wurde nicht geladen. Strg+Umschalt+J: Details"),
+            Map.entry("guard.state", "aus (Absturzschutz, %d Fehler)"),
+            Map.entry("guard.errors", "Absturzschutz: %d Fehler abgefangen"),
+            Map.entry("lua.kept", "%s: %d Änderungen bleiben, weil eine andere Mod sie danach wieder geändert hat: %s"),
+            Map.entry("lua.startLoaded", "%s kam mit dem Spielstand: %d Lua-Funktionen bleiben bis zum nächsten Laden: %s"),
             Map.entry("secure", "Sicherer Bildschirm: von Jumpstart in Java gezeichnet und nur mit deiner echten Tastatur und Maus bedienbar. Lua-Mods können ihn weder öffnen noch bedienen."),
             Map.entry("btn.close", "Schließen (Esc)"),
             Map.entry("btn.load", "Live laden / neu laden (Enter)"),
