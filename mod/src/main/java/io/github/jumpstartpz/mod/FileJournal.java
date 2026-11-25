@@ -151,7 +151,7 @@ public final class FileJournal {
                     || w.file().toAbsolutePath().normalize().startsWith(r.toAbsolutePath().normalize())) {
                 continue;
             }
-            Path target = archive.resolve(archiveName(w.file()));
+            Path target = archive.resolve(archiveName(dataDir, w.file()));
             try {
                 Files.createDirectories(target.getParent());
                 Files.move(w.file(), target);
@@ -172,10 +172,17 @@ public final class FileJournal {
         return moved.size();
     }
 
-    /** The file's path without the drive or root, so archived files keep their folders. */
-    static Path archiveName(Path file) {
+    /**
+     * The file's path inside the game's data folder (e.g. {@code Lua/x.txt}), so the archive shows the
+     * folders the player knows; only files below that folder are ever archived.
+     */
+    static Path archiveName(Path dataDir, Path file) {
         Path p = file.toAbsolutePath().normalize();
-        Path rootPart = p.getRoot();
+        Path base = dataDir.toAbsolutePath().normalize();
+        if (p.startsWith(base) && !p.equals(base)) {
+            return base.relativize(p);
+        }
+        Path rootPart = p.getRoot(); // not reached by archive(); keeps the name relative anyway
         return rootPart == null ? p : rootPart.relativize(p);
     }
 

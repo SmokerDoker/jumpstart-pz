@@ -83,7 +83,10 @@ class FileJournalTest {
     @Test
     void namesForTheArchiveAndModIdsStayInsideTheirFolder() {
         assertEquals("a_b_c", FileJournal.safe("a/b\\c"));
-        assertFalse(FileJournal.archiveName(Path.of("C:/x/y.txt").toAbsolutePath()).isAbsolute());
+        Path data = Path.of("Zomboid").toAbsolutePath();
+        // inside the game's data folder: the path the player knows, e.g. Lua/x.txt
+        assertEquals(Path.of("Lua", "x.txt"), FileJournal.archiveName(data, data.resolve("Lua/x.txt")));
+        assertFalse(FileJournal.archiveName(data, Path.of("C:/x/y.txt").toAbsolutePath()).isAbsolute());
     }
 
     private static final String A = "/mods/a/media/lua/client/a.lua";
