@@ -1,0 +1,4 @@
+name=Jumpstart clean removal test
+id=JSTCleanTest
+description=Test mod for tools/cleanremovaltest.ps1: replaces a game function, sets globals, adds an OnTick handler, opens a window, writes a file and a ModData table. Harmless.
+modversion=1
