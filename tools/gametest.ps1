@@ -7,13 +7,13 @@
   Isolated like the fork's tools/gametest.ps1: a separate Zomboid data folder (-cachedir), its own
   ZombieBuddy config and its own, empty BiteCheck folder (-Djumpstart.bitecheckDir), so the real
   signed index is downloaded fresh and nothing of your own setup changes. The game folder is not
-  touched: the fork jar is passed with -javaagent.
+  touched: Jumpstart.jar (the fork with Jumpstart built in) is passed with -javaagent, as players get it.
 
   Two switches exist only for this test: -Djumpstart.testInput=true -Djumpstart.cloudUrl=http://localhost:8787 lets the test press the secure
   screen's keys through Lua (the real screen reads only the physical keyboard), and the ZombieBuddy
   option hotswap_lua=true allows the bytecode probe that shows whether ZBHelloWorld's patch is in.
 
-  At start only ZombieBuddy and Jumpstart are active; ZBHelloWorld and a changed copy of it (its
+  Jumpstart is no mod in the mod list any more: the agent jar loads it. At start no mod is active; ZBHelloWorld and a changed copy of it (its
   own mod folder, hashes the registry does not know) are in the mods folder. The test checks that
   - Lua's Jumpstart API has nothing that installs or switches, Lua cannot reach GLFW, and fake
     Ctrl+Shift+J events in the game's key queue do not open the screen,
@@ -24,10 +24,11 @@
 #>
 param(
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
-    # the fork's test jar with experimental.jar (its Lua server drives this test): in the fork's java/,
-    # gradle -PgameClasspath=<game>\projectzomboid.jar shadowJarExperimental. The player jar has no Lua server.
-    [string]$ForkJar = (Join-Path $PSScriptRoot "..\..\zombiebuddy-jumpstart\java\build\jdk25\libs\zombiebuddy-jumpstart-experimental.jar"),
-    [string]$ModFolder = (Join-Path $PSScriptRoot "..\mod\build\mod\Jumpstart"),
+    # Jumpstart.jar built on the fork's test jar with experimental.jar (its Lua server drives this test):
+    #   third_party\zombiebuddy-jumpstart\java: gradle -PgameClasspath=<game>\projectzomboid.jar shadowJarExperimental
+    #   .\gradlew :mod:agentJar -PforkJar=<that ...-experimental.jar>
+    # The player jar has no Lua server.
+    [string]$AgentJar = (Join-Path $PSScriptRoot "..\mod\build\agent\Jumpstart.jar"),
     [string]$TestDir = "$env:USERPROFILE\Zomboid-jumpstart-gate-test",
     [switch]$KeepRunning
 )
@@ -69,9 +70,9 @@ New-Item -ItemType Directory -Force "$t\mods", "$t\.zombie_buddy", "$t\.bitechec
 if (-not (Test-Path "$t\mods\ZBHelloWorld")) {
     git clone -q --depth 1 https://github.com/zed-0xff/ZBHelloWorld "$t\mods\ZBHelloWorld"
 }
-if (Test-Path "$t\mods\Jumpstart") { Remove-Item "$t\mods\Jumpstart" -Recurse -Force }
-Copy-Item (Resolve-Path $ModFolder) "$t\mods\Jumpstart" -Recurse
-Copy-Item (Resolve-Path $ForkJar) "$t\ZombieBuddy-fork.jar" -Force
+if (Test-Path "$t\mods\Jumpstart") { Remove-Item "$t\mods\Jumpstart" -Recurse -Force } # older test runs
+Remove-Item "$t\ZombieBuddy-fork.jar" -ErrorAction SilentlyContinue
+Copy-Item (Resolve-Path $AgentJar) "$t\Jumpstart.jar" -Force
 
 $verified = "$t\mods\ZBHelloWorld\42\media\java\client\ZBHelloWorld.jar"
 # a changed copy as its own mod folder: same classes, one extra file in each jar, so hashes the
@@ -90,14 +91,12 @@ foreach ($jar in "ZBHelloWorld.jar", "ZBHelloWorld-2x.jar") {
 }
 $changed = "$changedMod\42\media\java\client\ZBHelloWorld.jar"
 
-# only ZombieBuddy and Jumpstart at start; Jumpstart.jar is our own build, approve it in the test config
-$modsTxt = "VERSION = 1,`r`n`r`nmods`r`n{`r`n    mod = ZombieBuddy,`r`n    mod = Jumpstart,`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n"
+# no mod active at start; Jumpstart.jar is the agent, so it needs no approval
+$modsTxt = "VERSION = 1,`r`n`r`nmods`r`n{`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n"
 [IO.File]::WriteAllText("$t\mods\default.txt", $modsTxt)
-$jumpstartJar = "$t\mods\Jumpstart\42\media\java\Jumpstart.jar"
-$approvals = '{"formatVersion": 2, "mods": [{"id": "Jumpstart", "jar_hash": "' + (Sha $jumpstartJar) + '", "decision": true}]}'
-[IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", $approvals)
+[IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", '{"formatVersion": 2, "mods": []}')
 
-$agent = "-javaagent:$t\ZombieBuddy-fork.jar=hotswap=true,hotswap_lua=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
+$agent = "-javaagent:$t\Jumpstart.jar=hotswap=true,hotswap_lua=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
 $start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true -Djumpstart.cloudUrl=http://localhost:8787 -Djava.awt.headless=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -Dzomboid.znetlog=1 -XX:-CreateCoredumpOnCrash -XX:-OmitStackTraceInFastThrow -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
 [IO.File]::WriteAllText("$t\start-test.cmd", $start)
 
@@ -112,15 +111,11 @@ Log "gametest $(Get-Date -Format s)"
 Start-Process cmd.exe -ArgumentList '/c', "`"$t\start-test.cmd`"" -WindowStyle Hidden
 $deadline = (Get-Date).AddMinutes(4)
 do { Start-Sleep 5; $ping = Lua "return 'pong'" } until ($ping -eq "pong" -or (Get-Date) -gt $deadline)
-$active = Lua 'return tostring(getActivatedMods():contains("Jumpstart"))'
-if ($active -ne "true") {
-    # a fresh -cachedir does not always pick up default.txt on the first start
-    Log "activating ZombieBuddy and Jumpstart like the mod menu does"
-    Lua 'local am = ActiveMods.getById("default") am:setModActive("ZombieBuddy", true) am:setModActive("Jumpstart", true) saveModsFile() getCore():ResetLua("default", "modsChanged") return 1' | Out-Null
-}
 $deadline = (Get-Date).AddMinutes(2)
 do { Start-Sleep 5; $status = Lua "return Jumpstart.status()" } until ($status -eq "ready" -or (Get-Date) -gt $deadline)
 Check "Jumpstart ready" $status ($status -eq "ready")
+$embedded = Select-String -Path "$t\game-out.txt" -Pattern 'loading embedded mod io.github.jumpstartpz.mod' -Quiet
+Check "the fork loaded Jumpstart from Jumpstart.jar" "" $embedded
 Check "ZBHelloWorld not loaded at start" (Has) ((Has) -eq "false")
 
 # --- Lua can read, but not change anything or open the secure screen ------------------------------
