@@ -1,6 +1,5 @@
 package io.github.jumpstartpz.installer;
 
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -10,8 +9,10 @@ import java.util.regex.Pattern;
 
 /**
  * ProjectZomboid64.json on Windows: the game's JVM options, so Windows needs no Steam launch
- * options. Jumpstart is the game's only Java agent:
- * {@code -javaagent:<game>/Jumpstart.jar=hotswap=true} as the first JVM option. A ZombieBuddy agent
+ * options. Jumpstart is the game's only Java agent: {@code -agentlib:jsNative=hotswap=true} as the
+ * first JVM option, the loader that starts Jumpstart.jar (ProjectZomboid64.exe cannot start
+ * {@code -javaagent} itself on Windows). The {@code -javaagent:<game>/Jumpstart.jar} entry of 0.4 and
+ * 0.5.0, with which the game did not start, is replaced. A ZombieBuddy agent
  * of the player's ({@code -agentlib:zbNative}, {@code -javaagent:...ZombieBuddy.jar}) is taken out,
  * as two agents would load every mod twice; its options go onto Jumpstart's, and the entry is
  * recorded so uninstalling puts it back exactly.
@@ -20,7 +21,10 @@ final class LaunchJson {
     private static final Pattern VM_ARGS = Pattern.compile("\"vmArgs\"\\s*:\\s*\\[");
     private static final Pattern ITEM = Pattern.compile("\"((?:[^\"\\\\]|\\\\.)*)\"");
     private static final Pattern ZOMBIE_BUDDY = Pattern.compile("-agentlib:zbNative(?:=(.*))?|-javaagent:.*ZombieBuddy\\.jar(?:=(.*))?");
-    private static final Pattern JUMPSTART = Pattern.compile("-javaagent:.*Jumpstart\\.jar(?:=(.*))?");
+    /** Jumpstart's agent: the loader, or the -javaagent entry of 0.4 and 0.5.0 (replaced). */
+    private static final Pattern JUMPSTART = Pattern.compile("-agentlib:jsNative(?:=(.*))?|-javaagent:.*Jumpstart\\.jar(?:=(.*))?");
+    private static final Pattern LOADER = Pattern.compile("-agentlib:jsNative(?:=(.*))?");
+    static final String AGENT = "-agentlib:jsNative";
     static final String HOTSWAP = "hotswap=true";
 
     /** The changed json and the entries it no longer has (to record for uninstalling). */
@@ -73,7 +77,7 @@ final class LaunchJson {
     /** True if the game starts Jumpstart with hotswap on. */
     static boolean hasJumpstart(String json) {
         Args a = args(json);
-        return a != null && a.items().stream().map(JUMPSTART::matcher)
+        return a != null && a.items().stream().map(LOADER::matcher)
                 .anyMatch(m -> m.matches() && options(m.group(1)).contains(HOTSWAP));
     }
 
@@ -89,7 +93,7 @@ final class LaunchJson {
      * ({@code -javaagent:...ZombieBuddy.jar=hotswap=true}) is not reported as removed: it was never
      * the player's.
      */
-    static Change withJumpstart(String json, Path jumpstartJar) {
+    static Change withJumpstart(String json) {
         Args a = args(json);
         if (a == null) {
             return null;
@@ -101,7 +105,7 @@ final class LaunchJson {
             Matcher zb = ZOMBIE_BUDDY.matcher(item);
             Matcher js = JUMPSTART.matcher(item);
             if (js.matches()) {
-                opts.addAll(options(js.group(1)));
+                opts.addAll(options(js.group(1) != null ? js.group(1) : js.group(2)));
             } else if (zb.matches()) {
                 List<String> o = options(zb.group(1) != null ? zb.group(1) : zb.group(2));
                 opts.addAll(o);
@@ -116,7 +120,7 @@ final class LaunchJson {
         opts.remove(HOTSWAP);
         opts.add(HOTSWAP);
         List<String> items = new ArrayList<>();
-        items.add("-javaagent:" + jumpstartJar.toAbsolutePath().toString().replace('\\', '/') + "=" + String.join(",", opts));
+        items.add(AGENT + "=" + String.join(",", opts));
         items.addAll(rest);
         String out = items.equals(a.items()) ? json : withItems(json, a, items);
         return new Change(out, removed);

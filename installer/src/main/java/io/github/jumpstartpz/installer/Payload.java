@@ -20,6 +20,7 @@ import java.util.zip.ZipInputStream;
  * <pre>
  * VERSION
  * Jumpstart.jar       the Java agent: the ZombieBuddy fork with Jumpstart built in
+ * jsNative.dll        Windows: the loader that starts Jumpstart.jar (ZombieBuddy's zbNative for it)
  * mods/ZombieBuddy/   the fork's mod folder (Lua, translations), without a jar
  * </pre>
  */
@@ -79,6 +80,11 @@ public final class Payload {
     /** The Java agent for the game folder: the fork with Jumpstart inside. */
     public Path jumpstartJar() {
         return dir.resolve("Jumpstart.jar");
+    }
+
+    /** Windows: the loader for Jumpstart.jar; a payload built without it has none (tests, macOS/Linux only). */
+    public Path nativeLoader() {
+        return dir.resolve("jsNative.dll");
     }
 
     /** The version this payload was built as (VERSION), else Jumpstart.jar's Jumpstart-Version. */

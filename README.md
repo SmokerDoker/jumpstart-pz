@@ -172,7 +172,7 @@ git submodule update --init      # BiteCheck and the ZombieBuddy fork, pinned in
 ./gradlew :mod:agentJar -PforkJar=<fork>/java/build/jdk25/libs/zombiebuddy-jumpstart.jar
 # the installer, with the fork's mod folder (no jar) from kit/zombiebuddy-mod.sh:
 bash kit/zombiebuddy-mod.sh third_party/zombiebuddy-jumpstart build/mods
-./gradlew :installer:installerJar -PforkJar=<...> -PzombieBuddyMod=build/mods/ZombieBuddy   # installer/build/setup/JumpstartSetup.jar
+./gradlew :installer:installerJar -PforkJar=<...> -PzombieBuddyMod=build/mods/ZombieBuddy -PnativeLoader=<jsNative.dll>   # installer/build/setup/JumpstartSetup.jar
 ```
 
 Needs JDK 21 to 24 with the wrapper (Gradle 8.14); with JDK 25 use Gradle 9. Project Zomboid

@@ -91,6 +91,11 @@ jobs:
       - name: The fork's ZombieBuddy mod folder (no jar)
         run: bash kit/zombiebuddy-mod.sh third_party/zombiebuddy-jumpstart dist-mods
 
+      - name: jsNative.dll (Windows loader for Jumpstart.jar)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64
+          bash kit/native-loader.sh third_party/zombiebuddy-jumpstart dist-native
+
       - name: Version
         id: version
         run: |
@@ -104,7 +109,9 @@ jobs:
         run: |
           mkdir -p dist
           JAVA_HOME="$JAVA_HOME_21_X64" ./gradlew --no-daemon :installer:installerJar "-PforkJar=$FORK_JAR" \
-            "-PforkDir=$PWD/third_party/zombiebuddy-jumpstart" "-PzombieBuddyMod=$PWD/dist-mods/ZombieBuddy" "-PkitVersion=$KIT_VERSION"
+            "-PforkDir=$PWD/third_party/zombiebuddy-jumpstart" "-PzombieBuddyMod=$PWD/dist-mods/ZombieBuddy" \
+            "-PnativeLoader=$PWD/dist-native/jsNative.dll" "-PkitVersion=$KIT_VERSION"
+          unzip -l installer/build/payload/payload.zip | grep -q ' jsNative.dll$'
           cp installer/build/setup/JumpstartSetup.jar dist/
           cp installer/build/payload/payload.zip dist/jumpstart-payload.zip
           # the installer installs into a fake game and Zomboid folder and removes it again; this build
