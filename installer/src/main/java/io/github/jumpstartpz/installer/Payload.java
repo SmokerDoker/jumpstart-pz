@@ -8,6 +8,8 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Comparator;
 import java.util.Optional;
+import java.util.jar.JarFile;
+import java.util.jar.Manifest;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -17,8 +19,8 @@ import java.util.zip.ZipInputStream;
  *
  * <pre>
  * VERSION
- * mods/ZombieBuddy/   the fork's mod folder, with libs/ZombieBuddy.jar (the Java agent)
- * mods/Jumpstart/     the Jumpstart mod
+ * Jumpstart.jar       the Java agent: the ZombieBuddy fork with Jumpstart built in
+ * mods/ZombieBuddy/   the fork's mod folder (Lua, translations), without a jar
  * </pre>
  */
 public final class Payload {
@@ -31,8 +33,7 @@ public final class Payload {
     /** A payload unpacked in a folder (tests, or {@code --payload <folder>}). */
     public static Payload of(Path dir) throws IOException {
         Payload p = new Payload(dir.toAbsolutePath().normalize());
-        for (Path required : new Path[] {p.zombieBuddyJar(), p.zombieBuddyMod().resolve("42/mod.info"),
-                p.jumpstartMod().resolve("42/mod.info")}) {
+        for (Path required : new Path[] {p.jumpstartJar(), p.zombieBuddyMod().resolve("42/mod.info")}) {
             if (!Files.isRegularFile(required)) {
                 throw new IOException("incomplete payload, missing " + required);
             }
@@ -75,16 +76,12 @@ public final class Payload {
         return dir.resolve("mods/ZombieBuddy");
     }
 
-    /** The fork's Java agent; the same file as in the mod folder's libs/. */
-    public Path zombieBuddyJar() {
-        return zombieBuddyMod().resolve("libs/ZombieBuddy.jar");
+    /** The Java agent for the game folder: the fork with Jumpstart inside. */
+    public Path jumpstartJar() {
+        return dir.resolve("Jumpstart.jar");
     }
 
-    public Path jumpstartMod() {
-        return dir.resolve("mods/Jumpstart");
-    }
-
-    /** The kit version this payload was built as, or the Jumpstart mod's modversion. */
+    /** The version this payload was built as (VERSION), else Jumpstart.jar's Jumpstart-Version. */
     public String version() {
         try {
             Path v = dir.resolve("VERSION");
@@ -92,9 +89,15 @@ public final class Payload {
                 return Files.readString(v, StandardCharsets.UTF_8).strip();
             }
         } catch (IOException e) {
-            // fall back to mod.info
+            // fall back to the jar
         }
-        return Setup.modVersion(jumpstartMod()).orElse("?");
+        try (JarFile jar = new JarFile(jumpstartJar().toFile())) {
+            Manifest m = jar.getManifest();
+            String v = m == null ? null : m.getMainAttributes().getValue("Jumpstart-Version");
+            return v == null || v.isBlank() ? "?" : v.strip();
+        } catch (IOException e) {
+            return "?";
+        }
     }
 
     static void deleteQuietly(Path dir) {

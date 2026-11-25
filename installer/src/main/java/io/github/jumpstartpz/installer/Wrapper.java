@@ -30,12 +30,14 @@ import io.github.bitecheckpz.launcher.Platform;
  *
  * <pre>
  * "…/Jumpstart" --wrap %command%                        (Windows)
- * "…/Jumpstart" --wrap %command% -javaagent:ZombieBuddy.jar=hotswap=true --   (macOS, Linux)
+ * "…/Jumpstart" --wrap %command% -javaagent:Jumpstart.jar=hotswap=true --   (macOS, Linux)
  * "…/Jumpstart" --wrap "…/BiteCheck" --wrap %command% …  (with BiteCheck: Jumpstart first, then BiteCheck checks)
  * </pre>
  *
- * Installs a newer signed release (nothing is locked before the game starts), puts hotswap=true back
- * after a game update, then runs the rest of the command line unchanged and waits for it. Whatever
+ * Installs a newer signed release (nothing is locked before the game starts), puts Jumpstart's agent
+ * back after a game update, then runs the rest of the command line and waits for it. Only a
+ * ZombieBuddy agent in it changes: once Jumpstart.jar replaced ZombieBuddy.jar it would not find its
+ * jar (see {@link LaunchOptions#forJumpstart}). Whatever
  * goes wrong, the game still starts. A log is kept in Zomboid/jumpstart-update.log.
  */
 final class Wrapper {
@@ -81,8 +83,9 @@ final class Wrapper {
             log.accept("nothing to start after --wrap");
             return 2;
         }
-        List<String> run = runnable(command);
-        if (!run.equals(command)) {
+        List<String> fixed = withCurrentAgent(command, log);
+        List<String> run = runnable(fixed);
+        if (!run.equals(fixed)) {
             log.accept("macOS app bundle: starting " + run.get(0));
         }
         try {
@@ -92,7 +95,7 @@ final class Wrapper {
             if (isAppBundle(command.get(0))) {
                 // last resort: let macOS open the bundle, and wait for it
                 List<String> open = new java.util.ArrayList<>(List.of("open", "-W", "-a", command.get(0), "--args"));
-                open.addAll(command.subList(1, command.size()));
+                open.addAll(fixed.subList(1, fixed.size()));
                 try {
                     log.accept("trying: open -W -a ...");
                     return startAndWait(open, log);
@@ -106,6 +109,24 @@ final class Wrapper {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return 1;
+        }
+    }
+
+    /** The command with Jumpstart's agent instead of ZombieBuddy's, once Jumpstart.jar is in place. */
+    private static List<String> withCurrentAgent(List<String> command, Consumer<String> log) {
+        try {
+            Optional<GameLocation> loc = GameLocation.find(Optional.empty());
+            if (loc.isEmpty() || !Setup.isFork(loc.get().jumpstartJar()) || Files.exists(loc.get().zombieBuddyJar())) {
+                return command;
+            }
+            List<String> out = LaunchOptions.forJumpstart(command, loc.get().os() == Platform.Os.WINDOWS);
+            if (!out.equals(command)) {
+                log.accept("ZombieBuddy's agent replaced by Jumpstart's for this start: " + String.join(" ", out));
+            }
+            return out;
+        } catch (RuntimeException e) {
+            log.accept("cannot check the agent, starting as given: " + e);
+            return command;
         }
     }
 
@@ -210,7 +231,7 @@ final class Wrapper {
         // the installer itself: kept for the next start (this one may be locked while the game runs)
         release.ifPresent(r -> Bootstrap.fetch(updater, r, log));
         if (setup.repair()) {
-            log.accept("hotswap=true put back into ProjectZomboid64.json (a game update had removed it)");
+            log.accept("Jumpstart put back into ProjectZomboid64.json (a game update had removed it)");
         }
     }
 

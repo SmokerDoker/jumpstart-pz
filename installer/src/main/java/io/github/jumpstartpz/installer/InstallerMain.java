@@ -107,20 +107,20 @@ public final class InstallerMain {
     private static void usage() {
         System.out.println("""
                 JumpstartSetup                 opens the installer window
-                JumpstartSetup --install       installs Jumpstart and the ZombieBuddy fork
-                JumpstartSetup --uninstall     removes them
+                JumpstartSetup --install       installs Jumpstart (Jumpstart.jar, the ZombieBuddy fork inside)
+                JumpstartSetup --uninstall     removes it
                 JumpstartSetup --update        installs the newest signed release, if it is newer
                 JumpstartSetup --status        shows what is installed
                   --game-dir DIR     Project Zomboid's folder, if it is not found in Steam's libraries
-                  --payload DIR      install these files instead of the ones built in (mods/ZombieBuddy, mods/Jumpstart)
+                  --payload DIR      install these files instead of the ones built in (Jumpstart.jar, mods/ZombieBuddy)
                   --close-steam      close Steam if needed to set the launch options
                   --no-auto-update   do not put Jumpstart's updater into the launch options
                   --force            install even if an older release than the installed one
                 JumpstartSetup --server DIR    a dedicated server (run it with the server's own jre64/bin/java)
                   --name NAME        the server name (its .ini); default: the only .ini there is
                   --zomboid-dir DIR  the server's data folder (-cachedir=); default ~/Zomboid
-                  --agent-args ARGS  ZombieBuddy's options; default hotswap=true
-                  --headless         no console: policy=deny-new and Jumpstart approved ahead
+                  --agent-args ARGS  the agent's (ZombieBuddy's) options; default hotswap=true
+                  --headless         no console: policy=deny-new (new Java mods stay off)
                   --update           only if a newer signed release exists (else just repair); for ExecStartPre
                   --uninstall        remove it from the server""");
     }
@@ -281,7 +281,7 @@ public final class InstallerMain {
             Payload payload = choosePayload(payloadDir, log, t);
             log.accept(t.get("payload", payload.version()));
             s.install(payload);
-            log.accept("First start: ZombieBuddy asks once per new Java jar" + (o.headless() ? "; Jumpstart is approved already." : " (answer y in the console)."));
+            log.accept("First start: ZombieBuddy asks once per new Java mod jar" + (o.headless() ? "; with policy=deny-new they stay off." : " (answer y in the console)."));
             return 0;
         } catch (IOException | RuntimeException e) {
             log.accept(t.get("error", e.getMessage()));

@@ -27,19 +27,19 @@ class WrapperAndVersionsTest {
 
     @Test
     void wrapperIsReplacedNotDoubled() {
-        String once = LaunchOptions.withWrapper("-javaagent:ZombieBuddy.jar=hotswap=true --", JAR);
-        assertEquals(JAR + " %command% -javaagent:ZombieBuddy.jar=hotswap=true --", once);
+        String once = LaunchOptions.withWrapper("-javaagent:Jumpstart.jar=hotswap=true --", JAR);
+        assertEquals(JAR + " %command% -javaagent:Jumpstart.jar=hotswap=true --", once);
         assertTrue(LaunchOptions.hasWrapper(once));
         assertEquals(once, LaunchOptions.withWrapper(once, JAR));
         // the app moved: the new path replaces the old one
-        assertEquals(MAC + " %command% -javaagent:ZombieBuddy.jar=hotswap=true --", LaunchOptions.withWrapper(once, MAC));
+        assertEquals(MAC + " %command% -javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withWrapper(once, MAC));
     }
 
     @Test
     void wrapperAndAgentTogether() {
         // macOS/Linux: the agent first (as Setup does), then the wrapper
         String s = LaunchOptions.withWrapper(LaunchOptions.withJumpstart(""), MAC);
-        assertEquals(MAC + " %command% -javaagent:ZombieBuddy.jar=hotswap=true --", s);
+        assertEquals(MAC + " %command% -javaagent:Jumpstart.jar=hotswap=true --", s);
         assertEquals(s, LaunchOptions.withWrapper(LaunchOptions.withJumpstart(s), MAC), "running the installer again changes nothing");
         assertEquals("", LaunchOptions.withoutJumpstart(LaunchOptions.withoutWrapper(s), false));
     }

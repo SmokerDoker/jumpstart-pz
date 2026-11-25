@@ -1,23 +1,28 @@
 # Jumpstart on a dedicated server
 
-Hosting from the game's main menu ("Host") needs nothing of this: the ZombieBuddy fork starts the
-hosted server with ZombieBuddy and Jumpstart by itself. This is for dedicated servers (SteamCMD app
+Hosting from the game's main menu ("Host") needs nothing of this: Jumpstart.jar starts the hosted
+server with itself (ZombieBuddy and Jumpstart in one jar). This is for dedicated servers (SteamCMD app
 380870, or "Project Zomboid Dedicated Server" in Steam).
 
 Players who join need Jumpstart too (the one-click installer). Nobody needs ZombieBuddy from the
-Workshop: the fork comes along as mod folder, on the server and on every client.
+Workshop: the fork is in Jumpstart.jar, its mod folder comes along, on the server and on every client.
 
 ## Recommended: JumpstartSetup.jar with the server's own Java
 
 `JumpstartSetup.jar` is one file and runs with the Java that comes with the server (`jre64`), on
 Linux and Windows. It puts in place:
 
-- the fork as Java agent (Linux: `java/ZombieBuddy.jar` and `-javaagent` in `ProjectZomboid64.json`;
-  Windows: `ZombieBuddy.jar` and `-javaagent` in `StartServer64.bat`)
-- the mod folders `ZombieBuddy` (fork) and `Jumpstart` in the server's `Zomboid/mods`
-- `ZombieBuddy;Jumpstart` in `Mods=` of the server's `.ini` (no `WorkshopItems=` entry needed)
+- `Jumpstart.jar` (the ZombieBuddy fork with Jumpstart built in) as the only Java agent (Linux:
+  `java/Jumpstart.jar` and `-javaagent` in `ProjectZomboid64.json`; Windows: `Jumpstart.jar` and
+  `-javaagent` in `StartServer64.bat`); a ZombieBuddy agent there is taken out
+- the fork's mod folder `ZombieBuddy` (Lua, no jar) in the server's `Zomboid/mods`
+- `ZombieBuddy` in `Mods=` of the server's `.ini` (no `WorkshopItems=` entry needed; Jumpstart is no
+  mod of its own any more, an old `Jumpstart` entry goes)
 - with `--headless`: ZombieBuddy's `policy=deny-new` (a server without console cannot answer
-  questions) and Jumpstart.jar approved ahead in `mod_approvals.json`
+  questions). Jumpstart itself needs no approval: it is the agent, not a mod.
+
+A server set up before 0.2 (the fork as `ZombieBuddy.jar`, a `Jumpstart` mod folder) is moved to this
+layout by the next `--update` or install.
 
 ### Linux (systemd)
 
@@ -62,7 +67,7 @@ for a new installer version.
 
 ### After installing
 
-1. First start without `--headless`, in a console: ZombieBuddy asks once per new Java jar (answer `y`).
+1. First start without `--headless`, in a console: ZombieBuddy asks once per new Java mod jar (answer `y`).
 2. The log shows `[Jumpstart] multiplayer: server side ready; Java mods for the clients: [...]`.
 3. Give yourself admin rights (`setaccesslevel <name> admin` in the server console). Only admins switch
    Java mods in multiplayer: in the game, Ctrl+Shift+J, tab **Server**, Enter = load/update for
@@ -70,14 +75,3 @@ for a new installer version.
    is not ready within 3 minutes is disconnected.
 
 Remove: the same line with `--uninstall` instead of `--headless --update`.
-
-## Alternative: the server kit (scripts)
-
-`jumpstart-server-<version>.zip` from the releases, or in one step:
-
-- Linux: `curl -fsSL https://raw.githubusercontent.com/SmokerDoker/jumpstart-pz/main/kit/get.sh | bash -s -- server /path/to/server [servername]`
-- Windows (PowerShell): `$env:JUMPSTART_SERVER = "C:\path\to\server"; $env:JUMPSTART_SERVER_NAME = "servertest"; irm https://raw.githubusercontent.com/SmokerDoker/jumpstart-pz/main/kit/get.ps1 | iex`
-- or from the package: `bash install-server.sh /path/to/server [servername]`, on Windows double-click
-  `Server einrichten.cmd` (another folder or name: `Server einrichten.cmd -ServerDir "D:\pzserver" -ServerName myserver`).
-
-The scripts do the same as the jar without `--headless` and without updates.

@@ -12,7 +12,7 @@ import io.github.bitecheckpz.launcher.Platform;
 
 /**
  * Where Project Zomboid and the player's files are: the game's Java folder (holds projectzomboid.jar,
- * gets ZombieBuddy.jar), Zomboid/ (mods, mod list), Steam's folders (launch options, Workshop).
+ * gets Jumpstart.jar), Zomboid/ (mods, mod list), Steam's folders (launch options, Workshop).
  * Found like BiteCheck finds them, in every Steam library; BiteCheck's config.toml overrides apply.
  *
  * @param os           the system
@@ -27,8 +27,19 @@ public record GameLocation(Platform.Os os, Path javaDir, Path zomboidDir, List<P
     /** ZombieBuddy's Workshop item; with the fork's mod folder in Zomboid/mods it is not needed. */
     public static final String ZOMBIEBUDDY_WORKSHOP_ID = "3619862853";
 
+    /** Jumpstart: the ZombieBuddy fork with Jumpstart built in, the game's Java agent. */
+    public Path jumpstartJar() {
+        return javaDir.resolve("Jumpstart.jar");
+    }
+
+    /** ZombieBuddy's own jar (the player's, or the fork from Jumpstart before 0.2); moved aside while Jumpstart is installed. */
     public Path zombieBuddyJar() {
         return javaDir.resolve("ZombieBuddy.jar");
+    }
+
+    /** Which entries of ProjectZomboid64.json Jumpstart replaced, to put them back on uninstall (Windows). */
+    public Path replacedAgents() {
+        return javaDir.resolve("jumpstart-replaced-agent.txt");
     }
 
     /** ProjectZomboid64.json: the game's JVM options on Windows (no Steam launch options needed). */

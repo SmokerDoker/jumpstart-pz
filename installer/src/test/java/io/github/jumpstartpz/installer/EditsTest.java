@@ -18,21 +18,26 @@ class EditsTest {
 
     @Test
     void launchOptionsFromNothing() {
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true --", LaunchOptions.withJumpstart(""));
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true --", LaunchOptions.withJumpstart(null));
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withJumpstart(""));
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withJumpstart(null));
     }
 
     @Test
-    void launchOptionsWithPlainZombieBuddy() {
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true --", LaunchOptions.withJumpstart("-javaagent:ZombieBuddy.jar --"));
-        assertEquals("-javaagent:ZombieBuddy.jar=policy=deny-new,hotswap=true --",
+    void launchOptionsReplaceZombieBuddyAndKeepItsOptions() {
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withJumpstart("-javaagent:ZombieBuddy.jar --"));
+        assertEquals("-javaagent:Jumpstart.jar=policy=deny-new,hotswap=true --",
                 LaunchOptions.withJumpstart("-javaagent:ZombieBuddy.jar=policy=deny-new --"));
+        // Jumpstart before 0.2
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true --"));
+        // both: ZombieBuddy's goes, its options join Jumpstart's
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true,verbosity=2 --",
+                LaunchOptions.withJumpstart("-javaagent:Jumpstart.jar=hotswap=true -javaagent:ZombieBuddy.jar=verbosity=2 --"));
     }
 
     @Test
     void launchOptionsKeepBiteChecksWrapper() {
         String bitecheck = "\"/Applications/BiteCheck.app/Contents/MacOS/BiteCheck\" --wrap %command% -javaagent:ZombieBuddy.jar --";
-        String wanted = "\"/Applications/BiteCheck.app/Contents/MacOS/BiteCheck\" --wrap %command% -javaagent:ZombieBuddy.jar=hotswap=true --";
+        String wanted = "\"/Applications/BiteCheck.app/Contents/MacOS/BiteCheck\" --wrap %command% -javaagent:Jumpstart.jar=hotswap=true --";
         assertEquals(wanted, LaunchOptions.withJumpstart(bitecheck));
         assertTrue(LaunchOptions.hasJumpstart(wanted));
         assertEquals(bitecheck, LaunchOptions.withoutJumpstart(wanted, true));
@@ -40,30 +45,62 @@ class EditsTest {
 
     @Test
     void launchOptionsAlreadySet() {
-        String s = "-javaagent:ZombieBuddy.jar=hotswap=true --";
+        String s = "-javaagent:Jumpstart.jar=hotswap=true --";
         assertEquals(s, LaunchOptions.withJumpstart(s));
         assertTrue(LaunchOptions.hasJumpstart(s));
-        assertFalse(LaunchOptions.hasJumpstart("-javaagent:ZombieBuddy.jar --"));
+        assertFalse(LaunchOptions.hasJumpstart("-javaagent:Jumpstart.jar --"));
+        assertFalse(LaunchOptions.hasJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true --"), "that is the layout before 0.2");
         assertFalse(LaunchOptions.hasJumpstart(""));
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withJumpstart("-javaagent:Jumpstart.jar --"));
     }
 
     @Test
     void launchOptionsWithOtherOptions() {
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true -Xmx8g --", LaunchOptions.withJumpstart("-Xmx8g --"));
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true -- -debug", LaunchOptions.withJumpstart("-debug"));
-        assertEquals("gamemoderun %command% -javaagent:ZombieBuddy.jar=hotswap=true --", LaunchOptions.withJumpstart("gamemoderun %command%"));
-        assertEquals("gamemoderun %command% -javaagent:ZombieBuddy.jar=hotswap=true -- -debug",
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true -Xmx8g --", LaunchOptions.withJumpstart("-Xmx8g --"));
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true -- -debug", LaunchOptions.withJumpstart("-debug"));
+        assertEquals("gamemoderun %command% -javaagent:Jumpstart.jar=hotswap=true --", LaunchOptions.withJumpstart("gamemoderun %command%"));
+        assertEquals("gamemoderun %command% -javaagent:Jumpstart.jar=hotswap=true -- -debug",
                 LaunchOptions.withJumpstart("gamemoderun %command% -debug"));
     }
 
     @Test
     void launchOptionsUninstall() {
-        assertEquals("", LaunchOptions.withoutJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true --", false));
-        assertEquals("-javaagent:ZombieBuddy.jar --", LaunchOptions.withoutJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true --", true));
-        assertEquals("-debug", LaunchOptions.withoutJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true -- -debug", false));
-        assertEquals("gamemoderun %command%", LaunchOptions.withoutJumpstart("gamemoderun %command% -javaagent:ZombieBuddy.jar=hotswap=true --", false));
-        assertEquals("-Xmx8g --", LaunchOptions.withoutJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true -Xmx8g --", false));
+        assertEquals("", LaunchOptions.withoutJumpstart("-javaagent:Jumpstart.jar=hotswap=true --", false));
+        assertEquals("-javaagent:ZombieBuddy.jar --", LaunchOptions.withoutJumpstart("-javaagent:Jumpstart.jar=hotswap=true --", true));
+        assertEquals("-javaagent:ZombieBuddy.jar=policy=deny-new --",
+                LaunchOptions.withoutJumpstart("-javaagent:Jumpstart.jar=policy=deny-new,hotswap=true --", true));
+        assertEquals("-debug", LaunchOptions.withoutJumpstart("-javaagent:Jumpstart.jar=hotswap=true -- -debug", false));
+        assertEquals("gamemoderun %command%", LaunchOptions.withoutJumpstart("gamemoderun %command% -javaagent:Jumpstart.jar=hotswap=true --", false));
+        assertEquals("-Xmx8g --", LaunchOptions.withoutJumpstart("-javaagent:Jumpstart.jar=hotswap=true -Xmx8g --", false));
         assertEquals("-Xmx8g --", LaunchOptions.withoutJumpstart("-Xmx8g --", false));
+        // Jumpstart before 0.2; a ZombieBuddy without hotswap is the player's and stays
+        assertEquals("", LaunchOptions.withoutJumpstart("-javaagent:ZombieBuddy.jar=hotswap=true --", false));
+        assertEquals("-javaagent:ZombieBuddy.jar --", LaunchOptions.withoutJumpstart("-javaagent:ZombieBuddy.jar --", false));
+    }
+
+    @Test
+    void launchOptionsOnWindowsLoseZombieBuddy() {
+        String bitecheck = "\"C:\\BiteCheck.exe\" --wrap %command%";
+        assertEquals(bitecheck, LaunchOptions.withoutZombieBuddy(bitecheck + " -agentlib:zbNative --"));
+        assertEquals("", LaunchOptions.withoutZombieBuddy("-agentlib:zbNative=policy=deny-new --"));
+        assertEquals("-debug", LaunchOptions.withoutZombieBuddy("-debug"));
+        assertTrue(LaunchOptions.startsZombieBuddy("-agentlib:zbNative --"));
+        assertFalse(LaunchOptions.startsZombieBuddy("-javaagent:Jumpstart.jar=hotswap=true --"));
+        assertTrue(LaunchOptions.startsLoader("-javaagent:Jumpstart.jar=hotswap=true --"));
+    }
+
+    @Test
+    void wrapperFixesAStaleZombieBuddyAgentForThisStart() {
+        List<String> mac = List.of("/game/ProjectZomboid", "-javaagent:ZombieBuddy.jar=policy=deny-new,hotswap=true", "--", "-debug");
+        assertEquals(List.of("/game/ProjectZomboid", "-javaagent:Jumpstart.jar=policy=deny-new,hotswap=true", "--", "-debug"),
+                LaunchOptions.forJumpstart(mac, false));
+        List<String> both = List.of("/game", "-javaagent:Jumpstart.jar=hotswap=true", "-javaagent:ZombieBuddy.jar", "--");
+        assertEquals(List.of("/game", "-javaagent:Jumpstart.jar=hotswap=true", "--"), LaunchOptions.forJumpstart(both, false));
+        // Windows: ProjectZomboid64.json starts Jumpstart; BiteCheck's zbNative goes
+        List<String> win = List.of("C:\\BiteCheck.exe", "--wrap", "C:\\PZ\\ProjectZomboid64.exe", "-agentlib:zbNative", "--");
+        assertEquals(List.of("C:\\BiteCheck.exe", "--wrap", "C:\\PZ\\ProjectZomboid64.exe", "--"), LaunchOptions.forJumpstart(win, true));
+        List<String> clean = List.of("/game", "-javaagent:Jumpstart.jar=hotswap=true", "--");
+        assertEquals(clean, LaunchOptions.forJumpstart(clean, false));
     }
 
     // --- localconfig.vdf ---
@@ -121,10 +158,10 @@ class EditsTest {
 
     @Test
     void vdfWritesBothCopiesAndNothingElse() {
-        String opts = "\"/opt/b c\\d\" --wrap %command% -javaagent:ZombieBuddy.jar=hotswap=true --";
+        String opts = "\"/opt/b c\\d\" --wrap %command% -javaagent:Jumpstart.jar=hotswap=true --";
         String out = LocalConfigVdf.withLaunchOptions(VDF, opts).orElseThrow();
         assertEquals(Optional.of(opts), LocalConfigVdf.launchOptions(out));
-        String escaped = "\"\\\"/opt/b c\\\\d\\\" --wrap %command% -javaagent:ZombieBuddy.jar=hotswap=true --\"";
+        String escaped = "\"\\\"/opt/b c\\\\d\\\" --wrap %command% -javaagent:Jumpstart.jar=hotswap=true --\"";
         assertEquals(2, out.split(java.util.regex.Pattern.quote(escaped), -1).length - 1, out);
         assertTrue(out.contains("\"LaunchOptions\"\t\t\"-other\""));
         assertTrue(out.contains("\"108600\"\t\t\"3200000004\""));
@@ -151,37 +188,52 @@ class EditsTest {
     // --- ProjectZomboid64.json (Windows) ---
 
     private static final String JSON = "{\r\n\t\"mainClass\": \"zombie/gameStates/MainScreenState\",\r\n\t\"vmArgs\": [\r\n\t\t\"-Xms16g\",\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n";
+    private static final Path JAR = Path.of("PZ", "Jumpstart.jar").toAbsolutePath();
+    private static final String AGENT = "-javaagent:" + JAR.toString().replace('\\', '/');
 
     @Test
     void jsonWithoutZombieBuddyGetsTheAgent() {
-        Path jar = Path.of("PZ", "ZombieBuddy.jar").toAbsolutePath();
-        String out = LaunchJson.withHotswap(JSON, jar);
-        String agent = "-javaagent:" + jar.toString().replace('\\', '/') + "=hotswap=true";
-        assertTrue(out.contains("\"vmArgs\": [\r\n\t\t\"" + agent + "\",\r\n\t\t\"-Xms16g\""), out);
-        assertTrue(LaunchJson.hasHotswap(out));
-        assertEquals(JSON, LaunchJson.withoutHotswap(out));
-        assertFalse(LaunchJson.startsZombieBuddy(LaunchJson.withoutHotswap(out)));
+        LaunchJson.Change c = LaunchJson.withJumpstart(JSON, JAR);
+        assertTrue(c.json().contains("\"vmArgs\": [\r\n\t\t\"" + AGENT + "=hotswap=true\",\r\n\t\t\"-Xms16g\""), c.json());
+        assertEquals(List.of(), c.removed());
+        assertTrue(LaunchJson.hasJumpstart(c.json()));
+        assertTrue(LaunchJson.startsLoader(c.json()));
+        assertEquals(c.json(), LaunchJson.withJumpstart(c.json(), JAR).json(), "once is enough");
+        assertEquals(JSON, LaunchJson.withoutJumpstart(c.json(), List.of()));
+        assertFalse(LaunchJson.startsLoader(JSON));
     }
 
     @Test
-    void jsonWithZombieBuddysInstaller() {
-        String zb = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative\",\r\n\t\t\"-Xms16g\"");
-        String out = LaunchJson.withHotswap(zb, Path.of("x"));
-        assertTrue(out.contains("\"-agentlib:zbNative=hotswap=true\""));
-        assertEquals(zb, LaunchJson.withoutHotswap(out));
-        assertTrue(LaunchJson.startsZombieBuddy(zb));
-
-        String withOptions = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative=policy=deny-new\",\r\n\t\t\"-Xms16g\"");
-        String out2 = LaunchJson.withHotswap(withOptions, Path.of("x"));
-        assertTrue(out2.contains("\"-agentlib:zbNative=policy=deny-new,hotswap=true\""));
-        assertEquals(withOptions, LaunchJson.withoutHotswap(out2));
+    void jsonWithZombieBuddysInstallerIsReplacedAndRestored() {
+        String zb = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative=policy=deny-new\",\r\n\t\t\"-Xms16g\"");
+        LaunchJson.Change c = LaunchJson.withJumpstart(zb, JAR);
+        assertFalse(c.json().contains("zbNative"), c.json());
+        assertTrue(c.json().contains("\"" + AGENT + "=policy=deny-new,hotswap=true\""), c.json());
+        assertEquals(List.of("-agentlib:zbNative=policy=deny-new"), c.removed());
+        assertEquals(zb, LaunchJson.withoutJumpstart(c.json(), c.removed()));
+        assertTrue(LaunchJson.startsLoader(zb));
     }
 
     @Test
-    void jsonAlreadySetOrBroken() {
-        String set = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative=hotswap=true\",\r\n\t\t\"-Xms16g\"");
-        assertEquals(set, LaunchJson.withHotswap(set, Path.of("x")));
-        assertNull(LaunchJson.withHotswap("{}", Path.of("x")));
+    void jsonFromJumpstartBefore02() {
+        // 0.1 added its own agent, or hotswap=true to ZombieBuddy's installer option
+        String own = JSON.replace("\"-Xms16g\"", "\"-javaagent:C:/PZ/ZombieBuddy.jar=hotswap=true\",\r\n\t\t\"-Xms16g\"");
+        LaunchJson.Change c = LaunchJson.withJumpstart(own, JAR);
+        assertFalse(c.json().contains("ZombieBuddy.jar"), c.json());
+        assertEquals(List.of(), c.removed(), "0.1's entry was never the player's");
+        assertEquals(JSON, LaunchJson.withoutJumpstart(own, List.of()), "uninstalled without updating first");
+
+        String zbNative = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative=hotswap=true\",\r\n\t\t\"-Xms16g\"");
+        LaunchJson.Change c2 = LaunchJson.withJumpstart(zbNative, JAR);
+        assertEquals(List.of("-agentlib:zbNative"), c2.removed(), "the player's option, without 0.1's hotswap=true");
+        assertEquals(JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative\",\r\n\t\t\"-Xms16g\""),
+                LaunchJson.withoutJumpstart(zbNative, List.of()));
+    }
+
+    @Test
+    void jsonBroken() {
+        assertNull(LaunchJson.withJumpstart("{}", JAR));
+        assertFalse(LaunchJson.hasJumpstart("{}"));
     }
 
     // --- default.txt ---

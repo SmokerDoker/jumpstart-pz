@@ -18,28 +18,18 @@ Alle brauchen dieselbe Project-Zomboid-Version (Build 42). Steam muss laufen.
 Im Fenster **Jumpstart installieren** drücken. Auf macOS/Linux muss Steam für die Startoption kurz
 zu sein: Der Installer bietet an, Steam zu schließen, oder legt die Zeile in die Zwischenablage.
 
-**Oder mit einer Zeile** – Windows (PowerShell):
+Der Installer legt **eine** Datei ins Spielverzeichnis: `Jumpstart.jar` (der ZombieBuddy-Fork mit
+Jumpstart darin), gestartet mit `-javaagent:Jumpstart.jar=hotswap=true` (Windows in
+`ProjectZomboid64.json`, macOS/Linux in den Steam-Startoptionen). Dazu kommt der Mod-Ordner
+`Zomboid/mods/ZombieBuddy` (ohne Jar), im Mod-Menü eingeschaltet. Eine eigene ZombieBuddy.jar wird
+als `ZombieBuddy.jar.before-jumpstart` aufgehoben. **ZombieBuddy muss nicht mehr im Workshop
+abonniert werden**; ein vorhandenes Abo stört nicht.
 
-    irm https://raw.githubusercontent.com/SmokerDoker/jumpstart-pz/main/kit/get.ps1 | iex
+Dann das Spiel starten. Wer den BiteCheck-Launcher benutzt: er fragt einmal nach `Jumpstart.jar`
+(noch nicht von BiteCheck geprüft) und braucht zweimal Ja. **Strg+Umschalt+J** öffnet den sicheren
+Bildschirm von Jumpstart.
 
-macOS und Linux (Terminal):
-
-    curl -fsSL https://raw.githubusercontent.com/SmokerDoker/jumpstart-pz/main/kit/get.sh | bash
-
-(oder das passende Paket entpacken und `Jumpstart installieren.cmd/.command` doppelklicken). Auf
-macOS/Linux danach **ein** Schritt von Hand: in Steam bei Project Zomboid > Eigenschaften >
-Startoptionen `-javaagent:ZombieBuddy.jar=hotswap=true --` einfügen (liegt in der Zwischenablage).
-
-Alle Wege setzen den ZombieBuddy-Fork ein (als `ZombieBuddy.jar` und als Mod-Ordner
-`Zomboid/mods/ZombieBuddy`), kopieren die Jumpstart-Mod und schalten beide im Mod-Menü ein.
-**ZombieBuddy muss nicht mehr im Workshop abonniert werden**; ein vorhandenes Abo stört nicht.
-
-Dann das Spiel starten. ZombieBuddy fragt einmal, ob `Jumpstart.jar` laden darf: **Ja**. Wer den
-BiteCheck-Launcher benutzt: Jumpstart dort mit „Allow anyway“ freigeben (Jumpstart ist noch nicht
-von BiteCheck geprüft). **Strg+Umschalt+J** öffnet den sicheren Bildschirm von Jumpstart.
-
-Rückgängig machen: im Installer **Entfernen**, oder `install-windows.ps1 -Uninstall` bzw.
-`bash install-unix.sh --uninstall` (und die Startoption wieder entfernen).
+Rückgängig machen: im Installer **Entfernen** (oder `JumpstartSetup.jar --uninstall`).
 
 ## 2. Erst allein prüfen (jeder, 5 Minuten)
 
@@ -53,10 +43,10 @@ Spiel beim Drücken von Strg+Umschalt+J abstürzt oder nichts passiert, sofort m
 
 ## 3. Zusammen spielen
 
-**Host (Windows):** Hauptmenü → *Host* → Mods: ZombieBuddy, Jumpstart und eine Java-Mod aus dem
+**Host (Windows):** Hauptmenü → *Host* → Mods: ZombieBuddy und eine Java-Mod aus dem
 Workshop, die **nicht** von BiteCheck geprüft ist (fast alle der 728 in der Java-Bibliothek),
 damit jeder BiteChecks Fragen sieht. Die Freunde treten über die Steam-Einladung bei.
-Der gehostete Server bekommt ZombieBuddy jetzt automatisch (Jumpstart-Fork).
+Der gehostete Server bekommt Jumpstart.jar automatisch.
 
 Jeder öffnet nach dem Beitreten Strg+Umschalt+J → Reiter **Server**:
 - Stehen dort die Java-Mods des Servers mit „gleich wie bei dir“?

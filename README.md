@@ -86,20 +86,23 @@ its bytecode does and what BiteCheck's scanner finds. The strictest wins.
   (Enter) or switches off/on (A) a mod for everybody at once. The game pauses, every other player
   has to agree, for an update every client gets exactly the server's jar and BiteCheck checks it
   (the player answers its questions); whoever says no or is not ready within 3 minutes is
-  disconnected, then the server follows. Test kit for Windows, macOS
-  and Ubuntu: [kit/](kit/TESTPLAN.md)
+  disconnected, then the server follows. Test plan for Windows, macOS
+  and Ubuntu: [kit/TESTPLAN.md](kit/TESTPLAN.md)
 - [x] One-click installers like BiteCheck's (`installer/`, `kit/package-installer.sh`): `.msi`, `.dmg`
   (Apple Silicon and Intel), `.deb`, `.rpm` with their own Java runtime, and `JumpstartSetup.jar`.
-  They ship the ZombieBuddy fork as Java agent **and** as mod folder, so nobody needs ZombieBuddy from
-  the Workshop or its installer any more; macOS/Linux launch options are set in Steam's
-  `localconfig.vdf` while Steam is closed
+  They ship the ZombieBuddy fork inside Jumpstart.jar plus its mod folder, so nobody needs
+  ZombieBuddy from the Workshop or its installer any more; macOS/Linux launch options are set in
+  Steam's `localconfig.vdf` while Steam is closed
+- [x] **One jar:** `Jumpstart.jar` is the game's only Java agent: the ZombieBuddy fork with Jumpstart
+  and its BiteCheck classes built in (the fork loads Jumpstart from the jar's `embedded-mod/` entries,
+  plain classes BiteCheck scans like any other). BiteCheck asks about this one jar
 - [x] The cloud Worker runs at <https://jumpstart-cloud.smokerdoker.workers.dev> (D1 database in
   Western Europe) and is the default for Jumpstart and BiteCheck (`cloud_url` overrides it)
 
 ## Downloads
 
-**Install with one click** (newest test build; each brings the
-[ZombieBuddy fork](https://github.com/SmokerDoker/zombiebuddy-jumpstart) along, so no ZombieBuddy
+**Install with one click** (newest test build; Jumpstart.jar has the
+[ZombieBuddy fork](https://github.com/SmokerDoker/zombiebuddy-jumpstart) built in, so no ZombieBuddy
 from the Workshop and no ZombieBuddy installer are needed):
 
 | System | Download | Note |
@@ -110,13 +113,21 @@ from the Workshop and no ZombieBuddy installer are needed):
 | Any, incl. Steam Deck | [JumpstartSetup.jar](https://github.com/SmokerDoker/jumpstart-pz/releases/download/test-kit/JumpstartSetup.jar) | runs with any Java 21+, e.g. the game's own: `…/ProjectZomboid/projectzomboid/jre64/bin/java -jar JumpstartSetup.jar` |
 
 Open **Jumpstart** and press **Install Jumpstart**. It finds the game in every Steam library and puts
-in place: the fork as `ZombieBuddy.jar` (a ZombieBuddy.jar of your own is kept as
-`ZombieBuddy.jar.before-jumpstart`), the mod folders `Zomboid/mods/ZombieBuddy` and
-`Zomboid/mods/Jumpstart`, both switched on in the mod list, and the start option `hotswap=true`:
-on Windows in `ProjectZomboid64.json`, on macOS and Linux in Steam's launch options (Steam has to be
-closed for that; the installer offers to close it, or copies the line for you). Your other launch
-options, BiteCheck's `--wrap` included, stay. The same window updates, repairs and removes
-Jumpstart; on the command line: `JumpstartSetup.jar --install | --uninstall | --update | --status`.
+in place:
+
+- `Jumpstart.jar` in the game folder, started as `-javaagent:Jumpstart.jar=hotswap=true`: on Windows
+  in `ProjectZomboid64.json`, on macOS and Linux in Steam's launch options (Steam has to be closed
+  for that; the installer offers to close it, or copies the line for you)
+- the fork's mod folder `Zomboid/mods/ZombieBuddy` (Lua and translations, no jar; other mods require
+  ZombieBuddy by id), switched on in the mod list
+
+A ZombieBuddy of your own makes room, since two agents would load every mod twice: its
+`ZombieBuddy.jar` is kept as `ZombieBuddy.jar.before-jumpstart`, its start option becomes
+Jumpstart's (its options stay, e.g. `policy=`), and uninstalling puts both back. An install from
+before 0.2 (the fork as `ZombieBuddy.jar`, a mod folder `Zomboid/mods/Jumpstart`) is moved to this
+layout. Your other launch options, BiteCheck's `--wrap` included, stay. The same window updates,
+repairs and removes Jumpstart; on the command line:
+`JumpstartSetup.jar --install | --uninstall | --update | --status`.
 
 **Automatic updates** (box ticked by default): Jumpstart puts itself in front of the game in Steam's
 launch options and, before every game start, installs the newest **signed** release (tags `v*`, never
@@ -130,32 +141,37 @@ and the signing key: [kit/RELEASING.md](kit/RELEASING.md).
 `--update` before every start (systemd `ExecStartPre`): [kit/SERVER.md](kit/SERVER.md).
 
 [Releases](https://github.com/SmokerDoker/jumpstart-pz/releases): `test-kit` is rebuilt on every
-push to main (workflow *Kits*): the installers above, script kits for Windows, macOS and Linux and
-one for dedicated servers, each with the ZombieBuddy fork, the Jumpstart mod, install scripts and the
-test plan; `SHA256SUMS.txt` lists every file's hash.
+push to main (workflow *Kits*): the installers above and, for tags, the signed update files;
+`SHA256SUMS.txt` lists every file's hash.
 
 ## Build
 
 ```sh
-git submodule update --init      # BiteCheck, pinned in third_party/
-./gradlew check :mod:modFolder   # tests, and the mod folder in mod/build/mod/Jumpstart
-# the installer, with the fork's mod folder from kit/zombiebuddy-mod.sh:
-./gradlew :installer:installerJar -PzombieBuddyMod=<folder>/ZombieBuddy   # installer/build/setup/JumpstartSetup.jar
+git submodule update --init      # BiteCheck and the ZombieBuddy fork, pinned in third_party/
+./gradlew check                  # tests
+# the fork's agent jar, built against the game (Gradle 9, JDK 25):
+(cd third_party/zombiebuddy-jumpstart/java && gradle -PgameClasspath=<game>/projectzomboid.jar shadowJar)
+# Jumpstart.jar: the fork with Jumpstart inside -> mod/build/agent/Jumpstart.jar
+./gradlew :mod:agentJar -PforkJar=<fork>/java/build/jdk25/libs/zombiebuddy-jumpstart.jar
+# the installer, with the fork's mod folder (no jar) from kit/zombiebuddy-mod.sh:
+bash kit/zombiebuddy-mod.sh third_party/zombiebuddy-jumpstart build/mods
+./gradlew :installer:installerJar -PforkJar=<...> -PzombieBuddyMod=build/mods/ZombieBuddy   # installer/build/setup/JumpstartSetup.jar
 ```
 
 Needs JDK 21 to 24 with the wrapper (Gradle 8.14); with JDK 25 use Gradle 9. Project Zomboid
 itself runs on Java 25. In-game test (Windows, Steam
-running, the fork built next to this repository): `tools\gametest.ps1`.
+running, the fork built next to this repository): `tools\gametest.ps1` (it loads Jumpstart as a
+separate mod folder next to the fork's experimental jar: `./gradlew :mod:modFolder`).
 
 ## Repository layout
 
 ```
 core/          BiteCheck gate, LiveInstaller, hotswap engine, library client (planned: multiplayer)
 mod/           The Jumpstart mod for Project Zomboid (secure screen, read-only Lua API)
-third_party/   BiteCheck (git submodule)
-tools/         In-game tests (single player, dedicated server), a stand-in for the cloud, the kit builder
+third_party/   BiteCheck and the ZombieBuddy fork (git submodules)
+tools/         In-game tests (single player, dedicated server), a stand-in for the cloud
 installer/     One-click installer (window and command line), packaged with jpackage as .msi, .dmg, .deb, .rpm
-kit/           Install scripts, packaging scripts and test plan for the online test with friends
+kit/           Packaging and release scripts, test plan and server guide
 cloud/         Cloudflare Worker: mod libraries (Steam Workshop search) and voluntary reports
 docs/          Design notes and spike results
 ```
@@ -163,4 +179,7 @@ docs/          Design notes and spike results
 ## License
 
 Jumpstart is licensed under the [GNU General Public License v3.0](LICENSE), like BiteCheck,
-whose verification library it will embed.
+whose verification library it embeds. `Jumpstart.jar` contains the
+[ZombieBuddy fork](https://github.com/SmokerDoker/zombiebuddy-jumpstart) by Andrey "Zed" Zaikin
+under the MIT license (`META-INF/LICENSE-ZombieBuddy.txt` in the jar); the jar as a whole is
+GPL-3.0 (`META-INF/LICENSE-Jumpstart.txt`).

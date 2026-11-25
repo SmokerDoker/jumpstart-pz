@@ -16,46 +16,38 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import io.github.bitecheckpz.launcher.Platform;
-import io.github.bitecheckpz.launcher.ZombieBuddyApprovals;
 
 /**
- * Jumpstart on a dedicated server (SteamCMD app 380870), the same steps as kit/install-server.sh
- * and install-server.ps1, plus what a server without a console needs:
+ * Jumpstart on a dedicated server (SteamCMD app 380870), plus what a server without a console needs:
  *
  * <ul>
- *   <li>the fork as Java agent: Linux {@code java/ZombieBuddy.jar} and {@code -javaagent} in
- *       ProjectZomboid64.json; Windows {@code ZombieBuddy.jar} and {@code -javaagent} in StartServer64.bat</li>
- *   <li>the mod folders ZombieBuddy (fork, no Workshop item) and Jumpstart in the server's Zomboid/mods</li>
- *   <li>{@code ZombieBuddy;Jumpstart} in {@code Mods=} of the server's .ini</li>
- *   <li>with {@code headless}: ZombieBuddy option {@code policy=deny-new} (nobody can answer a question)
- *       and Jumpstart.jar approved ahead in mod_approvals.json, after every update too</li>
+ *   <li>Jumpstart.jar (the ZombieBuddy fork with Jumpstart built in) as the only Java agent: Linux
+ *       {@code java/Jumpstart.jar} and {@code -javaagent} in ProjectZomboid64.json; Windows
+ *       {@code Jumpstart.jar} and {@code -javaagent} in StartServer64.bat. A ZombieBuddy agent there
+ *       goes: two agents would load every mod twice.</li>
+ *   <li>the fork's mod folder ZombieBuddy (Lua, no jar, no Workshop item) in the server's Zomboid/mods</li>
+ *   <li>{@code ZombieBuddy} in {@code Mods=} of the server's .ini (Jumpstart is no mod any more)</li>
+ *   <li>with {@code headless}: ZombieBuddy option {@code policy=deny-new} (nobody can answer a question;
+ *       Jumpstart itself is the agent and needs no approval)</li>
  * </ul>
  *
+ * An install from before 0.2 (the fork as ZombieBuddy.jar, a Jumpstart mod) is moved to this layout.
  * {@link #repair} puts the agent back after SteamCMD replaced ProjectZomboid64.json with a game update.
  */
 final class ServerSetup {
     private static final Pattern VM_ARGS = Pattern.compile("\"vmArgs\"\\s*:\\s*\\[");
-    private static final Pattern OUR_AGENT_LINE = Pattern.compile("\\s*\"-javaagent:[^\"]*ZombieBuddy\\.jar[^\"]*\",");
+    private static final Pattern AGENT_LINE = Pattern.compile("\\s*\"-javaagent:[^\"]*(?:ZombieBuddy|Jumpstart)\\.jar[^\"]*\",");
+    private static final Pattern AGENT_ARG = Pattern.compile(" -javaagent:\\S*(?:ZombieBuddy|Jumpstart)\\.jar(?:=[^ \\r\\n]*)?");
 
     /**
      * @param serverDir  the dedicated server's install folder
      * @param name       the server name (its .ini); empty: the only .ini there is
      * @param zomboidDir the server's data folder (~/Zomboid, or what -cachedir= says)
-     * @param agentArgs  ZombieBuddy's options; empty: hotswap=true (headless: hotswap=true,policy=deny-new)
+     * @param agentArgs  the agent's (ZombieBuddy's) options; empty: hotswap=true (headless: hotswap=true,policy=deny-new)
      */
     record Options(Path serverDir, Optional<String> name, Path zomboidDir, Optional<String> agentArgs, boolean headless) {
         String args() {
             return agentArgs.orElse(headless ? "hotswap=true,policy=deny-new" : "hotswap=true");
-        }
-
-        /** ZombieBuddy's config folder: config_dir= in its options, else ~/.zombie_buddy. */
-        Path zombieBuddyDir() {
-            for (String part : args().split(",")) {
-                if (part.startsWith("config_dir=")) {
-                    return Path.of(part.substring("config_dir=".length()));
-                }
-            }
-            return Path.of(System.getProperty("user.home"), ".zombie_buddy");
         }
     }
 
@@ -76,7 +68,16 @@ final class ServerSetup {
     }
 
     Path agentJar() {
-        return os == Platform.Os.WINDOWS ? o.serverDir().resolve("ZombieBuddy.jar") : o.serverDir().resolve("java/ZombieBuddy.jar");
+        return javaDir().resolve("Jumpstart.jar");
+    }
+
+    /** The fork as Jumpstart before 0.2 put it there. */
+    private Path oldAgentJar() {
+        return javaDir().resolve("ZombieBuddy.jar");
+    }
+
+    private Path javaDir() {
+        return os == Platform.Os.WINDOWS ? o.serverDir() : o.serverDir().resolve("java");
     }
 
     /** The file that holds the server's JVM options. */
@@ -98,30 +99,39 @@ final class ServerSetup {
 
     Optional<String> installedVersion() {
         try {
-            Path v = mods().resolve("Jumpstart").resolve(Setup.VERSION_FILE);
-            return Files.isRegularFile(v) ? Optional.of(Files.readString(v, StandardCharsets.UTF_8).strip()) : Optional.empty();
+            for (Path v : List.of(mods().resolve("ZombieBuddy").resolve(Setup.VERSION_FILE),
+                    mods().resolve("Jumpstart").resolve(Setup.VERSION_FILE))) {
+                if (Files.isRegularFile(v)) {
+                    return Optional.of(Files.readString(v, StandardCharsets.UTF_8).strip());
+                }
+            }
+            return Optional.empty();
         } catch (IOException e) {
             return Optional.empty();
         }
     }
 
     boolean isInstalled() {
-        return Setup.isFork(agentJar()) && Files.isDirectory(mods().resolve("Jumpstart"));
+        return Setup.isFork(agentJar()) || (Setup.isFork(oldAgentJar()) && Files.isDirectory(mods().resolve("Jumpstart")));
     }
 
     void install(Payload payload) throws IOException {
         Path config = startConfig();
         Files.createDirectories(agentJar().getParent());
-        Files.copy(payload.zombieBuddyJar(), agentJar(), StandardCopyOption.REPLACE_EXISTING);
+        if (Setup.isFork(oldAgentJar())) {
+            Files.delete(oldAgentJar());
+            log.accept(t.get("log.oldFork", oldAgentJar().getFileName()));
+        }
+        Files.copy(payload.jumpstartJar(), agentJar(), StandardCopyOption.REPLACE_EXISTING);
         log.accept(t.get("log.jar", agentJar().getParent()));
         repair(config);
 
         Files.createDirectories(mods());
         Path mod = mods().resolve("Jumpstart");
-        Setup.removeTree(mod);
-        Setup.copyTree(payload.jumpstartMod(), mod);
-        Files.writeString(mod.resolve(Setup.VERSION_FILE), payload.version() + "\n", StandardCharsets.UTF_8);
-        log.accept(t.get("log.mod", mod));
+        if (Files.exists(mod)) {
+            Setup.removeTree(mod);
+            log.accept(t.get("log.modRemoved", mod));
+        }
         Path zb = mods().resolve("ZombieBuddy");
         if (Files.exists(zb) && !Files.exists(zb.resolve(Setup.FORK_MARKER))) {
             Path backup = o.zomboidDir().resolve("jumpstart-backup/ZombieBuddy-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")));
@@ -131,6 +141,7 @@ final class ServerSetup {
         }
         Setup.removeTree(zb);
         Setup.copyTree(payload.zombieBuddyMod(), zb);
+        Files.writeString(zb.resolve(Setup.VERSION_FILE), payload.version() + "\n", StandardCharsets.UTF_8);
         log.accept(t.get("log.zbmod", zb));
 
         ini().ifPresentOrElse(ini -> {
@@ -140,14 +151,6 @@ final class ServerSetup {
                 throw new java.io.UncheckedIOException(e);
             }
         }, () -> log.accept(t.get("server.noIni", o.zomboidDir().resolve("Server"))));
-
-        if (o.headless()) {
-            Path jar = mod.resolve("42/media/java/Jumpstart.jar");
-            ZombieBuddyApprovals approvals = ZombieBuddyApprovals.load(o.zombieBuddyDir());
-            approvals.set("Jumpstart", null, Updater.sha256(Files.readAllBytes(jar)), true);
-            approvals.save();
-            log.accept(t.get("server.approved", approvals.file()));
-        }
     }
 
     /** Puts the agent into the start configuration if it is not there (after a game update). True if it changed it. */
@@ -156,10 +159,12 @@ final class ServerSetup {
     }
 
     private boolean repair(Path config) throws IOException {
-        String text = Files.readString(config, StandardCharsets.UTF_8);
-        if (text.contains("ZombieBuddy.jar")) {
+        String original = Files.readString(config, StandardCharsets.UTF_8);
+        if (original.contains("Jumpstart.jar") && !original.contains("ZombieBuddy.jar")) {
             return false;
         }
+        // a ZombieBuddy agent (Jumpstart before 0.2, or the server's own) goes: Jumpstart has it built in
+        String text = withoutAgents(original);
         String changed;
         if (os == Platform.Os.WINDOWS) {
             // the .bat changes into its own folder first, so the relative path works with spaces in it
@@ -168,7 +173,7 @@ final class ServerSetup {
                 throw new IOException(t.get("server.noJava", config));
             }
             int end = i + "java.exe\"".length();
-            changed = text.substring(0, end) + " -javaagent:ZombieBuddy.jar=" + o.args() + text.substring(end);
+            changed = text.substring(0, end) + " -javaagent:Jumpstart.jar=" + o.args() + text.substring(end);
         } else {
             Matcher vm = VM_ARGS.matcher(text);
             if (!vm.find()) {
@@ -180,7 +185,7 @@ final class ServerSetup {
         }
         Path backup = config.resolveSibling(config.getFileName() + Setup.BACKUP);
         if (!Files.exists(backup)) {
-            Files.copy(config, backup);
+            Files.writeString(backup, original, StandardCharsets.UTF_8);
         }
         Files.writeString(config, changed, StandardCharsets.UTF_8);
         log.accept(t.get("server.agent", config.getFileName(), o.args()));
@@ -190,9 +195,7 @@ final class ServerSetup {
     void uninstall() throws IOException {
         Path config = startConfig();
         String text = Files.readString(config, StandardCharsets.UTF_8);
-        String changed = os == Platform.Os.WINDOWS
-                ? text.replaceFirst(" -javaagent:ZombieBuddy\\.jar=[^ \\r\\n]*", "")
-                : OUR_AGENT_LINE.matcher(text).replaceFirst("");
+        String changed = withoutAgents(text);
         if (!changed.equals(text)) {
             Files.writeString(config, changed, StandardCharsets.UTF_8);
             log.accept(t.get("server.agentRemoved", config.getFileName()));
@@ -201,6 +204,10 @@ final class ServerSetup {
         if (Setup.isFork(agentJar())) {
             Files.delete(agentJar());
             log.accept(t.get("log.jarRemoved"));
+        }
+        if (Setup.isFork(oldAgentJar())) {
+            Files.delete(oldAgentJar());
+            log.accept(t.get("log.oldFork", oldAgentJar().getFileName()));
         }
         Path mod = mods().resolve("Jumpstart");
         if (Files.exists(mod)) {
@@ -222,6 +229,11 @@ final class ServerSetup {
                 log.accept(t.get("log.listOff", "Jumpstart, ZombieBuddy") + " (" + ini.get().getFileName() + ")");
             }
         }
+    }
+
+    /** The start configuration without Jumpstart's or a ZombieBuddy agent. */
+    private String withoutAgents(String text) {
+        return os == Platform.Os.WINDOWS ? AGENT_ARG.matcher(text).replaceAll("") : AGENT_LINE.matcher(text).replaceAll("");
     }
 
     /** The server's .ini: by name (created if new), else the only one there is. */
@@ -252,12 +264,12 @@ final class ServerSetup {
         boolean found = false;
         for (int i = 0; i < lines.size(); i++) {
             if (lines.get(i).startsWith("Mods=")) {
-                lines.set(i, addMods(lines.get(i), List.of("ZombieBuddy", "Jumpstart")));
+                lines.set(i, addMods(removeMods(lines.get(i), List.of("Jumpstart")), List.of("ZombieBuddy")));
                 found = true;
             }
         }
         if (!found) {
-            lines.add(addMods("Mods=", List.of("ZombieBuddy", "Jumpstart")));
+            lines.add(addMods("Mods=", List.of("ZombieBuddy")));
         }
         String out = String.join(nl, lines) + nl;
         if (!out.equals(s)) {

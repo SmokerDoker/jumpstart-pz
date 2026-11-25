@@ -25,13 +25,8 @@ jobs:
           java-version: "21"
       - name: Build and test
         shell: bash
-        run: ./gradlew --no-daemon check :mod:modFolder
-      - name: Upload the mod folder
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v7
-        with:
-          name: Jumpstart-mod
-          path: mod/build/mod
+        # Jumpstart.jar needs the fork built against the game (kits.yml); here the code and its tests
+        run: ./gradlew --no-daemon check
 
   # the Cloudflare Worker (cloud/) in Miniflare
   cloud:

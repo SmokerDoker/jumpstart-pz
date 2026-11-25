@@ -20,25 +20,27 @@ import java.util.zip.ZipFile;
 import io.github.bitecheckpz.launcher.Platform;
 
 /**
- * Puts Jumpstart in place and takes it out again, the same way the kit's scripts do:
+ * Puts Jumpstart in place and takes it out again:
  *
  * <ol>
- *   <li>the ZombieBuddy fork as {@code ZombieBuddy.jar} in the game's Java folder (a ZombieBuddy.jar
- *       of the player's own is kept as {@code ZombieBuddy.jar.before-jumpstart})</li>
- *   <li>Windows: {@code hotswap=true} in ProjectZomboid64.json; macOS and Linux: Steam launch options
- *       ({@link #launchOptions})</li>
- *   <li>the mod folders {@code Zomboid/mods/ZombieBuddy} (the fork: no Workshop subscription) and
- *       {@code Zomboid/mods/Jumpstart}</li>
- *   <li>both mods on in the main menu's mod list</li>
+ *   <li>{@code Jumpstart.jar} in the game's Java folder: the ZombieBuddy fork with Jumpstart built in,
+ *       the game's only Java agent. A ZombieBuddy.jar of the player's own is kept as
+ *       {@code ZombieBuddy.jar.before-jumpstart}: BiteCheck asks about every loader jar there, and
+ *       two agents must not start.</li>
+ *   <li>Windows: {@code -javaagent:Jumpstart.jar=hotswap=true} in ProjectZomboid64.json, instead of
+ *       a ZombieBuddy agent; macOS and Linux: Steam launch options ({@link #launchOptions})</li>
+ *   <li>the mod folder {@code Zomboid/mods/ZombieBuddy} (the fork's Lua, without a jar; other mods
+ *       require it), on in the main menu's mod list</li>
  * </ol>
  *
- * Files the installer changes get a copy {@code *.before-jumpstart} once.
+ * An install from before 0.2 (the fork as ZombieBuddy.jar, a mod folder Zomboid/mods/Jumpstart) is
+ * moved to this layout. Files the installer changes get a copy {@code *.before-jumpstart} once.
  */
 public final class Setup {
     static final String BACKUP = ".before-jumpstart";
     /** In the fork's mod folder: the installer replaces and removes only a folder with this file. */
     static final String FORK_MARKER = "jumpstart-fork.txt";
-    /** In the Jumpstart mod folder: the version the installer put there (for automatic updates). */
+    /** In the fork's mod folder: the version the installer put there (for automatic updates). */
     static final String VERSION_FILE = "jumpstart-version.txt";
     private static final String FORK_CLASS = "me/zed_0xff/zombie_buddy/Hotswap.class";
     /** Byte for byte: localconfig.vdf is kept unchanged outside the launch options. */
@@ -55,17 +57,17 @@ public final class Setup {
         NO_STEAM_CONFIG
     }
 
-    /** What is in place now. */
-    public record Status(boolean forkJar, boolean jumpstartMod, Optional<String> jumpstartVersion, boolean zombieBuddyMod,
+    /** What is in place now. {@code oldLayout}: parts of an install from before 0.2. */
+    public record Status(boolean jumpstartJar, Optional<String> jumpstartVersion, boolean zombieBuddyMod,
             boolean launchReady, Optional<String> launchOptions, boolean biteCheck, boolean zombieBuddyFromWorkshop,
-            boolean autoUpdate) {
+            boolean autoUpdate, boolean oldLayout) {
 
         public boolean installed() {
-            return forkJar && jumpstartMod && zombieBuddyMod && launchReady;
+            return jumpstartJar && zombieBuddyMod && launchReady;
         }
 
         public boolean anything() {
-            return forkJar || jumpstartMod;
+            return jumpstartJar || oldLayout;
         }
     }
 
@@ -92,55 +94,65 @@ public final class Setup {
         return loc;
     }
 
+    private Path zombieBuddyMod() {
+        return loc.modsDir().resolve("ZombieBuddy");
+    }
+
+    /** The Jumpstart mod folder of an install from before 0.2. */
+    private Path oldJumpstartMod() {
+        return loc.modsDir().resolve("Jumpstart");
+    }
+
     public Status status() {
-        Path mod = loc.modsDir().resolve("Jumpstart");
-        Path zbMod = loc.modsDir().resolve("ZombieBuddy");
         boolean launchReady;
         List<String> all = currentLaunchOptions();
         if (windows()) {
-            launchReady = read(loc.launchJson(), StandardCharsets.UTF_8).map(LaunchJson::hasHotswap).orElse(false);
+            launchReady = read(loc.launchJson(), StandardCharsets.UTF_8).map(LaunchJson::hasJumpstart).orElse(false);
         } else {
             launchReady = !all.isEmpty() && all.stream().allMatch(LaunchOptions::hasJumpstart);
         }
         boolean autoUpdate = !all.isEmpty() && all.stream().allMatch(LaunchOptions::hasWrapper);
-        return new Status(isFork(loc.zombieBuddyJar()), Files.isRegularFile(mod.resolve("42/mod.info")),
-                installedVersion().or(() -> modVersion(mod)),
-                Files.isRegularFile(zbMod.resolve("42/mod.info")) || loc.zombieBuddyFromWorkshop(), launchReady,
+        boolean oldLayout = isFork(loc.zombieBuddyJar()) || Files.isDirectory(oldJumpstartMod());
+        return new Status(isFork(loc.jumpstartJar()), installedVersion(),
+                Files.isRegularFile(zombieBuddyMod().resolve("42/mod.info")) || loc.zombieBuddyFromWorkshop(), launchReady,
                 all.stream().findFirst(), Files.isDirectory(Path.of(System.getProperty("user.home"), ".bitecheck")),
-                loc.zombieBuddyFromWorkshop(), autoUpdate);
+                loc.zombieBuddyFromWorkshop(), autoUpdate, oldLayout);
     }
 
     /** The version the installer (or an automatic update) put in place; empty for older installs. */
     public Optional<String> installedVersion() {
-        return read(loc.modsDir().resolve("Jumpstart").resolve(VERSION_FILE), StandardCharsets.UTF_8)
-                .map(String::strip).filter(v -> !v.isEmpty());
+        return read(zombieBuddyMod().resolve(VERSION_FILE), StandardCharsets.UTF_8)
+                .or(() -> read(oldJumpstartMod().resolve(VERSION_FILE), StandardCharsets.UTF_8))
+                .map(String::strip).filter(v -> !v.isEmpty())
+                .or(() -> modVersion(oldJumpstartMod()));
     }
 
-    /** True if Jumpstart's files are in place (the fork and the Jumpstart mod). */
+    /** True if Jumpstart is in place, also as installed before 0.2 (so an update moves it to the new layout). */
     public boolean isInstalled() {
-        return isFork(loc.zombieBuddyJar()) && Files.isDirectory(loc.modsDir().resolve("Jumpstart"));
+        return isFork(loc.jumpstartJar()) || (isFork(loc.zombieBuddyJar()) && Files.isDirectory(oldJumpstartMod()));
     }
 
     /**
-     * After a game update Steam may have replaced ProjectZomboid64.json (Windows): puts hotswap=true
-     * back if Jumpstart is installed. True if it changed something.
+     * After a game update Steam may have replaced ProjectZomboid64.json (Windows): puts Jumpstart's
+     * agent back if Jumpstart.jar is in place. True if it changed something.
      */
     public boolean repair() throws IOException {
-        if (!windows() || !isInstalled()) {
+        if (!windows() || !isFork(loc.jumpstartJar())) {
             return false;
         }
         Path json = loc.launchJson();
         String text = Files.readString(json, StandardCharsets.UTF_8);
-        String changed = LaunchJson.withHotswap(text, loc.zombieBuddyJar());
-        if (changed == null || changed.equals(text)) {
+        LaunchJson.Change c = LaunchJson.withJumpstart(text, loc.jumpstartJar());
+        if (c == null || c.json().equals(text)) {
             return false;
         }
-        write(json, changed, StandardCharsets.UTF_8);
+        write(json, c.json(), StandardCharsets.UTF_8);
+        recordReplaced(c.removed());
         log.accept(t.get("log.json"));
         return true;
     }
 
-    /** Everything except the Steam launch options, and both mods on in the mod list. */
+    /** Everything except the Steam launch options, and ZombieBuddy on in the mod list. */
     public void installFiles(Payload payload) throws IOException {
         installFiles(payload, true);
     }
@@ -148,40 +160,37 @@ public final class Setup {
     /**
      * Everything except the Steam launch options.
      *
-     * @param enableMods false for an automatic update: the player's mod list stays as it is
+     * @param enableMods false for an automatic update: the player's mod list stays as it is (only an
+     *                   old Jumpstart entry goes, as its folder is gone)
      */
     public void installFiles(Payload payload, boolean enableMods) throws IOException {
-        Path jar = loc.zombieBuddyJar();
-        Path jarBackup = sibling(jar, BACKUP);
-        if (Files.isRegularFile(jar) && !isFork(jar) && !Files.exists(jarBackup)) {
-            Files.copy(jar, jarBackup);
-            log.accept(t.get("log.jarBackup", jarBackup.getFileName()));
-        }
-        copyFile(payload.zombieBuddyJar(), jar);
+        moveAside(loc.zombieBuddyJar());
+        moveAside(sibling(loc.zombieBuddyJar(), ".new")); // a ZombieBuddy update waiting for zbNative
+        Path jar = loc.jumpstartJar();
+        copyFile(payload.jumpstartJar(), jar);
         log.accept(t.get("log.jar", loc.javaDir()));
 
         if (windows()) {
             Path json = loc.launchJson();
             String text = Files.readString(json, StandardCharsets.UTF_8);
-            String changed = LaunchJson.withHotswap(text, jar);
-            if (changed == null) {
+            LaunchJson.Change c = LaunchJson.withJumpstart(text, jar);
+            if (c == null) {
                 throw new IOException(t.get("error.json"));
             }
-            if (!changed.equals(text)) {
+            if (!c.json().equals(text)) {
                 backupOnce(json);
-                write(json, changed, StandardCharsets.UTF_8);
+                write(json, c.json(), StandardCharsets.UTF_8);
+                recordReplaced(c.removed());
             }
             log.accept(t.get("log.json"));
         }
 
         Files.createDirectories(loc.modsDir());
-        Path mod = loc.modsDir().resolve("Jumpstart");
-        deleteTree(mod);
-        copyTree(payload.jumpstartMod(), mod);
-        write(mod.resolve(VERSION_FILE), payload.version() + "\n", StandardCharsets.UTF_8);
-        log.accept(t.get("log.mod", mod));
-
-        Path zbMod = loc.modsDir().resolve("ZombieBuddy");
+        if (Files.exists(oldJumpstartMod())) {
+            deleteTree(oldJumpstartMod());
+            log.accept(t.get("log.modRemoved", oldJumpstartMod()));
+        }
+        Path zbMod = zombieBuddyMod();
         if (Files.exists(zbMod) && !Files.exists(zbMod.resolve(FORK_MARKER))) {
             Path target = loc.backupDir().resolve("ZombieBuddy");
             if (Files.exists(target)) {
@@ -193,15 +202,17 @@ public final class Setup {
         }
         deleteTree(zbMod);
         copyTree(payload.zombieBuddyMod(), zbMod);
+        write(zbMod.resolve(VERSION_FILE), payload.version() + "\n", StandardCharsets.UTF_8);
         log.accept(t.get("log.zbmod", zbMod));
 
-        if (!enableMods) {
+        Path list = loc.modList();
+        if (!enableMods && !Files.isRegularFile(list)) {
             return;
         }
-        Path list = loc.modList();
         String text = Files.isRegularFile(list) ? Files.readString(list, StandardCharsets.UTF_8)
                 : (windows() ? ModList.EMPTY.replace("\n", "\r\n") : ModList.EMPTY);
-        String changed = ModList.enable(text, List.of("ZombieBuddy", "Jumpstart"));
+        String withoutOld = ModList.disable(text, "Jumpstart");
+        String changed = enableMods ? ModList.enable(withoutOld, List.of("ZombieBuddy")) : withoutOld;
         if (changed == null) {
             log.accept(t.get("log.listMissing", list));
         } else {
@@ -211,11 +222,51 @@ public final class Setup {
                 }
                 write(list, changed, StandardCharsets.UTF_8);
             }
-            log.accept(t.get("log.list"));
+            if (enableMods) {
+                log.accept(t.get("log.list"));
+            }
         }
         if (loc.zombieBuddyFromWorkshop()) {
             log.accept(t.get("log.workshop"));
         }
+    }
+
+    /**
+     * Moves a ZombieBuddy jar out of the game folder: the player's own is kept as
+     * {@code *.before-jumpstart} (a newer one replaces an older copy); the fork an older Jumpstart
+     * put there is deleted.
+     */
+    private void moveAside(Path jar) throws IOException {
+        if (!Files.isRegularFile(jar)) {
+            return;
+        }
+        if (isFork(jar)) {
+            deleteFile(jar);
+            log.accept(t.get("log.oldFork", jar.getFileName()));
+            return;
+        }
+        Path backup = sibling(jar, BACKUP);
+        moveFile(jar, backup);
+        log.accept(t.get("log.jarBackup", backup.getFileName()));
+    }
+
+    /** Adds the ZombieBuddy entries taken out of ProjectZomboid64.json to the record, for uninstalling. */
+    private void recordReplaced(List<String> removed) throws IOException {
+        if (removed.isEmpty()) {
+            return;
+        }
+        List<String> all = new ArrayList<>(replaced());
+        for (String r : removed) {
+            if (!all.contains(r)) {
+                all.add(r);
+            }
+        }
+        write(loc.replacedAgents(), String.join("\n", all) + "\n", StandardCharsets.UTF_8);
+    }
+
+    private List<String> replaced() {
+        return read(loc.replacedAgents(), StandardCharsets.UTF_8)
+                .map(s -> s.lines().map(String::strip).filter(l -> !l.isEmpty()).toList()).orElse(List.of());
     }
 
     /** The launch options the player should have after installing (shown when they set them by hand). */
@@ -224,13 +275,16 @@ public final class Setup {
     }
 
     /**
-     * Jumpstart's part of the launch options: on macOS and Linux ZombieBuddy with hotswap=true (Windows
-     * has that in ProjectZomboid64.json); everywhere Jumpstart's wrapper for automatic updates, if wanted.
+     * Jumpstart's part of the launch options: on macOS and Linux Jumpstart's agent with hotswap=true
+     * (Windows has it in ProjectZomboid64.json, so a ZombieBuddy agent in Steam's options goes);
+     * everywhere Jumpstart's wrapper for automatic updates, if wanted.
      */
     private String wanted(String current, boolean install, boolean keepZombieBuddy) {
         String s = current;
         if (!windows()) {
             s = install ? LaunchOptions.withJumpstart(s) : LaunchOptions.withoutJumpstart(s, keepZombieBuddy);
+        } else if (install) {
+            s = LaunchOptions.withoutZombieBuddy(s);
         }
         if (install && wrapper.isPresent()) {
             s = LaunchOptions.withWrapper(s, wrapper.get());
@@ -242,11 +296,12 @@ public final class Setup {
 
     /**
      * Sets (or removes) Jumpstart's launch options in every Steam account that has played Project
-     * Zomboid: on macOS and Linux ZombieBuddy's hotswap=true, everywhere the wrapper for automatic
-     * updates. Only while Steam is closed; Steam would overwrite the file on exit.
+     * Zomboid: on macOS and Linux Jumpstart's agent with hotswap=true, everywhere the wrapper for
+     * automatic updates. Only while Steam is closed; Steam would overwrite the file on exit.
      */
     public LaunchResult launchOptions(boolean install) throws IOException {
-        if (windows() && install && wrapper.isEmpty()) {
+        if (windows() && install && wrapper.isEmpty()
+                && currentLaunchOptions().stream().noneMatch(LaunchOptions::startsZombieBuddy)) {
             return LaunchResult.NOT_NEEDED;
         }
         boolean keep = keepZombieBuddy();
@@ -288,16 +343,16 @@ public final class Setup {
     }
 
     /**
-     * Removes Jumpstart. Call {@link #launchOptions}(false) first on macOS and Linux: ZombieBuddy.jar
-     * is deleted only when nothing starts it any more.
+     * Removes Jumpstart, also one installed before 0.2. Call {@link #launchOptions}(false) first on
+     * macOS and Linux: Jumpstart.jar is deleted only when nothing starts it any more.
      */
     public void uninstallFiles() throws IOException {
-        Path mod = loc.modsDir().resolve("Jumpstart");
+        Path mod = oldJumpstartMod();
         if (Files.exists(mod)) {
             deleteTree(mod);
             log.accept(t.get("log.modRemoved", mod));
         }
-        Path zbMod = loc.modsDir().resolve("ZombieBuddy");
+        Path zbMod = zombieBuddyMod();
         if (Files.exists(zbMod.resolve(FORK_MARKER))) {
             deleteTree(zbMod);
             log.accept(t.get("log.modRemoved", zbMod));
@@ -325,28 +380,48 @@ public final class Setup {
             }
         }
 
-        boolean stillStarted;
+        boolean jumpstartStarted;
+        boolean zombieBuddyStarted;
         if (windows()) {
             Path json = loc.launchJson();
             String text = Files.readString(json, StandardCharsets.UTF_8);
-            String changed = LaunchJson.withoutHotswap(text);
+            String changed = LaunchJson.withoutJumpstart(text, replaced());
             if (!changed.equals(text)) {
                 write(json, changed, StandardCharsets.UTF_8);
                 log.accept(t.get("log.jsonRestored"));
             }
+            Files.deleteIfExists(loc.replacedAgents());
             Files.deleteIfExists(sibling(json, BACKUP));
-            stillStarted = LaunchJson.startsZombieBuddy(changed);
+            jumpstartStarted = false;
+            zombieBuddyStarted = LaunchJson.startsLoader(changed);
         } else {
-            stillStarted = currentLaunchOptions().stream().anyMatch(LaunchOptions::startsZombieBuddy);
+            List<String> options = currentLaunchOptions();
+            jumpstartStarted = options.stream().anyMatch(LaunchOptions::startsJumpstart);
+            zombieBuddyStarted = options.stream().anyMatch(LaunchOptions::startsZombieBuddy);
         }
 
-        Path jar = loc.zombieBuddyJar();
-        Path jarBackup = sibling(jar, BACKUP);
-        if (Files.isRegularFile(jarBackup)) {
-            moveFile(jarBackup, jar);
+        Path zbJar = loc.zombieBuddyJar();
+        Path zbBackup = sibling(zbJar, BACKUP);
+        if (Files.isRegularFile(zbBackup)) {
+            moveFile(zbBackup, zbJar);
             log.accept(t.get("log.jarRestored"));
-        } else if (isFork(jar)) {
-            if (stillStarted) {
+        } else if (isFork(zbJar)) {
+            // the fork from Jumpstart before 0.2
+            if (zombieBuddyStarted) {
+                log.accept(t.get("log.zbJarKept"));
+            } else {
+                deleteFile(zbJar);
+                log.accept(t.get("log.oldFork", zbJar.getFileName()));
+            }
+        }
+        Path pending = sibling(zbJar, ".new");
+        if (Files.isRegularFile(sibling(pending, BACKUP))) {
+            moveFile(sibling(pending, BACKUP), pending);
+        }
+
+        Path jar = loc.jumpstartJar();
+        if (Files.isRegularFile(jar)) {
+            if (jumpstartStarted) {
                 log.accept(t.get("log.jarKept"));
             } else {
                 deleteFile(jar);
@@ -378,6 +453,7 @@ public final class Setup {
         return latin1 == null ? "" : new String(latin1.getBytes(VDF), StandardCharsets.UTF_8);
     }
 
+    /** True if the jar holds the ZombieBuddy fork: Jumpstart.jar, or ZombieBuddy.jar from Jumpstart before 0.2. */
     static boolean isFork(Path jar) {
         if (!Files.isRegularFile(jar)) {
             return false;

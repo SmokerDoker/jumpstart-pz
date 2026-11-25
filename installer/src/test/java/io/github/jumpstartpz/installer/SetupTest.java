@@ -22,6 +22,8 @@ import io.github.bitecheckpz.launcher.Platform;
 
 /** Install and uninstall into a fake game, Zomboid folder and Steam, on Windows and on Linux. */
 class SetupTest {
+    private static final String JSON = "{\r\n\t\"vmArgs\": [\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n";
+
     @TempDir
     Path tmp;
 
@@ -39,15 +41,22 @@ class SetupTest {
         }
     }
 
+    /** The fork as Jumpstart before 0.2 put it into the game folder. */
+    private static void oldFork(Path jar) throws IOException {
+        zip(jar, "me/zed_0xff/zombie_buddy/Hotswap.class", "old fork");
+    }
+
+    /** A ZombieBuddy.jar of the player's own: upstream, without Hotswap. */
+    private static void ownZombieBuddy(Path jar) throws IOException {
+        zip(jar, "me/zed_0xff/zombie_buddy/ZombieBuddy.class");
+    }
+
     private Payload payload() throws IOException {
         Path p = tmp.resolve("payload");
-        zip(p.resolve("mods/ZombieBuddy/libs/ZombieBuddy.jar"), "me/zed_0xff/zombie_buddy/Hotswap.class", "fork");
+        zip(p.resolve("Jumpstart.jar"), "me/zed_0xff/zombie_buddy/Hotswap.class", "embedded-mod/io/github/jumpstartpz/mod/Main.class");
         Files.createDirectories(p.resolve("mods/ZombieBuddy/42"));
         Files.writeString(p.resolve("mods/ZombieBuddy/42/mod.info"), "name=ZombieBuddy (Jumpstart fork)\nid=ZombieBuddy\n");
         Files.writeString(p.resolve("mods/ZombieBuddy/" + Setup.FORK_MARKER), "fork");
-        Files.createDirectories(p.resolve("mods/Jumpstart/42/media/java"));
-        Files.writeString(p.resolve("mods/Jumpstart/42/mod.info"), "name=Jumpstart\nid=Jumpstart\nmodversion=0.2.0\n");
-        zip(p.resolve("mods/Jumpstart/42/media/java/Jumpstart.jar"), "io/github/jumpstartpz/mod/Main.class");
         Files.writeString(p.resolve("VERSION"), "test-1\n");
         return Payload.of(p);
     }
@@ -56,8 +65,7 @@ class SetupTest {
         Path game = tmp.resolve("Steam/steamapps/common/ProjectZomboid");
         Files.createDirectories(game);
         Files.writeString(game.resolve("projectzomboid.jar"), "game");
-        Files.writeString(game.resolve("ProjectZomboid64.json"),
-                "{\r\n\t\"vmArgs\": [\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n");
+        Files.writeString(game.resolve("ProjectZomboid64.json"), JSON);
         assertEquals(Optional.of(game.toAbsolutePath().normalize()), GameLocation.javaDir(Platform.Os.WINDOWS, List.of(game)));
         return new GameLocation(Platform.Os.WINDOWS, game, tmp.resolve("Zomboid"), List.of(tmp.resolve("Steam")),
                 List.of(tmp.resolve("Steam/steamapps/workshop/content/108600")));
@@ -83,6 +91,16 @@ class SetupTest {
         return new Setup(loc, new Texts(false), log::add, () -> steamRunning, Optional.empty());
     }
 
+    /** What Jumpstart before 0.2 left: the fork as ZombieBuddy.jar and the mod folder Zomboid/mods/Jumpstart. */
+    private void oldLayout(GameLocation loc) throws IOException {
+        oldFork(loc.zombieBuddyJar());
+        Path old = loc.modsDir().resolve("Jumpstart");
+        Files.createDirectories(old.resolve("42/media/java"));
+        Files.writeString(old.resolve("42/mod.info"), "id=Jumpstart\nmodversion=0.1.0\n");
+        Files.writeString(old.resolve(Setup.VERSION_FILE), "test-0\n");
+        Files.writeString(loc.modList(), "VERSION = 1,\n\nmods\n{\n    mod = ZombieBuddy,\n    mod = Jumpstart,\n}\n\nmaps\n{\n}\n");
+    }
+
     @Test
     void windowsInstallAndUninstall() throws IOException {
         GameLocation loc = windows();
@@ -94,46 +112,113 @@ class SetupTest {
         Setup.Status s = setup.status();
         assertTrue(s.installed(), s.toString());
         assertEquals(Optional.of("test-1"), s.jumpstartVersion(), "the version the installer put there");
-        assertTrue(Setup.isFork(loc.zombieBuddyJar()));
-        assertTrue(Files.readString(loc.launchJson()).contains("ZombieBuddy.jar=hotswap=true"));
-        assertTrue(Files.isRegularFile(loc.modsDir().resolve("ZombieBuddy/libs/ZombieBuddy.jar")));
+        assertTrue(Setup.isFork(loc.jumpstartJar()));
+        assertFalse(Files.exists(loc.zombieBuddyJar()), "one jar: Jumpstart.jar");
+        String json = Files.readString(loc.launchJson());
+        assertTrue(json.contains("Jumpstart.jar=hotswap=true\",\r\n\t\t\"-Xmx16g\""), json);
+        assertFalse(Files.exists(loc.modsDir().resolve("ZombieBuddy/libs")), "the mod folder has no jar");
+        assertTrue(Files.isRegularFile(loc.modsDir().resolve("ZombieBuddy/42/mod.info")));
+        assertFalse(Files.exists(loc.modsDir().resolve("Jumpstart")));
         String list = Files.readString(loc.modList());
-        assertTrue(list.contains("mod = ZombieBuddy,\r\n    mod = Jumpstart,"), list);
+        assertTrue(list.contains("mod = ZombieBuddy,"), list);
+        assertFalse(list.contains("Jumpstart"), list);
+        assertFalse(Files.exists(loc.replacedAgents()), "nothing of the player's was replaced");
 
         setup.installFiles(payload()); // again: an update changes nothing else
-        assertFalse(Files.exists(loc.javaDir().resolve("ZombieBuddy.jar" + Setup.BACKUP)), "the fork is never kept as the player's own jar");
+        assertEquals(json, Files.readString(loc.launchJson()));
+        assertFalse(Files.exists(loc.javaDir().resolve("ZombieBuddy.jar" + Setup.BACKUP)));
 
         setup.uninstallFiles();
         assertFalse(setup.status().anything());
-        assertFalse(Files.exists(loc.zombieBuddyJar()));
+        assertFalse(Files.exists(loc.jumpstartJar()));
         assertFalse(Files.exists(loc.modsDir().resolve("ZombieBuddy")));
-        assertEquals("{\r\n\t\"vmArgs\": [\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n", Files.readString(loc.launchJson()));
-        assertFalse(Files.readString(loc.modList()).contains("Jumpstart"));
+        assertEquals(JSON, Files.readString(loc.launchJson()));
         assertFalse(Files.readString(loc.modList()).contains("ZombieBuddy"));
     }
 
     @Test
-    void windowsKeepsThePlayersOwnZombieBuddy() throws IOException {
+    void windowsReplacesThePlayersZombieBuddyAndPutsItBackExactly() throws IOException {
         GameLocation loc = windows();
-        zip(loc.zombieBuddyJar(), "me/zed_0xff/zombie_buddy/ZombieBuddy.class"); // upstream: no Hotswap
-        Files.writeString(loc.launchJson(), Files.readString(loc.launchJson()).replace("\"-Xmx16g\"", "\"-agentlib:zbNative\",\r\n\t\t\"-Xmx16g\""));
+        ownZombieBuddy(loc.zombieBuddyJar());
+        Files.writeString(loc.zombieBuddyJar().resolveSibling("ZombieBuddy.jar.new"), "waiting update");
+        String original = JSON.replace("\"-Xmx16g\"", "\"-agentlib:zbNative=policy=deny-new\",\r\n\t\t\"-Xmx16g\"");
+        Files.writeString(loc.launchJson(), original);
         Path own = loc.modsDir().resolve("ZombieBuddy");
         Files.createDirectories(own.resolve("42"));
         Files.writeString(own.resolve("42/mod.info"), "id=ZombieBuddy\n");
         Setup setup = setup(loc);
 
         setup.installFiles(payload());
-        assertTrue(Setup.isFork(loc.zombieBuddyJar()));
-        assertTrue(Files.readString(loc.launchJson()).contains("\"-agentlib:zbNative=hotswap=true\""));
+        assertFalse(Files.exists(loc.zombieBuddyJar()), "only Jumpstart.jar in the game folder");
+        assertFalse(Files.exists(loc.zombieBuddyJar().resolveSibling("ZombieBuddy.jar.new")));
+        assertTrue(Files.isRegularFile(loc.javaDir().resolve("ZombieBuddy.jar" + Setup.BACKUP)));
+        String json = Files.readString(loc.launchJson());
+        assertFalse(json.contains("zbNative"), "two agents would load every mod twice");
+        assertTrue(json.contains("Jumpstart.jar=policy=deny-new,hotswap=true\""), "ZombieBuddy's options stay: " + json);
+        assertEquals("-agentlib:zbNative=policy=deny-new\n", Files.readString(loc.replacedAgents()));
+        assertTrue(setup.status().installed());
         assertTrue(Files.isRegularFile(loc.backupDir().resolve("ZombieBuddy/42/mod.info")));
         assertTrue(Files.exists(own.resolve(Setup.FORK_MARKER)));
 
+        setup.installFiles(payload()); // an update keeps the record
+        assertEquals("-agentlib:zbNative=policy=deny-new\n", Files.readString(loc.replacedAgents()));
+
         setup.uninstallFiles();
+        assertEquals(original, Files.readString(loc.launchJson()));
+        assertFalse(Files.exists(loc.replacedAgents()));
         assertTrue(Files.isRegularFile(loc.zombieBuddyJar()));
         assertFalse(Setup.isFork(loc.zombieBuddyJar()), "the player's ZombieBuddy.jar is back");
-        assertTrue(Files.readString(loc.launchJson()).contains("\"-agentlib:zbNative\""));
+        assertEquals("waiting update", Files.readString(loc.zombieBuddyJar().resolveSibling("ZombieBuddy.jar.new")));
+        assertFalse(Files.exists(loc.jumpstartJar()));
         assertFalse(Files.exists(own.resolve(Setup.FORK_MARKER)), "the player's mod folder is back");
         assertTrue(Files.readString(loc.modList()).contains("ZombieBuddy"), "ZombieBuddy stays on: the player has it");
+    }
+
+    @Test
+    void windowsMovesAnInstallFromBefore02() throws IOException {
+        GameLocation loc = windows();
+        Files.createDirectories(loc.modsDir());
+        oldLayout(loc);
+        ownZombieBuddy(loc.javaDir().resolve("ZombieBuddy.jar" + Setup.BACKUP)); // kept by 0.1
+        String agent = "-javaagent:" + loc.zombieBuddyJar().toAbsolutePath().toString().replace('\\', '/') + "=hotswap=true";
+        Files.writeString(loc.launchJson(), JSON.replace("\"-Xmx16g\"", "\"" + agent + "\",\r\n\t\t\"-Xmx16g\""));
+        Setup setup = setup(loc);
+        assertTrue(setup.isInstalled(), "an update moves it to the new layout");
+        assertEquals(Optional.of("test-0"), setup.installedVersion());
+        assertTrue(setup.status().anything());
+
+        setup.installFiles(payload(), false); // as the automatic update does it
+        assertFalse(Files.exists(loc.zombieBuddyJar()), "the old fork is gone");
+        assertFalse(Setup.isFork(loc.javaDir().resolve("ZombieBuddy.jar" + Setup.BACKUP)), "the player's own stays kept");
+        String json = Files.readString(loc.launchJson());
+        assertFalse(json.contains("ZombieBuddy.jar"), json);
+        assertTrue(LaunchJson.hasJumpstart(json));
+        assertFalse(Files.exists(loc.replacedAgents()), "0.1's own entry is not the player's");
+        assertFalse(Files.exists(loc.modsDir().resolve("Jumpstart")));
+        assertFalse(Files.readString(loc.modList()).contains("Jumpstart"), "its folder is gone, so is its entry");
+        assertTrue(Files.readString(loc.modList()).contains("ZombieBuddy"));
+        assertEquals(Optional.of("test-1"), setup.installedVersion());
+        assertTrue(setup.status().installed());
+
+        setup.uninstallFiles();
+        assertEquals(JSON, Files.readString(loc.launchJson()));
+        assertFalse(Setup.isFork(loc.zombieBuddyJar()), "the player's ZombieBuddy.jar is back");
+        assertFalse(Files.exists(loc.jumpstartJar()));
+    }
+
+    @Test
+    void windowsUninstallsAnInstallFromBefore02() throws IOException {
+        GameLocation loc = windows();
+        Files.createDirectories(loc.modsDir());
+        oldLayout(loc);
+        String agent = "-javaagent:" + loc.zombieBuddyJar().toAbsolutePath().toString().replace('\\', '/') + "=hotswap=true";
+        Files.writeString(loc.launchJson(), JSON.replace("\"-Xmx16g\"", "\"" + agent + "\",\r\n\t\t\"-Xmx16g\""));
+        Setup setup = setup(loc);
+        setup.uninstallFiles();
+        assertEquals(JSON, Files.readString(loc.launchJson()));
+        assertFalse(Files.exists(loc.zombieBuddyJar()));
+        assertFalse(Files.exists(loc.modsDir().resolve("Jumpstart")));
+        assertFalse(setup.status().anything());
     }
 
     @Test
@@ -145,14 +230,14 @@ class SetupTest {
 
         steamRunning = true;
         assertEquals(Setup.LaunchResult.STEAM_RUNNING, setup.launchOptions(true));
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true --", setup.suggestedLaunchOptions(true));
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", setup.suggestedLaunchOptions(true));
         assertFalse(setup.status().launchReady());
 
         steamRunning = false;
         assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true));
         Setup.Status s = setup.status();
         assertTrue(s.installed(), s.toString());
-        assertEquals(Optional.of("-javaagent:ZombieBuddy.jar=hotswap=true --"), s.launchOptions());
+        assertEquals(Optional.of("-javaagent:Jumpstart.jar=hotswap=true --"), s.launchOptions());
         assertTrue(Files.exists(loc.localConfigs().get(0).resolveSibling("localconfig.vdf" + Setup.BACKUP)));
         assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true), "already set");
 
@@ -160,7 +245,51 @@ class SetupTest {
         assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(false));
         setup.uninstallFiles();
         assertEquals(Optional.of(""), setup.status().launchOptions());
+        assertFalse(Files.exists(loc.jumpstartJar()));
+    }
+
+    @Test
+    void linuxPutsThePlayersZombieBuddyBack() throws IOException {
+        GameLocation loc = linux("gamemoderun %command% -javaagent:ZombieBuddy.jar=policy=deny-new --");
+        ownZombieBuddy(loc.zombieBuddyJar());
+        Setup setup = setup(loc);
+        setup.installFiles(payload());
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true));
+        assertEquals(Optional.of("gamemoderun %command% -javaagent:Jumpstart.jar=policy=deny-new,hotswap=true --"),
+                setup.status().launchOptions());
         assertFalse(Files.exists(loc.zombieBuddyJar()));
+
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(false));
+        setup.uninstallFiles();
+        assertEquals(Optional.of("gamemoderun %command% -javaagent:ZombieBuddy.jar=policy=deny-new --"), setup.status().launchOptions());
+        assertTrue(Files.isRegularFile(loc.zombieBuddyJar()));
+        assertFalse(Files.exists(loc.jumpstartJar()));
+    }
+
+    @Test
+    void linuxMovesAnInstallFromBefore02() throws IOException {
+        GameLocation loc = linux("-javaagent:ZombieBuddy.jar=hotswap=true --");
+        Files.createDirectories(loc.modsDir());
+        oldLayout(loc);
+        Setup setup = setup(loc);
+        setup.installFiles(payload());
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true));
+        assertEquals(Optional.of("-javaagent:Jumpstart.jar=hotswap=true --"), setup.status().launchOptions());
+        assertFalse(Files.exists(loc.zombieBuddyJar()));
+        assertTrue(setup.status().installed());
+    }
+
+    @Test
+    void linuxUninstallsAnInstallFromBefore02() throws IOException {
+        GameLocation loc = linux("-javaagent:ZombieBuddy.jar=hotswap=true --");
+        Files.createDirectories(loc.modsDir());
+        oldLayout(loc);
+        Setup setup = setup(loc);
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(false));
+        setup.uninstallFiles();
+        assertEquals(Optional.of(""), setup.status().launchOptions());
+        assertFalse(Files.exists(loc.zombieBuddyJar()));
+        assertFalse(setup.status().anything());
     }
 
     @Test
@@ -174,8 +303,8 @@ class SetupTest {
         steamRunning = true;
         assertEquals(Setup.LaunchResult.STEAM_RUNNING, setup.launchOptions(false));
         setup.uninstallFiles();
-        assertTrue(Files.exists(loc.zombieBuddyJar()), "removing it would stop the game from starting");
-        assertTrue(log.stream().anyMatch(l -> l.contains("ZombieBuddy.jar stays")), log.toString());
+        assertTrue(Files.exists(loc.jumpstartJar()), "removing it would stop the game from starting");
+        assertTrue(log.stream().anyMatch(l -> l.contains("Jumpstart.jar stays")), log.toString());
     }
 
     @Test
@@ -185,7 +314,7 @@ class SetupTest {
         Setup setup = setup(loc);
         setup.installFiles(payload());
         assertEquals(Setup.LaunchResult.NO_STEAM_CONFIG, setup.launchOptions(true));
-        assertEquals("-javaagent:ZombieBuddy.jar=hotswap=true --", setup.suggestedLaunchOptions(true));
+        assertEquals("-javaagent:Jumpstart.jar=hotswap=true --", setup.suggestedLaunchOptions(true));
     }
 
     private Path steamConfig(String launchOptions) throws IOException {
@@ -201,8 +330,8 @@ class SetupTest {
     @Test
     void windowsWithAutomaticUpdatesKeepsBiteChecksWrapper() throws IOException {
         GameLocation loc = windows();
-        String bitecheck = "\"C:\\Users\\me\\AppData\\Local\\BiteCheck\\BiteCheck.exe\" --wrap %command% -agentlib:zbNative --";
-        steamConfig(bitecheck);
+        String bitecheck = "\"C:\\Users\\me\\AppData\\Local\\BiteCheck\\BiteCheck.exe\" --wrap %command%";
+        steamConfig(bitecheck + " -agentlib:zbNative --");
         String wrapper = "\"C:\\Users\\me\\AppData\\Local\\Jumpstart\\Jumpstart.exe\" --wrap";
         Setup setup = new Setup(loc, new Texts(false), log::add, () -> steamRunning, Optional.of(wrapper));
         setup.installFiles(payload());
@@ -214,11 +343,22 @@ class SetupTest {
         assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true));
         Setup.Status s = setup.status();
         assertTrue(s.installed() && s.autoUpdate(), s.toString());
-        assertEquals(Optional.of(wrapper + " " + bitecheck), s.launchOptions(), "Jumpstart first, then BiteCheck");
+        assertEquals(Optional.of(wrapper + " " + bitecheck), s.launchOptions(),
+                "Jumpstart first, then BiteCheck; ZombieBuddy's agent goes (Jumpstart starts from ProjectZomboid64.json)");
 
         assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(false));
         setup.uninstallFiles();
-        assertEquals(Optional.of(bitecheck), setup.status().launchOptions(), "BiteCheck's options are back as they were");
+        assertEquals(Optional.of(bitecheck), setup.status().launchOptions(), "BiteCheck's wrapper stays");
+    }
+
+    @Test
+    void windowsTakesZombieBuddyOutOfSteamsOptions() throws IOException {
+        GameLocation loc = windows();
+        steamConfig("-agentlib:zbNative --");
+        Setup setup = setup(loc);
+        setup.installFiles(payload());
+        assertEquals(Setup.LaunchResult.DONE, setup.launchOptions(true), "not NOT_NEEDED: a second agent must go");
+        assertEquals(Optional.of(""), setup.status().launchOptions());
     }
 
     @Test
@@ -230,14 +370,13 @@ class SetupTest {
     }
 
     @Test
-    void repairPutsHotswapBackAfterAGameUpdate() throws IOException {
+    void repairPutsJumpstartBackAfterAGameUpdate() throws IOException {
         GameLocation loc = windows();
         Setup setup = setup(loc);
         setup.installFiles(payload());
-        String original = "{\r\n\t\"vmArgs\": [\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n";
-        Files.writeString(loc.launchJson(), original); // Steam's update
+        Files.writeString(loc.launchJson(), JSON); // Steam's update
         assertTrue(setup.repair());
-        assertTrue(LaunchJson.hasHotswap(Files.readString(loc.launchJson())));
+        assertTrue(LaunchJson.hasJumpstart(Files.readString(loc.launchJson())));
         assertFalse(setup.repair(), "nothing left to repair");
     }
 
@@ -246,7 +385,7 @@ class SetupTest {
         GameLocation loc = windows();
         Setup setup = setup(loc);
         setup.installFiles(payload());
-        String off = ModList.disable(Files.readString(loc.modList()), "Jumpstart");
+        String off = ModList.disable(Files.readString(loc.modList()), "ZombieBuddy");
         Files.writeString(loc.modList(), off); // the player switched it off in the mod menu
         setup.installFiles(payload(), false);
         assertEquals(off, Files.readString(loc.modList()));
@@ -255,17 +394,20 @@ class SetupTest {
     @Test
     void payloadFromZip() throws IOException {
         Path z = tmp.resolve("payload.zip");
-        zip(z, "VERSION", "mods/Jumpstart/42/mod.info");
+        zip(z, "VERSION", "Jumpstart.jar", "mods/ZombieBuddy/42/mod.info");
         Path out = tmp.resolve("out");
         try (var in = Files.newInputStream(z)) {
             Payload.unzip(in, out);
         }
-        assertTrue(Files.isRegularFile(out.resolve("mods/Jumpstart/42/mod.info")));
+        assertTrue(Files.isRegularFile(out.resolve("mods/ZombieBuddy/42/mod.info")));
+        assertEquals("VERSION", Payload.of(out).version());
 
         Path evil = tmp.resolve("evil.zip");
         zip(evil, "../outside.txt");
         try (var in = Files.newInputStream(evil)) {
             org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () -> Payload.unzip(in, tmp.resolve("out2")));
         }
+        Files.delete(out.resolve("Jumpstart.jar"));
+        org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () -> Payload.of(out), "a payload needs Jumpstart.jar");
     }
 }

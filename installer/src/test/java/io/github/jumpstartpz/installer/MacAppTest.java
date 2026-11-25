@@ -36,8 +36,8 @@ class MacAppTest {
     void runsTheBundlesProgramWithTheSameArguments() throws IOException {
         Path app = app("JavaAppLauncher", "JavaAppLauncher");
         Files.writeString(app.resolve("Contents/MacOS/helper"), "x"); // more than one file: the plist decides
-        List<String> steam = List.of(app.toString(), "-javaagent:ZombieBuddy.jar=hotswap=true", "--");
-        assertEquals(List.of(app.resolve("Contents/MacOS/JavaAppLauncher").toString(), "-javaagent:ZombieBuddy.jar=hotswap=true", "--"),
+        List<String> steam = List.of(app.toString(), "-javaagent:Jumpstart.jar=hotswap=true", "--");
+        assertEquals(List.of(app.resolve("Contents/MacOS/JavaAppLauncher").toString(), "-javaagent:Jumpstart.jar=hotswap=true", "--"),
                 Wrapper.runnable(steam));
     }
 
