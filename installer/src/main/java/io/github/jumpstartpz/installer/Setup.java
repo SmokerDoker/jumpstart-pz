@@ -27,8 +27,9 @@ import io.github.bitecheckpz.launcher.Platform;
  *       the game's only Java agent. A ZombieBuddy.jar of the player's own is kept as
  *       {@code ZombieBuddy.jar.before-jumpstart}: BiteCheck asks about every loader jar there, and
  *       two agents must not start.</li>
- *   <li>Windows: {@code -javaagent:Jumpstart.jar=hotswap=true} in ProjectZomboid64.json, instead of
- *       a ZombieBuddy agent; macOS and Linux: Steam launch options ({@link #launchOptions})</li>
+ *   <li>Windows: {@code jsNative.dll} next to it and {@code -agentlib:jsNative=hotswap=true} in
+ *       ProjectZomboid64.json, instead of a ZombieBuddy agent (the game's exe cannot start
+ *       {@code -javaagent} itself); macOS and Linux: Steam launch options ({@link #launchOptions})</li>
  *   <li>the mod folder {@code Zomboid/mods/ZombieBuddy} (the fork's Lua, without a jar; other mods
  *       require it), on in the main menu's mod list</li>
  * </ol>
@@ -107,7 +108,8 @@ public final class Setup {
         boolean launchReady;
         List<String> all = currentLaunchOptions();
         if (windows()) {
-            launchReady = read(loc.launchJson(), StandardCharsets.UTF_8).map(LaunchJson::hasJumpstart).orElse(false);
+            launchReady = Files.isRegularFile(loc.nativeLoader())
+                    && read(loc.launchJson(), StandardCharsets.UTF_8).map(LaunchJson::hasJumpstart).orElse(false);
         } else {
             launchReady = !all.isEmpty() && all.stream().allMatch(LaunchOptions::hasJumpstart);
         }
@@ -134,17 +136,42 @@ public final class Setup {
 
     /**
      * After a game update Steam may have replaced ProjectZomboid64.json (Windows): puts Jumpstart's
-     * agent back if Jumpstart.jar is in place. True if it changed something.
+     * agent back if Jumpstart.jar is in place. Also brings an install of 0.4 or 0.5.0 (which wrote
+     * {@code -javaagent}, so the game did not start) to the loader, taken from the payload inside
+     * this installer: their automatic update installs the new payload with their own code. True if
+     * it changed something.
      */
     public boolean repair() throws IOException {
         if (!windows() || !isFork(loc.jumpstartJar())) {
             return false;
         }
+        Optional<Path> loader = Optional.empty();
+        if (!Files.isRegularFile(loc.nativeLoader())) {
+            Optional<Payload> bundled = Payload.bundled();
+            loader = bundled.map(Payload::nativeLoader).filter(Files::isRegularFile);
+        }
+        return repair(loader);
+    }
+
+    /** @param loader jsNative.dll to put in place if it is missing (empty: it is there, or none to hand) */
+    boolean repair(Optional<Path> loader) throws IOException {
+        if (!windows() || !isFork(loc.jumpstartJar())) {
+            return false;
+        }
+        boolean changed = false;
+        if (!Files.isRegularFile(loc.nativeLoader())) {
+            if (loader.isEmpty()) {
+                return false; // without the loader the game would not start; leave the json as it is
+            }
+            copyFile(loader.get(), loc.nativeLoader());
+            log.accept(t.get("log.native", loc.javaDir()));
+            changed = true;
+        }
         Path json = loc.launchJson();
         String text = Files.readString(json, StandardCharsets.UTF_8);
-        LaunchJson.Change c = LaunchJson.withJumpstart(text, loc.jumpstartJar());
+        LaunchJson.Change c = LaunchJson.withJumpstart(text);
         if (c == null || c.json().equals(text)) {
-            return false;
+            return changed;
         }
         write(json, c.json(), StandardCharsets.UTF_8);
         recordReplaced(c.removed());
@@ -164,6 +191,9 @@ public final class Setup {
      *                   old Jumpstart entry goes, as its folder is gone)
      */
     public void installFiles(Payload payload, boolean enableMods) throws IOException {
+        if (windows() && !Files.isRegularFile(payload.nativeLoader())) {
+            throw new IOException(t.get("error.native"));
+        }
         moveAside(loc.zombieBuddyJar());
         moveAside(sibling(loc.zombieBuddyJar(), ".new")); // a ZombieBuddy update waiting for zbNative
         Path jar = loc.jumpstartJar();
@@ -171,9 +201,13 @@ public final class Setup {
         log.accept(t.get("log.jar", loc.javaDir()));
 
         if (windows()) {
+            if (!sameContent(payload.nativeLoader(), loc.nativeLoader())) {
+                copyFile(payload.nativeLoader(), loc.nativeLoader());
+            }
+            log.accept(t.get("log.native", loc.javaDir()));
             Path json = loc.launchJson();
             String text = Files.readString(json, StandardCharsets.UTF_8);
-            LaunchJson.Change c = LaunchJson.withJumpstart(text, jar);
+            LaunchJson.Change c = LaunchJson.withJumpstart(text);
             if (c == null) {
                 throw new IOException(t.get("error.json"));
             }
@@ -427,6 +461,18 @@ public final class Setup {
                 deleteFile(jar);
                 log.accept(t.get("log.jarRemoved"));
             }
+        }
+        if (!Files.exists(jar)) {
+            Files.deleteIfExists(loc.nativeLoader()); // Windows: the loader goes with the jar it starts
+        }
+    }
+
+    /** True if both files exist and hold the same bytes (an update need not touch a loader the game may hold). */
+    private static boolean sameContent(Path a, Path b) {
+        try {
+            return Files.isRegularFile(a) && Files.isRegularFile(b) && Files.mismatch(a, b) == -1;
+        } catch (IOException e) {
+            return false;
         }
     }
 

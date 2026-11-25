@@ -3,7 +3,10 @@
 // kit/package-installer.sh turns JumpstartSetup.jar into native installers (.msi, .dmg, .deb, .rpm)
 // with their own Java runtime.
 //
-//   ./gradlew :installer:installerJar -PforkJar=<the fork's shadowJar> //       -PzombieBuddyMod=<folder from kit/zombiebuddy-mod.sh> [-PkitVersion=...]
+//   ./gradlew :installer:installerJar -PforkJar=<the fork's shadowJar> //       -PzombieBuddyMod=<folder from kit/zombiebuddy-mod.sh> -PnativeLoader=<jsNative.dll> [-PkitVersion=...]
+//
+// jsNative.dll: the fork's c/windows loader built for Jumpstart.jar (make jsNative.dll, MinGW); Windows
+// needs it, as the game's ProjectZomboid64.exe cannot start -javaagent itself.
 
 plugins {
     application
@@ -35,6 +38,7 @@ tasks.test {
 }
 
 val zombieBuddyMod = providers.gradleProperty("zombieBuddyMod")
+val nativeLoader = providers.gradleProperty("nativeLoader")
 val kitVersion = providers.gradleProperty("kitVersion").orElse(provider { project.version.toString() })
 
 val payloadVersion by tasks.registering {
@@ -45,7 +49,7 @@ val payloadVersion by tasks.registering {
 }
 
 // What the installer puts in place: Jumpstart.jar (the agent: the fork with Jumpstart inside, from
-// :mod:agentJar), mods/ZombieBuddy (the fork's Lua, no jar), VERSION.
+// :mod:agentJar), jsNative.dll (Windows: starts it), mods/ZombieBuddy (the fork's Lua, no jar), VERSION.
 val payloadZip by tasks.registering(Zip::class) {
     group = "build"
     description = "Packs Jumpstart.jar and the fork's mod folder for the installer."
@@ -54,7 +58,13 @@ val payloadZip by tasks.registering(Zip::class) {
     from(project(":mod").tasks.named("agentJar"))
     from({ zombieBuddyMod.orNull?.let { file(it) } ?: emptyList<File>() }) { into("mods/ZombieBuddy") }
     from(payloadVersion)
+    from({ nativeLoader.orNull?.let { file(it) } ?: emptyList<File>() }) { rename { "jsNative.dll" } }
     doFirst {
+        val loader = nativeLoader.orNull?.let { file(it) }
+            ?: throw GradleException("-PnativeLoader=<jsNative.dll> is missing (make jsNative.dll in the fork's c/windows)")
+        if (!loader.isFile || loader.readBytes().let { it.size < 2 || it[0] != 'M'.code.toByte() || it[1] != 'Z'.code.toByte() }) {
+            throw GradleException("$loader is not a Windows DLL")
+        }
         val dir = zombieBuddyMod.orNull?.let { file(it) }
             ?: throw GradleException("-PzombieBuddyMod=<folder> is missing (build it with kit/zombiebuddy-mod.sh)")
         if (!dir.resolve("42/mod.info").isFile || !dir.resolve("jumpstart-fork.txt").isFile) {

@@ -188,17 +188,31 @@ class EditsTest {
     // --- ProjectZomboid64.json (Windows) ---
 
     private static final String JSON = "{\r\n\t\"mainClass\": \"zombie/gameStates/MainScreenState\",\r\n\t\"vmArgs\": [\r\n\t\t\"-Xms16g\",\r\n\t\t\"-Xmx16g\"\r\n\t]\r\n}\r\n";
-    private static final Path JAR = Path.of("PZ", "Jumpstart.jar").toAbsolutePath();
-    private static final String AGENT = "-javaagent:" + JAR.toString().replace('\\', '/');
+    private static final String AGENT = "-agentlib:jsNative";
+
+    @Test
+    void jsonFromJumpstart04And050GetsTheLoader() {
+        // 0.4 and 0.5.0 wrote -javaagent, which ProjectZomboid64.exe cannot start on Windows
+        String broken = JSON.replace("\"-Xms16g\"",
+                "\"-javaagent:c:/program files (x86)/steam/steamapps/common/ProjectZomboid/Jumpstart.jar=verbosity=1,hotswap=true\",\r\n\t\t\"-Xms16g\"");
+        assertFalse(LaunchJson.hasJumpstart(broken), "the game does not start with it");
+        assertTrue(LaunchJson.startsLoader(broken));
+        LaunchJson.Change c = LaunchJson.withJumpstart(broken);
+        assertTrue(c.json().contains("\"vmArgs\": [\r\n\t\t\"" + AGENT + "=verbosity=1,hotswap=true\",\r\n\t\t\"-Xms16g\""), c.json());
+        assertFalse(c.json().contains("javaagent"), c.json());
+        assertEquals(List.of(), c.removed(), "it was Jumpstart's own entry");
+        assertTrue(LaunchJson.hasJumpstart(c.json()));
+        assertEquals(JSON, LaunchJson.withoutJumpstart(broken, List.of()), "uninstalled without updating first");
+    }
 
     @Test
     void jsonWithoutZombieBuddyGetsTheAgent() {
-        LaunchJson.Change c = LaunchJson.withJumpstart(JSON, JAR);
+        LaunchJson.Change c = LaunchJson.withJumpstart(JSON);
         assertTrue(c.json().contains("\"vmArgs\": [\r\n\t\t\"" + AGENT + "=hotswap=true\",\r\n\t\t\"-Xms16g\""), c.json());
         assertEquals(List.of(), c.removed());
         assertTrue(LaunchJson.hasJumpstart(c.json()));
         assertTrue(LaunchJson.startsLoader(c.json()));
-        assertEquals(c.json(), LaunchJson.withJumpstart(c.json(), JAR).json(), "once is enough");
+        assertEquals(c.json(), LaunchJson.withJumpstart(c.json()).json(), "once is enough");
         assertEquals(JSON, LaunchJson.withoutJumpstart(c.json(), List.of()));
         assertFalse(LaunchJson.startsLoader(JSON));
     }
@@ -206,7 +220,7 @@ class EditsTest {
     @Test
     void jsonWithZombieBuddysInstallerIsReplacedAndRestored() {
         String zb = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative=policy=deny-new\",\r\n\t\t\"-Xms16g\"");
-        LaunchJson.Change c = LaunchJson.withJumpstart(zb, JAR);
+        LaunchJson.Change c = LaunchJson.withJumpstart(zb);
         assertFalse(c.json().contains("zbNative"), c.json());
         assertTrue(c.json().contains("\"" + AGENT + "=policy=deny-new,hotswap=true\""), c.json());
         assertEquals(List.of("-agentlib:zbNative=policy=deny-new"), c.removed());
@@ -218,13 +232,13 @@ class EditsTest {
     void jsonFromJumpstartBefore02() {
         // 0.1 added its own agent, or hotswap=true to ZombieBuddy's installer option
         String own = JSON.replace("\"-Xms16g\"", "\"-javaagent:C:/PZ/ZombieBuddy.jar=hotswap=true\",\r\n\t\t\"-Xms16g\"");
-        LaunchJson.Change c = LaunchJson.withJumpstart(own, JAR);
+        LaunchJson.Change c = LaunchJson.withJumpstart(own);
         assertFalse(c.json().contains("ZombieBuddy.jar"), c.json());
         assertEquals(List.of(), c.removed(), "0.1's entry was never the player's");
         assertEquals(JSON, LaunchJson.withoutJumpstart(own, List.of()), "uninstalled without updating first");
 
         String zbNative = JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative=hotswap=true\",\r\n\t\t\"-Xms16g\"");
-        LaunchJson.Change c2 = LaunchJson.withJumpstart(zbNative, JAR);
+        LaunchJson.Change c2 = LaunchJson.withJumpstart(zbNative);
         assertEquals(List.of("-agentlib:zbNative"), c2.removed(), "the player's option, without 0.1's hotswap=true");
         assertEquals(JSON.replace("\"-Xms16g\"", "\"-agentlib:zbNative\",\r\n\t\t\"-Xms16g\""),
                 LaunchJson.withoutJumpstart(zbNative, List.of()));
@@ -232,7 +246,7 @@ class EditsTest {
 
     @Test
     void jsonBroken() {
-        assertNull(LaunchJson.withJumpstart("{}", JAR));
+        assertNull(LaunchJson.withJumpstart("{}"));
         assertFalse(LaunchJson.hasJumpstart("{}"));
     }
 

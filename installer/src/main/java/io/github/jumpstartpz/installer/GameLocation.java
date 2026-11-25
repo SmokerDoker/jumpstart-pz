@@ -32,6 +32,15 @@ public record GameLocation(Platform.Os os, Path javaDir, Path zomboidDir, List<P
         return javaDir.resolve("Jumpstart.jar");
     }
 
+    /**
+     * Windows: the small loader that starts Jumpstart.jar ({@code -agentlib:jsNative}). The game's
+     * ProjectZomboid64.exe cannot start {@code -javaagent} itself, as instrument.dll's DLLs are not on
+     * the load path; the loader (ZombieBuddy's zbNative, built for Jumpstart.jar) puts them there.
+     */
+    public Path nativeLoader() {
+        return javaDir.resolve("jsNative.dll");
+    }
+
     /** ZombieBuddy's own jar (the player's, or the fork from Jumpstart before 0.2); moved aside while Jumpstart is installed. */
     public Path zombieBuddyJar() {
         return javaDir.resolve("ZombieBuddy.jar");

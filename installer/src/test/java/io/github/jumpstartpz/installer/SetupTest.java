@@ -58,6 +58,7 @@ class SetupTest {
         Files.writeString(p.resolve("mods/ZombieBuddy/42/mod.info"), "name=ZombieBuddy (Jumpstart fork)\nid=ZombieBuddy\n");
         Files.writeString(p.resolve("mods/ZombieBuddy/" + Setup.FORK_MARKER), "fork");
         Files.writeString(p.resolve("VERSION"), "test-1\n");
+        Files.writeString(p.resolve("jsNative.dll"), "loader");
         return Payload.of(p);
     }
 
@@ -115,7 +116,8 @@ class SetupTest {
         assertTrue(Setup.isFork(loc.jumpstartJar()));
         assertFalse(Files.exists(loc.zombieBuddyJar()), "one jar: Jumpstart.jar");
         String json = Files.readString(loc.launchJson());
-        assertTrue(json.contains("Jumpstart.jar=hotswap=true\",\r\n\t\t\"-Xmx16g\""), json);
+        assertTrue(json.contains("\"-agentlib:jsNative=hotswap=true\",\r\n\t\t\"-Xmx16g\""), json);
+        assertEquals("loader", Files.readString(loc.nativeLoader()), "the loader that starts Jumpstart.jar");
         assertFalse(Files.exists(loc.modsDir().resolve("ZombieBuddy/libs")), "the mod folder has no jar");
         assertTrue(Files.isRegularFile(loc.modsDir().resolve("ZombieBuddy/42/mod.info")));
         assertFalse(Files.exists(loc.modsDir().resolve("Jumpstart")));
@@ -131,6 +133,7 @@ class SetupTest {
         setup.uninstallFiles();
         assertFalse(setup.status().anything());
         assertFalse(Files.exists(loc.jumpstartJar()));
+        assertFalse(Files.exists(loc.nativeLoader()));
         assertFalse(Files.exists(loc.modsDir().resolve("ZombieBuddy")));
         assertEquals(JSON, Files.readString(loc.launchJson()));
         assertFalse(Files.readString(loc.modList()).contains("ZombieBuddy"));
@@ -154,7 +157,7 @@ class SetupTest {
         assertTrue(Files.isRegularFile(loc.javaDir().resolve("ZombieBuddy.jar" + Setup.BACKUP)));
         String json = Files.readString(loc.launchJson());
         assertFalse(json.contains("zbNative"), "two agents would load every mod twice");
-        assertTrue(json.contains("Jumpstart.jar=policy=deny-new,hotswap=true\""), "ZombieBuddy's options stay: " + json);
+        assertTrue(json.contains("\"-agentlib:jsNative=policy=deny-new,hotswap=true\""), "ZombieBuddy's options stay: " + json);
         assertEquals("-agentlib:zbNative=policy=deny-new\n", Files.readString(loc.replacedAgents()));
         assertTrue(setup.status().installed());
         assertTrue(Files.isRegularFile(loc.backupDir().resolve("ZombieBuddy/42/mod.info")));
@@ -378,6 +381,43 @@ class SetupTest {
         assertTrue(setup.repair());
         assertTrue(LaunchJson.hasJumpstart(Files.readString(loc.launchJson())));
         assertFalse(setup.repair(), "nothing left to repair");
+    }
+
+    @Test
+    void windowsInstallOf050GetsTheLoader() throws IOException {
+        // 0.5.0 wrote -javaagent and no loader, so the game did not start; its automatic update
+        // installs the new payload with 0.5.0's code, then the new installer repairs at the next start
+        GameLocation loc = windows();
+        Setup setup = setup(loc);
+        setup.installFiles(payload());
+        Files.delete(loc.nativeLoader());
+        String jar = loc.jumpstartJar().toAbsolutePath().toString().replace('\\', '/');
+        Files.writeString(loc.launchJson(), JSON.replace("\"-Xmx16g\"", "\"-javaagent:" + jar + "=hotswap=true\",\r\n\t\t\"-Xmx16g\""));
+        assertFalse(setup.status().installed(), "the game does not start like this");
+
+        assertFalse(setup.repair(Optional.empty()), "without a loader to hand the json stays");
+        assertTrue(Files.readString(loc.launchJson()).contains("-javaagent:"));
+
+        Path loader = Files.writeString(tmp.resolve("bundled-jsNative.dll"), "loader");
+        assertTrue(setup.repair(Optional.of(loader)));
+        assertEquals("loader", Files.readString(loc.nativeLoader()));
+        String json = Files.readString(loc.launchJson());
+        assertTrue(json.contains("\"-agentlib:jsNative=hotswap=true\""), json);
+        assertFalse(json.contains("-javaagent:"), json);
+        assertFalse(Files.exists(loc.replacedAgents()), "the entry was Jumpstart's own");
+        assertTrue(setup.status().installed());
+        assertFalse(setup.repair(Optional.of(loader)), "nothing left to repair");
+    }
+
+    @Test
+    void windowsNeedsTheLoaderInThePayload() throws IOException {
+        GameLocation loc = windows();
+        Payload p = payload();
+        Files.delete(p.nativeLoader());
+        IOException e = org.junit.jupiter.api.Assertions.assertThrows(IOException.class, () -> setup(loc).installFiles(p));
+        assertTrue(e.getMessage().contains("jsNative.dll"), e.getMessage());
+        assertFalse(Files.exists(loc.jumpstartJar()), "nothing was changed");
+        assertEquals(JSON, Files.readString(loc.launchJson()));
     }
 
     @Test

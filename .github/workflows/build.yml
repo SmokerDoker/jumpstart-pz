@@ -28,6 +28,21 @@ jobs:
         # Jumpstart.jar needs the fork built against the game (kits.yml); here the code and its tests
         run: ./gradlew --no-daemon check
 
+  # jsNative.dll, the Windows loader that starts Jumpstart.jar (kit/native-loader.sh); uploaded so it
+  # can be tried with the real game before a release
+  native-loader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64
+      - run: bash kit/native-loader.sh third_party/zombiebuddy-jumpstart dist-native
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jsNative
+          path: dist-native/jsNative.dll
+
   # the Cloudflare Worker (cloud/) in Miniflare
   cloud:
     runs-on: ubuntu-latest
