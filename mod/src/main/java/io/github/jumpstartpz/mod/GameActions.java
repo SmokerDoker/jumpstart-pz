@@ -38,8 +38,34 @@ final class GameActions implements Actions {
     private final ReflectiveLuaGame luaGame = new ReflectiveLuaGame();
     /** Mod id to its folder, for mods found in downloaded Workshop items and the mod folders. */
     private final Map<String, String> downloadedModDirs = new java.util.concurrent.ConcurrentHashMap<>();
-    /** Lua event handlers of mods switched off in this session, to give back when they come on again. */
-    private final Map<String, Map<String, List<Object>>> parkedLua = new java.util.concurrent.ConcurrentHashMap<>();
+    /** What each mod's Lua did in this session, to take back when it is switched off and give back when it comes on. */
+    private final Map<String, ModJournal> journals = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * A mod's Lua side in this session: the changes to Lua's globals it made while it loaded live
+     * (none for a mod that came with the save), and while it is off, its parked event handlers.
+     */
+    static final class ModJournal {
+        List<LuaJournal.Change> changes = List.of();
+        Map<String, List<Object>> parkedHandlers;
+        /** What could not be taken back on the last switch-off, for the player. */
+        String leftovers = "";
+
+        boolean parked() {
+            return parkedHandlers != null;
+        }
+
+        /** The Lua classes (tables) the mod added: their windows close with it. */
+        java.util.Set<Object> addedTables(LuaLive.Game game) {
+            java.util.Set<Object> tables = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (LuaJournal.Change c : changes) {
+                if (c.before() == LuaJournal.ABSENT && game.isTable(c.after())) {
+                    tables.add(c.after());
+                }
+            }
+            return tables;
+        }
+    }
 
     GameActions(LiveInstaller installer, ZombieBuddyFork zombieBuddy, Path biteCheckDir) {
         this.installer = installer;
@@ -454,7 +480,8 @@ final class GameActions implements Actions {
             return enabled ? "on" : "off"; // the main menu: what the next load of a save gets
         }
         boolean loaded = luaGame.isActive(modId);
-        boolean parked = parkedLua.containsKey(modId);
+        ModJournal journal = journals.get(modId);
+        boolean parked = journal != null && journal.parked();
         if (parked || (loaded && !enabled)) {
             return enabled ? "on, next load" : "off, next load";
         }
@@ -475,13 +502,20 @@ final class GameActions implements Actions {
     }
 
     private LuaLive.Result loadLua(String modId, boolean forServer) {
-        Map<String, List<Object>> parked = parkedLua.remove(modId);
-        if (parked != null) {
-            luaGame.giveBack(parked);
+        ModJournal journal = journals.get(modId);
+        if (journal != null && journal.parked()) {
+            luaGame.giveBack(journal.parkedHandlers);
+            journal.parkedHandlers = null;
+            LuaJournal.Outcome redo = LuaJournal.redo(luaGame, journal.changes);
+            System.out.println("[Jumpstart] Lua of " + modId + " back: " + redo.done() + " globals"
+                    + (redo.kept().isEmpty() ? "" : "; changed meanwhile, left alone: " + redo.kept()));
             return LuaLive.Result.of(LuaLive.Status.RESUMED);
         }
         String dir = downloadedModDirs.get(modId);
         LuaLive.Result result = LuaLive.load(luaGame, modId, dir, forServer);
+        if (result.status() == LuaLive.Status.LOADED) {
+            journals.computeIfAbsent(modId, k -> new ModJournal()).changes = result.changes();
+        }
         System.out.println("[Jumpstart] Lua of " + modId + ": " + result);
         return result;
     }
@@ -496,15 +530,40 @@ final class GameActions implements Actions {
         return unloadLua(modId, true);
     }
 
+    /**
+     * Stops a mod's Lua: its event handlers are parked, what it changed in Lua's globals goes back
+     * (only where nothing changed it again since), and windows of classes it added close. A mod that
+     * came with the save has no record from before it loaded: its functions are only named.
+     */
     private int unloadLua(String modId, boolean forServer) {
-        if (!luaGame.inGame() || (luaGame.multiplayer() && !forServer) || !luaGame.isActive(modId) || parkedLua.containsKey(modId)) {
+        ModJournal journal = journals.computeIfAbsent(modId, k -> new ModJournal());
+        if (!luaGame.inGame() || (luaGame.multiplayer() && !forServer) || !luaGame.isActive(modId) || journal.parked()) {
             return 0;
         }
-        Map<String, List<Object>> taken = luaGame.takeHandlers(luaGame.modDirs(modId));
-        parkedLua.put(modId, taken);
+        List<String> dirs = luaGame.modDirs(modId);
+        Map<String, List<Object>> taken = luaGame.takeHandlers(dirs);
+        journal.parkedHandlers = taken;
+        int windows = luaGame.closeWindows(journal.addedTables(luaGame));
+        LuaJournal.Outcome undo = LuaJournal.undo(luaGame, journal.changes);
+        if (!undo.kept().isEmpty()) {
+            journal.leftovers = "kept:" + undo.kept().size() + ":" + LuaJournal.shortList(undo.kept(), 5);
+        } else if (journal.changes.isEmpty()) {
+            List<String> stays = LuaJournal.functionsFrom(luaGame, file -> file != null && dirs.stream().anyMatch(file::startsWith));
+            journal.leftovers = stays.isEmpty() ? "" : "start:" + stays.size() + ":" + LuaJournal.shortList(stays, 5);
+        } else {
+            journal.leftovers = "";
+        }
         int count = taken.values().stream().mapToInt(List::size).sum();
-        System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet());
+        System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet()
+                + ", " + undo.done() + " globals back, " + windows + " windows closed"
+                + (journal.leftovers.isEmpty() ? "" : ", " + journal.leftovers));
         return count;
+    }
+
+    @Override
+    public String luaLeftovers(String modId) {
+        ModJournal journal = journals.get(modId);
+        return journal == null ? "" : journal.leftovers;
     }
 
     @Override
@@ -519,6 +578,10 @@ final class GameActions implements Actions {
         }
         if ("on".equals(stateOf(modId))) {
             off(modId);
+        }
+        String forgot = zombieBuddy.forget(modId); // the fork drops its record (Lua exposures, callbacks)
+        if (forgot != null && !forgot.startsWith("OK")) {
+            System.out.println("[Jumpstart] ZombieBuddy could not forget " + modId + ": " + forgot);
         }
         unloadLua(modId);
         String problem = setActive(modId, false);

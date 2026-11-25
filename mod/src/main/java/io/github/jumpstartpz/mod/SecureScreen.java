@@ -446,6 +446,24 @@ public final class SecureScreen {
         }
     }
 
+    /** What stayed of a mod's Lua after switching it off ({@link Actions#luaLeftovers}), for the player. */
+    String leftoversNote(String name, String leftovers) {
+        if (leftovers == null || leftovers.isEmpty()) {
+            return "";
+        }
+        String[] p = leftovers.split(":", 3);
+        if (p.length < 3) {
+            return "";
+        }
+        int count;
+        try {
+            count = Integer.parseInt(p[1]);
+        } catch (NumberFormatException e) {
+            return "";
+        }
+        return String.format(Locale.ROOT, texts.get(p[0].equals("kept") ? "lua.kept" : "lua.startLoaded"), name, count, p[2]);
+    }
+
     /** "java.lang.NullPointerException: x" -> "NullPointerException". */
     static String shortException(String exception) {
         String s = exception == null ? "" : exception.strip();
@@ -720,7 +738,9 @@ public final class SecureScreen {
                 return;
             }
             int stopped = actions.unloadLua(mod.id());
-            say(String.format(Locale.ROOT, texts.get(stopped > 0 ? "lua.stopped" : "lua.off"), mod.name(), stopped), true);
+            String said = String.format(Locale.ROOT, texts.get(stopped > 0 ? "lua.stopped" : "lua.off"), mod.name(), stopped);
+            String left = leftoversNote(mod.name(), actions.luaLeftovers(mod.id()));
+            say(left.isEmpty() ? said : said + " " + left, true);
         } else {
             String problem = actions.activate(mod.id());
             if (problem != null) {

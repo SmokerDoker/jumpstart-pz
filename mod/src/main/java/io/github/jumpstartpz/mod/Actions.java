@@ -67,6 +67,15 @@ interface Actions {
     /** Stops a running mod's Lua: takes its event handlers away (kept for {@link #loadLua}); returns how many. */
     int unloadLua(String modId);
 
+    /**
+     * What stayed of a mod's Lua after the last {@link #unloadLua}: "" if nothing,
+     * "kept:N:a, b" (changed again by another mod since) or "start:N:a, b" (it came with the save,
+     * so its functions could only be named).
+     */
+    default String luaLeftovers(String modId) {
+        return "";
+    }
+
     /** {@link #loadLua} in a multiplayer round the server started (install for everybody). */
     LuaLive.Result loadLuaForServer(String modId);
 

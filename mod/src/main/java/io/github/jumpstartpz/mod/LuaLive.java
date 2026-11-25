@@ -25,10 +25,23 @@ final class LuaLive {
     /** RESUMED: a mod switched off in this session got its event handlers back. */
     enum Status { LOADED, RESUMED, NOT_IN_GAME, MULTIPLAYER, ALREADY_ACTIVE, NO_LUA, FAILED }
 
-    /** {@code needsRestart}: keys of {@link #RESTART_PARTS} the mod has. */
-    record Result(Status status, int files, List<String> errors, List<String> needsRestart) {
+    /**
+     * {@code needsRestart}: keys of {@link #RESTART_PARTS} the mod has. {@code changes}: what its
+     * Lua changed in the globals ({@link LuaJournal}), taken back when it is switched off.
+     */
+    record Result(Status status, int files, List<String> errors, List<String> needsRestart, List<LuaJournal.Change> changes) {
+        Result(Status status, int files, List<String> errors, List<String> needsRestart) {
+            this(status, files, errors, needsRestart, List.of());
+        }
+
         static Result of(Status status) {
             return new Result(status, 0, List.of(), List.of());
+        }
+
+        @Override
+        public String toString() {
+            return "Result[" + status + ", files=" + files + ", errors=" + errors + ", needsRestart=" + needsRestart
+                    + ", globals changed=" + changes.size() + "]";
         }
     }
 
@@ -77,6 +90,36 @@ final class LuaLive {
         Object[] argsFor(String event);
 
         void reloadTranslations() throws Exception;
+
+        // --- Lua's globals, for LuaJournal (defaults: a game without them; nothing is recorded) ---
+
+        /** Lua's global table, or null. */
+        default Object globalTable() {
+            return null;
+        }
+
+        default boolean isTable(Object value) {
+            return false;
+        }
+
+        /** A copy of a table's entries (raw, no metatables). */
+        default Map<Object, Object> entries(Object table) {
+            return Map.of();
+        }
+
+        /** A table entry (raw); null for nil. */
+        default Object get(Object table, Object key) {
+            return null;
+        }
+
+        /** Sets a table entry (raw); null removes it. */
+        default void set(Object table, Object key, Object value) {
+        }
+
+        /** The file a Lua function was defined in (normalized: lower case, '/'), or null for anything else. */
+        default String sourceOf(Object value) {
+            return null;
+        }
     }
 
     /** Start-up events a late mod missed, in the order the game sends them. */
@@ -129,6 +172,11 @@ final class LuaLive {
             return new Result(Status.NO_LUA, 0, List.of(), restart);
         }
         List<String> errors = new ArrayList<>();
+        Set<String> modFiles = new java.util.HashSet<>();
+        for (String file : files.values()) {
+            modFiles.add(file.replace('\\', '/').toLowerCase(Locale.ROOT));
+        }
+        LuaJournal.Snapshot globalsBefore = LuaJournal.snapshot(game);
         Map<String, List<Object>> before = game.handlers(START_EVENTS);
         for (String file : lua) {
             try {
@@ -162,7 +210,9 @@ final class LuaLive {
                 }
             }
         }
-        return new Result(Status.LOADED, lua.size(), errors, restart);
+        // after the missed start events too: handlers often set up globals then
+        List<LuaJournal.Change> changes = LuaJournal.diff(game, globalsBefore, LuaJournal.snapshot(game), modFiles::contains);
+        return new Result(Status.LOADED, lua.size(), errors, restart, changes);
     }
 
     /** The Lua files to run: the side's folders in the game's order (shared, client, server), each sorted. */

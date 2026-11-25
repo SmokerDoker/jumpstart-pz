@@ -101,6 +101,85 @@ class LuaLiveTest {
         assertEquals(1, game.registered);
     }
 
+    /** A Lua table: identity, like Kahlua's. */
+    private static final class Table {
+        final Map<Object, Object> map = new HashMap<>();
+    }
+
+    /** A Lua function and the file it was defined in (normalized). */
+    private static final class Fn {
+        final String file;
+        final String name;
+
+        Fn(String file, String name) {
+            this.file = file;
+            this.name = name;
+        }
+
+        @Override
+        public String toString() {
+            return name;
+        }
+    }
+
+    @Test
+    void recordsWhatTheModChangedInTheGlobalsAndTakesItBackOnlyWhereItIsStillTheMods() {
+        FakeGame game = new FakeGame();
+        String file = "/mods/jst/42/media/lua/client/jst.lua";
+        game.files.put("media/lua/client/jst.lua", file);
+        Table luautils = new Table();
+        Fn gameStringStarts = new Fn("/game/media/lua/shared/luautils.lua", "game stringStarts");
+        luautils.map.put("stringStarts", gameStringStarts);
+        luautils.map.put("counter", 1.0);
+        game.env.map.put("luautils", luautils);
+        Fn modStringStarts = new Fn(file, "mod stringStarts");
+        Table panel = new Table();
+        panel.map.put("prerender", new Fn(file, "JSTPanel.prerender"));
+        game.scripts.put(file, () -> {
+            luautils.map.put("stringStarts", modStringStarts); // replaces a game function
+            luautils.map.put("counter", 2.0); // a value the game changes all the time: not the mod's
+            game.env.map.put("JST_Marker", true);
+            game.env.map.put("JSTPanel", panel);
+        });
+
+        LuaLive.Result r = LuaLive.load(game, "jst", "/mods/jst");
+
+        assertEquals(LuaLive.Status.LOADED, r.status());
+        assertEquals(List.of("JSTPanel", "JST_Marker", "luautils.stringStarts"),
+                r.changes().stream().map(LuaJournal.Change::path).toList());
+
+        LuaJournal.Outcome undo = LuaJournal.undo(game, r.changes());
+        assertEquals(3, undo.done());
+        assertTrue(undo.kept().isEmpty());
+        assertEquals(gameStringStarts, luautils.map.get("stringStarts"), "the game's function is back");
+        assertTrue(!game.env.map.containsKey("JST_Marker") && !game.env.map.containsKey("JSTPanel"), "new globals are gone");
+        assertEquals(2.0, luautils.map.get("counter"), "the game's own values stay");
+
+        LuaJournal.Outcome redo = LuaJournal.redo(game, r.changes());
+        assertEquals(3, redo.done());
+        assertEquals(modStringStarts, luautils.map.get("stringStarts"));
+        assertEquals(panel, game.env.map.get("JSTPanel"));
+
+        // another mod wraps the function now: switching off leaves its wrapper and says so
+        Fn wrapper = new Fn("/mods/other/media/lua/client/other.lua", "other wrapper");
+        luautils.map.put("stringStarts", wrapper);
+        undo = LuaJournal.undo(game, r.changes());
+        assertEquals(List.of("luautils.stringStarts"), undo.kept());
+        assertEquals(wrapper, luautils.map.get("stringStarts"));
+    }
+
+    @Test
+    void namesTheFunctionsOfAModThatCameWithTheSave() {
+        FakeGame game = new FakeGame();
+        Table luautils = new Table();
+        luautils.map.put("stringStarts", new Fn("/mods/old/media/lua/client/old.lua", "old"));
+        game.env.map.put("luautils", luautils);
+        game.env.map.put("OldMod_init", new Fn("/mods/old/media/lua/client/old.lua", "init"));
+        game.env.map.put("print", new Fn("/game/print.lua", "print"));
+        assertEquals(List.of("OldMod_init", "luautils.stringStarts"),
+                LuaJournal.functionsFrom(game, f -> f != null && f.startsWith("/mods/old/")));
+    }
+
     private static final class FakeGame implements LuaLive.Game {
         boolean inGame = true;
         boolean multiplayer;
@@ -111,6 +190,25 @@ class LuaLiveTest {
         final Map<String, List<Object>> handlers = new HashMap<>();
         final List<String> ran = new ArrayList<>();
         final List<String> called = new ArrayList<>();
+        /** Lua's globals: tables are {@link Table}, functions {@link Fn}; what a file does when it runs. */
+        final Table env = new Table();
+        final Map<String, Runnable> scripts = new HashMap<>();
+
+        @Override public Object globalTable() { return env; }
+        @Override public boolean isTable(Object v) { return v instanceof Table; }
+        @Override public Map<Object, Object> entries(Object t) { return new HashMap<>(((Table) t).map); }
+        @Override public Object get(Object t, Object k) { return ((Table) t).map.get(k); }
+
+        @Override
+        public void set(Object t, Object k, Object v) {
+            if (v == null) {
+                ((Table) t).map.remove(k);
+            } else {
+                ((Table) t).map.put(k, v);
+            }
+        }
+
+        @Override public String sourceOf(Object v) { return v instanceof Fn f ? f.file : null; }
 
         @Override public boolean inGame() { return inGame; }
         @Override public boolean multiplayer() { return multiplayer; }
@@ -131,6 +229,10 @@ class LuaLiveTest {
             ran.add(absolutePath);
             if (absolutePath.equals(failing)) {
                 throw new IllegalStateException("syntax error");
+            }
+            Runnable script = scripts.get(absolutePath);
+            if (script != null) {
+                script.run();
             }
             if (absolutePath.endsWith("Minimap_UI.lua")) {
                 handlers.computeIfAbsent("OnGameStart", k -> new ArrayList<>()).add("Minimap.onStart");
