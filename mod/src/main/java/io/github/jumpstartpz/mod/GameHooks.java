@@ -51,6 +51,7 @@ final class GameHooks {
         checkVisible(SecureScreen.class);
         checkVisible(FileJournal.class);
         checkVisible(ModDataJournal.class);
+        checkVisible(LuaStartJournal.class);
         run(instrumentation, new AgentBuilder.Default()
                 .disableClassFormatChanges()
                 .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -80,6 +81,16 @@ final class GameHooks {
                                 .method(named("getModFileWriter").and(takesArguments(4)),
                                         (t, m, mv, c, p, w, r) -> callOnEntry(mv, FILES, "onModFileWriter",
                                                 "(Ljava/lang/String;Ljava/lang/String;)V", 0, 1))))
+                // switching off a mod that came with the save: what its Lua changed while the game loaded it
+                .type(named("zombie.Lua.LuaManager")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("LoadDirBase").and(takesArguments(String.class, boolean.class)),
+                                        (t, m, mv, c, p, w, r) -> callOnEntry(mv, START, "onLoadDir", "()V"))))
+                .type(named("se.krka.kahlua.j2se.KahluaTableImpl")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("rawset").and(takesArguments(Object.class, Object.class)),
+                                        (t, m, mv, c, p, w, r) -> callOnEntry(mv, START, "onSet",
+                                                "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", 0, 1, 2))))
                 .type(named("zombie.world.moddata.GlobalModData")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .method(named("getOrCreate").and(takesArguments(String.class))
@@ -90,6 +101,7 @@ final class GameHooks {
 
     private static final String FILES = "io/github/jumpstartpz/mod/FileJournal";
     private static final String MODDATA = "io/github/jumpstartpz/mod/ModDataJournal";
+    private static final String START = "io/github/jumpstartpz/mod/LuaStartJournal";
 
     /** At the method's start: target(the given reference arguments). No jump, so no new stack map frame. */
     private static MethodVisitor callOnEntry(MethodVisitor mv, String owner, String name, String descriptor, int... slots) {

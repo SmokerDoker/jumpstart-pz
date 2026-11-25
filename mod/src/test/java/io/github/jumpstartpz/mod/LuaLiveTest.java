@@ -1,6 +1,8 @@
 package io.github.jumpstartpz.mod;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -99,6 +101,93 @@ class LuaLiveTest {
         assertEquals(LuaLive.Status.NO_LUA, r.status());
         assertEquals(List.of("scripts"), r.needsRestart());
         assertEquals(1, game.registered);
+    }
+
+    // --- a mod that came with the save (LuaStartJournal) ---
+
+    private static final String A_FILE = "c:/zomboid/mods/a/42/media/lua/client/a.lua";
+    private static final String B_FILE = "c:/zomboid/mods/b/42/media/lua/client/b.lua";
+
+    /** Writes the game would have made while loading, as the hook keeps them; applied to the fake globals. */
+    private static void write(FakeGame game, List<LuaStartJournal.Write> log, Object table, Object key, Object value, String file) {
+        log.add(new LuaStartJournal.Write(table, key, game.get(table, key), value, file));
+        game.set(table, key, value);
+    }
+
+    @Test
+    void aModThatCameWithTheSaveIsTakenBackCompletely() {
+        FakeGame game = new FakeGame();
+        Table panel = new Table();
+        Fn vanilla = new Fn("c:/game/media/lua/client/isui/ispanel.lua", "vanilla render");
+        panel.map.put("render", vanilla);
+        game.env.map.put("ISPanel", panel);
+        List<LuaStartJournal.Write> log = new ArrayList<>();
+        Fn aRender = new Fn(A_FILE, "a render");
+        Fn aRender2 = new Fn(A_FILE, "a render, again");
+        Table aMod = new Table();
+        write(game, log, panel, "render", aRender, A_FILE);
+        write(game, log, game.env, "AMod", aMod, A_FILE);
+        write(game, log, aMod, "update", new Fn(A_FILE, "a update"), A_FILE); // inside its own table
+        write(game, log, panel, "render", aRender2, A_FILE); // the mod replaces it twice
+        LuaStartJournal.recordForTest(game.env, log);
+
+        List<LuaJournal.Change> changes = LuaStartJournal.changesOf(game, f -> f != null && f.startsWith("c:/zomboid/mods/a/"));
+        assertEquals(List.of("AMod", "ISPanel.render"), changes.stream().map(LuaJournal.Change::path).toList());
+        assertSame(vanilla, changes.get(1).before(), "from before the mod, not its own first version");
+
+        LuaJournal.Outcome undo = LuaJournal.undo(game, changes);
+        assertEquals(2, undo.done());
+        assertSame(vanilla, panel.map.get("render"));
+        assertFalse(game.env.map.containsKey("AMod"));
+        LuaJournal.redo(game, changes);
+        assertSame(aRender2, panel.map.get("render"), "on again: as the save loaded it");
+        assertSame(aMod, game.env.map.get("AMod"));
+    }
+
+    @Test
+    void aStartModsFunctionAnotherModWrappedStays() {
+        FakeGame game = new FakeGame();
+        Table panel = new Table();
+        Fn vanilla = new Fn("c:/game/media/lua/client/isui/ispanel.lua", "vanilla");
+        panel.map.put("render", vanilla);
+        game.env.map.put("ISPanel", panel);
+        List<LuaStartJournal.Write> log = new ArrayList<>();
+        write(game, log, panel, "render", new Fn(A_FILE, "a"), A_FILE);
+        Fn b = new Fn(B_FILE, "b wraps a");
+        write(game, log, panel, "render", b, B_FILE);
+        LuaStartJournal.recordForTest(game.env, log);
+
+        List<LuaJournal.Change> a = LuaStartJournal.changesOf(game, f -> f != null && f.startsWith("c:/zomboid/mods/a/"));
+        LuaJournal.Outcome undo = LuaJournal.undo(game, a);
+        assertEquals(List.of("ISPanel.render"), undo.kept(), "B's wrapper stays, and is named");
+        assertSame(b, panel.map.get("render"));
+    }
+
+    @Test
+    void anotherLuaStateHasNoRecord() {
+        FakeGame game = new FakeGame();
+        LuaStartJournal.recordForTest(new Table(), List.of(new LuaStartJournal.Write(game.env, "X", null, new Table(), A_FILE)));
+        assertEquals(List.of(), LuaStartJournal.changesOf(game, f -> true), "Lua was loaded again since");
+    }
+
+    @Test
+    void onlyModFilesAreKept() {
+        assertTrue(LuaStartJournal.isModFile(A_FILE));
+        assertFalse(LuaStartJournal.isModFile(null));
+        assertFalse(LuaStartJournal.isModFile("media/lua/client/x.lua"), "not a path on disk");
+        assertFalse(LuaStartJournal.isModFile("c:/zomboid/mods/a/42/media/scripts/items.txt"));
+        String vanilla = System.getProperty("user.dir").replace('\\', '/').toLowerCase(java.util.Locale.ROOT)
+                + "/media/lua/client/x.lua";
+        assertFalse(LuaStartJournal.isModFile(vanilla), "the game's own Lua");
+    }
+
+    @Test
+    void filesInAModFolderForTheRestartParts() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Files.createTempDirectory("jst-mod");
+        java.nio.file.Files.createDirectories(dir.resolve("media/scripts"));
+        java.nio.file.Files.writeString(dir.resolve("media/scripts/Items.txt"), "x");
+        assertEquals(List.of("scripts"), LuaLive.needsRestart(GameActions.filesIn(List.of(dir.toFile()))));
+        assertEquals(List.of(), GameActions.filesIn(List.of(dir.resolve("missing").toFile())));
     }
 
     /** A Lua table: identity, like Kahlua's. */

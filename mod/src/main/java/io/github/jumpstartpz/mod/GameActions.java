@@ -50,6 +50,11 @@ final class GameActions implements Actions {
         Map<String, List<Object>> parkedHandlers;
         /** What could not be taken back on the last switch-off, for the player. */
         String leftovers = "";
+        /**
+         * The mod came with the save and has parts the game reads only while a save loads (items,
+         * animations, ...): they stay in this session after its Lua is off.
+         */
+        boolean restartLeft;
 
         boolean parked() {
             return parkedHandlers != null;
@@ -493,7 +498,12 @@ final class GameActions implements Actions {
         ModJournal journal = journals.get(modId);
         boolean parked = journal != null && journal.parked();
         if (parked || (loaded && !enabled)) {
-            return enabled ? "on, next load" : "off, next load";
+            if (enabled) {
+                return "on, next load";
+            }
+            // off: completely, if its Lua was taken back in full and nothing waits for the next load
+            boolean complete = parked && journal.leftovers.isEmpty() && !journal.restartLeft;
+            return complete ? "off" : "off, next load";
         }
         if (loaded) {
             return "on";
@@ -559,14 +569,22 @@ final class GameActions implements Actions {
             return 0;
         }
         List<String> dirs = luaGame.modDirs(modId);
+        java.util.function.Predicate<String> modFile = file -> file != null && dirs.stream().anyMatch(file::startsWith);
+        boolean fromStart = journal.changes.isEmpty();
+        if (fromStart) {
+            // it came with the save: what its Lua changed while the game loaded it (LuaStartJournal)
+            journal.changes = LuaStartJournal.changesOf(luaGame, modFile);
+            journal.restartLeft = !LuaLive.needsRestart(filesIn(luaGame.modFolders(modId))).isEmpty();
+        }
         Map<String, List<Object>> taken = luaGame.takeHandlers(dirs);
         journal.parkedHandlers = taken;
         int windows = luaGame.closeWindows(journal.addedTables(luaGame));
         LuaJournal.Outcome undo = LuaJournal.undo(luaGame, journal.changes);
         if (!undo.kept().isEmpty()) {
             journal.leftovers = "kept:" + undo.kept().size() + ":" + LuaJournal.shortList(undo.kept(), 5);
-        } else if (journal.changes.isEmpty()) {
-            List<String> stays = LuaJournal.functionsFrom(luaGame, file -> file != null && dirs.stream().anyMatch(file::startsWith));
+        } else if (fromStart) {
+            // what the record does not have (deeper in tables, or set outside the load) is only named
+            List<String> stays = LuaJournal.functionsFrom(luaGame, modFile);
             journal.leftovers = stays.isEmpty() ? "" : "start:" + stays.size() + ":" + LuaJournal.shortList(stays, 5);
         } else {
             journal.leftovers = "";
@@ -576,6 +594,24 @@ final class GameActions implements Actions {
                 + ", " + undo.done() + " globals back, " + windows + " windows closed"
                 + (journal.leftovers.isEmpty() ? "" : ", " + journal.leftovers));
         return count;
+    }
+
+    /** The files in a mod's folders, relative (lower case, '/'), as {@link LuaLive#needsRestart} reads them. */
+    static List<String> filesIn(List<java.io.File> folders) {
+        List<String> files = new ArrayList<>();
+        for (java.io.File folder : folders) {
+            Path root = folder.toPath();
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            try (Stream<Path> walk = Files.walk(root, 12)) {
+                walk.filter(Files::isRegularFile).forEach(f ->
+                        files.add(root.relativize(f).toString().replace('\\', '/').toLowerCase(Locale.ROOT)));
+            } catch (IOException | RuntimeException e) {
+                // unreadable: counted as nothing left
+            }
+        }
+        return files;
     }
 
     @Override
