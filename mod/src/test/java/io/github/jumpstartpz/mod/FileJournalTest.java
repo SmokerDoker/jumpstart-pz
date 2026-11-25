@@ -68,12 +68,34 @@ class FileJournalTest {
         assertFalse(FileJournal.archiveName(Path.of("C:/x/y.txt").toAbsolutePath()).isAbsolute());
     }
 
+    private static final String A = "/mods/a/media/lua/client/a.lua";
+    private static final String B = "/mods/b/media/lua/client/b.lua";
+
+    private List<String> stashable(String log, String modDir, List<String> shared) throws Exception {
+        Path file = Files.writeString(zomboid.resolve("moddata-keys.txt"), log);
+        return ModDataJournal.stashable(ModDataJournal.ownersOf(file), List.of(modDir), shared);
+    }
+
     @Test
-    void readsTheModDataKeysOfASave() throws Exception {
-        Path file = Files.writeString(zomboid.resolve("moddata-keys.txt"),
-                "JSTest\t/mods/jst/media/lua/client/jst.lua\nJSTest\t/mods/other/x.lua\nOther\t/mods/other/x.lua\n");
-        var keys = ModDataJournal.keysOf(file);
-        assertEquals("/mods/jst/media/lua/client/jst.lua", keys.get("JSTest"), "the first mod that made the table owns it");
-        assertEquals(2, keys.size());
+    void aModDoesNotOwnATableThatExistedBeforeItAskedForIt() throws Exception {
+        // the game (or a Lua-only mod, or the save from before Jumpstart) made "Shared"; B only got it
+        String log = ModDataJournal.line("Shared", B, false);
+        assertEquals(List.of(), stashable(log, "/mods/b/", new java.util.ArrayList<>()), "uninstalling B keeps it");
+        assertEquals(null, ModDataJournal.ownersOf(zomboid.resolve("moddata-keys.txt")).get("Shared").creator());
+    }
+
+    @Test
+    void aTableAnotherModUsesStaysWhenItsMakerIsUninstalled() throws Exception {
+        String log = ModDataJournal.line("ATable", A, true) + ModDataJournal.line("ATable", B, false)
+                + ModDataJournal.line("AOnly", A, true);
+        List<String> shared = new java.util.ArrayList<>();
+        assertEquals(List.of("AOnly"), stashable(log, "/mods/a/", shared), "only what A made and nobody else used");
+        assertEquals(List.of("ATable"), shared, "named instead of taken out");
+        assertEquals(List.of(), stashable(log, "/mods/b/", new java.util.ArrayList<>()), "uninstalling B keeps A's table");
+    }
+
+    @Test
+    void anOldLogLineWithoutAKindIsNeverOwnership() throws Exception {
+        assertEquals(List.of(), stashable("Old\t" + A + "\n", "/mods/a/", new java.util.ArrayList<>()));
     }
 }
