@@ -63,6 +63,24 @@ class FileJournalTest {
     }
 
     @Test
+    void aFileAnotherModCreatedOrAlsoWritesStays() throws Exception {
+        Path root = zomboid.resolve("jumpstart");
+        FileJournal.setRoot(root);
+        Path lua = Files.createDirectories(zomboid.resolve("Lua"));
+        Path byA = Files.writeString(lua.resolve("a.txt"), "A made it, B writes it too");
+        Path byBFirst = Files.writeString(lua.resolve("b.txt"), "B made it, A writes it later");
+        Files.createDirectories(root.resolve("files"));
+        Files.writeString(root.resolve("files").resolve("written.txt"), String.join("\n",
+                byA + "\tfalse\t/mods/a/x.lua",
+                byA + "\ttrue\t/mods/b/y.lua",
+                byBFirst + "\tfalse\t/mods/b/y.lua",
+                byBFirst + "\ttrue\t/mods/a/x.lua") + "\n", StandardCharsets.UTF_8);
+        assertEquals(0, FileJournal.archive("A", List.of("/mods/a/")));
+        assertEquals(0, FileJournal.archive("B", List.of("/mods/b/")));
+        assertTrue(Files.exists(byA) && Files.exists(byBFirst));
+    }
+
+    @Test
     void namesForTheArchiveAndModIdsStayInsideTheirFolder() {
         assertEquals("a_b_c", FileJournal.safe("a/b\\c"));
         assertFalse(FileJournal.archiveName(Path.of("C:/x/y.txt").toAbsolutePath()).isAbsolute());

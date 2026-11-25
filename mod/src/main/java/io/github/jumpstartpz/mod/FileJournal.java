@@ -72,8 +72,8 @@ public final class FileJournal {
             return; // the game itself, not a mod's Lua
         }
         String path = file.toAbsolutePath().normalize().toString();
-        if (!seen.add(path)) {
-            return;
+        if (!seen.add(path + "\t" + source)) {
+            return; // each mod's first write per file: another mod writing it too must show up
         }
         try {
             Files.createDirectories(log.getParent());
@@ -89,28 +89,45 @@ public final class FileJournal {
         return r == null ? null : r.resolve("files").resolve("written.txt");
     }
 
-    /** A logged write: the file, whether it existed before, the Lua file (normalized). */
-    record Write(Path file, boolean existedBefore, String source) {
+    /**
+     * A file a mod wrote: whether it existed before the first logged write (by anyone), and
+     * whether another mod's Lua wrote it too ({@code shared}: then it is not this mod's to move).
+     */
+    record Write(Path file, boolean existedBefore, String source, boolean shared) {
     }
 
-    /** Every logged write by Lua files under one of {@code modDirs} (normalized, ending in '/'), first write per file. */
+    /**
+     * The files Lua under one of {@code modDirs} (normalized, ending in '/') wrote. A file counts
+     * as the mod's creation only if the first logged write was the mod's and the file did not exist then.
+     */
     static List<Write> writesOf(List<String> modDirs) {
         Path log = log();
-        Map<String, Write> writes = new LinkedHashMap<>();
+        Map<String, Write> first = new LinkedHashMap<>();
+        Map<String, Boolean> mine = new LinkedHashMap<>();
+        Map<String, Boolean> others = new LinkedHashMap<>();
         if (log == null || !Files.isRegularFile(log)) {
             return List.of();
         }
         try {
             for (String line : Files.readAllLines(log, StandardCharsets.UTF_8)) {
                 String[] f = line.split("\t", -1);
-                if (f.length >= 3 && modDirs.stream().anyMatch(f[2]::startsWith)) {
-                    writes.putIfAbsent(f[0], new Write(Path.of(f[0]), Boolean.parseBoolean(f[1]), f[2]));
+                if (f.length < 3) {
+                    continue;
                 }
+                boolean byMod = modDirs.stream().anyMatch(f[2]::startsWith);
+                first.putIfAbsent(f[0], new Write(Path.of(f[0]), Boolean.parseBoolean(f[1]), f[2], false));
+                (byMod ? mine : others).put(f[0], true);
             }
         } catch (IOException e) {
             System.out.println("[Jumpstart] cannot read the file log: " + e);
         }
-        return new ArrayList<>(writes.values());
+        List<Write> writes = new ArrayList<>();
+        for (String path : mine.keySet()) {
+            Write w = first.get(path);
+            boolean createdByMod = !w.existedBefore() && modDirs.stream().anyMatch(w.source()::startsWith);
+            writes.add(new Write(w.file(), !createdByMod, w.source(), others.containsKey(path)));
+        }
+        return writes;
     }
 
     /**
@@ -129,7 +146,7 @@ public final class FileJournal {
         List<String> moved = new ArrayList<>();
         for (Write w : writesOf(modDirs)) {
             String normalized = w.file().toString().replace('\\', '/').toLowerCase(java.util.Locale.ROOT);
-            if (w.existedBefore() || !Files.isRegularFile(w.file()) || modDirs.stream().anyMatch(normalized::startsWith)
+            if (w.existedBefore() || w.shared() || !Files.isRegularFile(w.file()) || modDirs.stream().anyMatch(normalized::startsWith)
                     || dataDir == null || !w.file().toAbsolutePath().normalize().startsWith(dataDir)
                     || w.file().toAbsolutePath().normalize().startsWith(r.toAbsolutePath().normalize())) {
                 continue;
