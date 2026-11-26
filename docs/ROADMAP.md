@@ -51,6 +51,8 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Own cache by hash, so Steam cannot swap files under the running game; rollback to earlier versions
 - [ ] Emergency switch-off: a running mod that BiteCheck flags goes off at once (today R only refreshes the index)
 - [ ] Sort by new and trending (the cloud offers it), filter by BiteCheck status
+- [ ] A Workshop item with several mods (variants like 60/70/80 %) shown as one entry with its variants
+- [ ] Mods without Lua (item scripts, textures) labelled as such, with "only after reloading the save"
 
 ## 4. Multiplayer
 
