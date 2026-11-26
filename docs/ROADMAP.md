@@ -85,7 +85,10 @@ Next after the current multiplayer block, before the marketplace:
 - [ ] Native libraries in a helper process
 - [ ] Placeholder items in saves
 - [ ] Performance measurement per mod
-- [ ] Join time: measure what Jumpstart adds to loading (Lua recording); slow PCs lose the connection while the game loads its tiles
+- [x] Lean main menu: it loads only ZombieBuddy, the mods load once with the game (saves 2 to 3 minutes at start with many mods)
+- [x] Jumpstart's Lua recording reports its own time in the log ("recording took ... ms")
+- [ ] Join: skip the game's second load of all mods when the menu already has the server's list (research; deep in the game's loading)
+- [ ] Slow PCs lose the connection while the game loads its tiles on join (game side)
 - [ ] A list of mods tested with Jumpstart
 - [ ] An in-game test that gets into a save by itself (today the tests wait for a click)
 - [ ] Self-update of the running core; releases checked through the BiteCheck registry

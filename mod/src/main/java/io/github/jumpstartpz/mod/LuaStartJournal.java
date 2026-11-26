@@ -66,12 +66,19 @@ public final class LuaStartJournal {
         if (!recording) {
             return;
         }
+        long t0 = System.nanoTime();
         try {
             record(table, key, value);
         } catch (Throwable t) {
             // never in the game's way
         }
+        spentNanos += System.nanoTime() - t0;
+        calls++;
     }
+
+    /** What the recording cost during the running load: time in record() and how many writes it saw. */
+    private static long spentNanos;
+    private static long calls;
 
     /** Every UI frame: the first frame of the main menu or the game ends the load. */
     static void onFrame() {
@@ -88,7 +95,10 @@ public final class LuaStartJournal {
                 synchronized (WRITES) {
                     count = WRITES.size();
                 }
-                System.out.println("[Jumpstart] Lua load recorded: " + count + " changes from mod files");
+                System.out.println("[Jumpstart] Lua load recorded: " + count + " changes from mod files; recording took "
+                        + spentNanos / 1_000_000 + " ms for " + calls + " table writes");
+                spentNanos = 0;
+                calls = 0;
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             recording = false;
