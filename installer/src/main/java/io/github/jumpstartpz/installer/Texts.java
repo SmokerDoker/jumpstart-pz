@@ -85,7 +85,9 @@ final class Texts {
             Map.entry("server.ini", "%s: %s"),
             Map.entry("server.noIni", "No single server .ini in %s: add ZombieBuddy to Mods= yourself, or pass --name."),
             Map.entry("server.repaired", "Start configuration repaired (a game update had replaced it)."),
-            Map.entry("server.selfUpdate", "JumpstartSetup.jar updated to %s for the next run."));
+            Map.entry("server.selfUpdate", "JumpstartSetup.jar updated to %s for the next run."),
+            Map.entry("server.running", "Warning: the server is running (process %d). It writes its mod list back into its .ini when it stops; stop it first, then run this again."),
+            Map.entry("error.access", "no permission to write %s. Run this as the server's user, or name the server's data folder (-cachedir=) with --zomboid-dir."));
 
     private static final Map<String, String> DE = Map.ofEntries(
             Map.entry("subtitle", "Mods für Project Zomboid installieren, aktualisieren und schalten, während das Spiel läuft"),
@@ -147,6 +149,8 @@ final class Texts {
             Map.entry("error.json", "ProjectZomboid64.json hat keine vmArgs-Liste und wurde nicht geändert."),
             Map.entry("error.downgrade", "Installiert ist %s, dieser Installer hat die ältere %s. Trotzdem installieren (--force)?"),
             Map.entry("error", "Fehler: %s"),
+            Map.entry("error.access", "keine Schreibrechte für %s. Als Benutzer des Servers ausführen oder den Datenordner des Servers (-cachedir=) mit --zomboid-dir angeben."),
+            Map.entry("server.running", "Achtung: Der Server läuft (Prozess %d). Er schreibt seine Mod-Liste beim Beenden zurück in seine .ini; erst stoppen, dann noch einmal ausführen."),
             Map.entry("autoUpdate", "Updates"),
             Map.entry("autoUpdate.check", "Vor jedem Spielstart automatisch aktualisieren (nur signierte Releases)"),
             Map.entry("autoUpdate.on", "automatisch, vor jedem Spielstart"),

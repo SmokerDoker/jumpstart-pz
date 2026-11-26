@@ -252,6 +252,7 @@ public final class InstallerMain {
     private static int server(ServerSetup.Options o, boolean uninstall, boolean update, Optional<Path> payloadDir, Texts t) {
         Consumer<String> log = line -> System.out.println("[Jumpstart] " + line);
         ServerSetup s = new ServerSetup(Platform.detectOs(), o, t, log);
+        runningServer(o).ifPresent(pid -> log.accept(t.get("server.running", pid)));
         try {
             if (uninstall) {
                 s.uninstall();
@@ -284,9 +285,40 @@ public final class InstallerMain {
             log.accept("First start: ZombieBuddy asks once per new Java mod jar" + (o.headless() ? "; with policy=deny-new they stay off." : " (answer y in the console)."));
             return 0;
         } catch (IOException | RuntimeException e) {
-            log.accept(t.get("error", e.getMessage()));
+            log.accept(t.get("error", describe(e, t)));
             return 1;
         }
+    }
+
+    /** What went wrong, also when the exception's message is only a path. */
+    static String describe(Exception e, Texts t) {
+        if (e instanceof java.nio.file.AccessDeniedException a) {
+            return t.get("error.access", a.getFile());
+        }
+        if (e instanceof java.nio.file.FileSystemException f) {
+            String reason = f.getReason() == null ? e.getClass().getSimpleName() : f.getReason();
+            return f.getFile() + ": " + reason;
+        }
+        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+    }
+
+    /**
+     * A running server of this game folder or name: it keeps its mod list in memory and writes it
+     * back into its .ini when it stops, over what the installer changed.
+     */
+    static Optional<Long> runningServer(ServerSetup.Options o) {
+        String dir = o.serverDir().toAbsolutePath().normalize().toString();
+        String name = o.name().map(n -> "-servername " + n).orElse(null);
+        long self = ProcessHandle.current().pid();
+        return ProcessHandle.allProcesses()
+                .filter(p -> p.pid() != self)
+                .filter(p -> {
+                    String cmd = p.info().commandLine().orElse("");
+                    boolean game = cmd.contains("ProjectZomboid") || cmd.contains("zombie.network.GameServer");
+                    return game && (name != null ? cmd.contains(name) : cmd.contains(dir));
+                })
+                .map(ProcessHandle::pid)
+                .findFirst();
     }
 
     /**

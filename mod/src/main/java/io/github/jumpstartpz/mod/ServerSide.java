@@ -58,6 +58,7 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
     }
 
     static void start(GameActions actions) {
+        dropOldModEntry();
         ServerSide side = new ServerSide(actions);
         Net.onServer((who, args) -> side.coordinator.onCommand(connectionOf(who[0]), (String) who[1], args, System.currentTimeMillis()),
                 () -> side.coordinator.tick(System.currentTimeMillis()));
@@ -275,6 +276,23 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
             }
         }
         return changeServerLists(modId, item > 0 && !itemStillUsed ? Long.toString(item) : null, false);
+    }
+
+    /**
+     * Jumpstart was a mod before 0.2; a server whose list still names it turns every player away
+     * ("mod Jumpstart is not installed"). Out of the list and the .ini, once at start.
+     */
+    private static void dropOldModEntry() {
+        try {
+            List<?> mods = (List<?>) Class.forName("zombie.network.GameServer").getField("ServerMods").get(null);
+            if (mods.stream().anyMatch(m -> String.valueOf(m).replace("\\", "").equals("Jumpstart"))) {
+                String problem = changeServerLists("Jumpstart", null, false);
+                System.out.println("[Jumpstart] multiplayer: the old mod entry Jumpstart "
+                        + (problem == null ? "is out of the server's mod list now" : "is still in the mod list: " + problem));
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot check the server's mod list: " + e);
+        }
     }
 
     /** The server's mod lists (for players who join later) and its .ini: the mod (and its item) in or out. */

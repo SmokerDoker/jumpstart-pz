@@ -715,7 +715,7 @@ public final class SecureScreen {
 
     private void open() {
         mode = Mode.LIST;
-        tab = Tab.INSTALLED;
+        tab = session.connected() ? Tab.SERVER : Tab.INSTALLED;
         message = "";
         checks.clear();
         reload();
@@ -819,11 +819,9 @@ public final class SecureScreen {
             return;
         }
         if (pressed.contains(KEY_TAB)) {
-            Tab next = tab;
-            do {
-                next = Tab.values()[(next.ordinal() + 1) % Tab.values().length];
-            } while (!tabShown(next));
-            switchTab(next);
+            List<Tab> order = tabOrder();
+            int at = order.indexOf(tab);
+            switchTab(order.get((at + 1) % order.size()));
             return;
         }
         if (shiftHeld && (tab == Tab.INSTALLED || tab == Tab.JAVA_LIBRARY || tab == Tab.LUA_LIBRARY)) {
@@ -2117,7 +2115,13 @@ public final class SecureScreen {
         }
         button(bx, rowsBottom + 6, texts.get("btn.refresh"), KEY_R, null, true);
         listArea = new int[] {x - 6, y - 4, width + 12, rowsBottom - y};
-        for (int i = 0; i < list.size() && y + line < rowsBottom; i++) {
+        int visible = Math.max(1, (rowsBottom - y) / line);
+        int first = Math.max(0, Math.min(serverSelected - visible / 2, list.size() - visible));
+        if (first > 0) {
+            String more = String.format(Locale.ROOT, texts.get("list.above"), first);
+            game.text(GameScreen.Font.SMALL, x + width - game.textWidth(GameScreen.Font.SMALL, more), y - small - 4, more, 0.6f, 0.6f, 0.6f, 1f);
+        }
+        for (int i = first; i < list.size() && y + line <= rowsBottom; i++) {
             ClientSession.ServerMod m = list.get(i);
             if (i == serverSelected) {
                 game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
@@ -2214,13 +2218,24 @@ public final class SecureScreen {
         }
     }
 
+    /** The tabs shown, in order: on a server its tab comes first, what is installed here matters less there. */
+    List<Tab> tabOrder() {
+        List<Tab> order = new ArrayList<>();
+        if (session.connected()) {
+            order.add(Tab.SERVER);
+        }
+        for (Tab t : Tab.values()) {
+            if (tabShown(t) && !order.contains(t)) {
+                order.add(t);
+            }
+        }
+        return order;
+    }
+
     private int drawTabs(int x, int y) {
         int cx = x;
         int h = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
-        for (Tab t : Tab.values()) {
-            if (!tabShown(t)) {
-                continue;
-            }
+        for (Tab t : tabOrder()) {
             String label = texts.get("tab." + t.name());
             int w = game.textWidth(GameScreen.Font.MEDIUM, label) + 24;
             boolean active = t == tab;
