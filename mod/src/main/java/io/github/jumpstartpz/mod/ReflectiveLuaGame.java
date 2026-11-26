@@ -1,5 +1,7 @@
 package io.github.jumpstartpz.mod;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -58,6 +60,7 @@ final class ReflectiveLuaGame implements LuaLive.Game {
         if (modDir != null) {
             fsClass.getMethod("setModIdToDir", String.class, String.class).invoke(fs, modId, modDir);
         }
+        forgetMissing(modId);
         Object mod = Class.forName("zombie.gameStates.ChooseGameInfo").getMethod("getAvailableModDetails", String.class).invoke(null, modId);
         if (mod == null) {
             throw new IllegalStateException("the game does not know the mod " + modId + " (folder " + modDir + ")");
@@ -90,6 +93,21 @@ final class ReflectiveLuaGame implements LuaLive.Game {
             }
         }
         return files;
+    }
+
+    /**
+     * The game remembers mod ids it once looked for in vain (ChooseGameInfo.MissingMods) and never
+     * looks again: a mod that was asked for before its download finished stayed unknown until the
+     * game restarted ("the game does not know the mod Bandits2").
+     */
+    static void forgetMissing(String modId) {
+        try {
+            Field missing = Class.forName("zombie.gameStates.ChooseGameInfo").getDeclaredField("MissingMods");
+            missing.setAccessible(true);
+            ((java.util.Set<?>) missing.get(null)).remove(modId);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot clear the game's missing-mod note for " + modId + ": " + e);
+        }
     }
 
     @Override
@@ -252,6 +270,53 @@ final class ReflectiveLuaGame implements LuaLive.Game {
             System.out.println("[Jumpstart] cannot close the windows of a mod: " + e);
         }
         return closed;
+    }
+
+    /**
+     * Every player's hotbar again, built by the game's own code (as ISPlayerDataObject does when a
+     * player is created). A hotbar mod changes the ISHotbar class and puts its own fields on the
+     * hotbar that exists; taking its functions back leaves that object half the mod's (an empty box).
+     */
+    static final String REBUILD_HOTBARS = """
+            -- Jumpstart: the hotbar again, with the game's own code, after a hotbar mod was switched off
+            if ISHotbar and getPlayerData then
+                for i = 0, getNumActivePlayers() - 1 do
+                    local playerObj = getSpecificPlayer(i)
+                    local data = getPlayerData(i)
+                    if playerObj and data and data.playerHotbar then
+                        local old = data.playerHotbar
+                        local visible = old:isVisible()
+                        old:setVisible(false)
+                        old:removeFromUIManager()
+                        local hotbar = ISHotbar:new(playerObj)
+                        hotbar:initialise()
+                        hotbar:addToUIManager()
+                        hotbar:setVisible(visible)
+                        data.playerHotbar = hotbar
+                    end
+                end
+            end
+            """;
+
+    boolean rebuildHotbars() {
+        Path file = null;
+        try {
+            file = Files.createTempFile("jumpstart-hotbar", ".lua");
+            Files.writeString(file, REBUILD_HOTBARS);
+            run(file.toAbsolutePath().toString());
+            return true;
+        } catch (Exception e) {
+            System.out.println("[Jumpstart] cannot rebuild the hotbar: " + e);
+            return false;
+        } finally {
+            if (file != null) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (java.io.IOException ignored) {
+                    // a temp file
+                }
+            }
+        }
     }
 
     /** The folders a mod's files come from (common and version folder), normalized, ending in '/'. */

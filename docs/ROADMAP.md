@@ -29,6 +29,16 @@ in-process restart of the game's start phases) or *restart*.
 
 ## 2. Clean removal: what is left
 
+Next after the current multiplayer block, before the marketplace:
+
+- [ ] Switching on loads what today waits for the next load, in single player first, with the game's own reload functions:
+  item and recipe scripts (`ScriptManager.LoadFile` / `ReloadScripts`, then recipe links, loot distribution, icons),
+  animations (`AnimationSet.Reset`, `AdvancedAnimator.load`), texture packs (new pictures load on first use already).
+  Switching off: animations reload without the mod; replaced pictures go back to the originals; items stay until
+  placeholder items exist (their instances are in containers and inventories). Multiplayer: on server and clients
+  together, in the two-phase switch (the server checks script checksums). Tests against the real game jar, since
+  these are the game's internal functions.
+
 - [ ] In-process restart for mods that cannot go live (items, scripts, animations), instead of "with the next load"
 - [ ] Classify each mod as live, reload or restart (declaration, bytecode analysis, BiteCheck's scan)
 - [ ] An own class loader per mod (patches are merged into the shared loader today)
@@ -51,6 +61,8 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Own cache by hash, so Steam cannot swap files under the running game; rollback to earlier versions
 - [ ] Emergency switch-off: a running mod that BiteCheck flags goes off at once (today R only refreshes the index)
 - [ ] Sort by new and trending (the cloud offers it), filter by BiteCheck status
+- [ ] A Workshop item with several mods (variants like 60/70/80 %) shown as one entry with its variants
+- [ ] Mods without Lua (item scripts, textures) labelled as such, with "only after reloading the save"
 
 ## 4. Multiplayer
 

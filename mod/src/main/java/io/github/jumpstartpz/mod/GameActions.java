@@ -626,6 +626,10 @@ final class GameActions implements Actions {
         journal.parkedHandlers = taken;
         int windows = luaGame.closeWindows(journal.addedTables(luaGame));
         LuaJournal.Outcome undo = LuaJournal.undo(luaGame, journal.changes);
+        if (touchesHotbar(journal.changes, luaTexts(luaGame.modFolders(modId)))) {
+            boolean rebuilt = luaGame.rebuildHotbars();
+            System.out.println("[Jumpstart] " + modId + " changed the hotbar: " + (rebuilt ? "built again" : "could not be built again"));
+        }
         if (!undo.kept().isEmpty()) {
             journal.leftovers = "kept:" + undo.kept().size() + ":" + LuaJournal.shortList(undo.kept(), 5);
         } else if (fromStart) {
@@ -640,6 +644,42 @@ final class GameActions implements Actions {
                 + ", " + undo.done() + " globals back, " + windows + " windows closed"
                 + (journal.leftovers.isEmpty() ? "" : ", " + journal.leftovers));
         return count;
+    }
+
+    /**
+     * Whether a mod changed the player's hotbar: its recorded changes name ISHotbar, or its Lua
+     * replaces the hotbar object (playerHotbar).
+     */
+    static boolean touchesHotbar(List<LuaJournal.Change> changes, List<String> luaTexts) {
+        for (LuaJournal.Change c : changes) {
+            if (c.path() != null && (c.path().startsWith("ISHotbar") || c.path().equals("getPlayerHotbar"))) {
+                return true;
+            }
+        }
+        return luaTexts.stream().anyMatch(t -> t.contains("ISHotbar") || t.contains("playerHotbar"));
+    }
+
+    /** The text of the Lua files in a mod's folders (unreadable ones are left out). */
+    static List<String> luaTexts(List<java.io.File> folders) {
+        List<String> texts = new ArrayList<>();
+        for (java.io.File folder : folders) {
+            Path root = folder.toPath();
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            try (Stream<Path> walk = Files.walk(root, 12)) {
+                walk.filter(f -> f.toString().toLowerCase(Locale.ROOT).endsWith(".lua")).forEach(f -> {
+                    try {
+                        texts.add(Files.readString(f, java.nio.charset.StandardCharsets.ISO_8859_1));
+                    } catch (IOException | RuntimeException e) {
+                        // unreadable: not counted
+                    }
+                });
+            } catch (IOException | RuntimeException e) {
+                // unreadable folder
+            }
+        }
+        return texts;
     }
 
     /** The files in a mod's folders, relative (lower case, '/'), as {@link LuaLive#needsRestart} reads them. */
