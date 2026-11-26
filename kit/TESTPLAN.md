@@ -19,8 +19,9 @@ Im Fenster **Jumpstart installieren** drücken. Auf macOS/Linux muss Steam für 
 zu sein: Der Installer bietet an, Steam zu schließen, oder legt die Zeile in die Zwischenablage.
 
 Der Installer legt **eine** Datei ins Spielverzeichnis: `Jumpstart.jar` (der ZombieBuddy-Fork mit
-Jumpstart darin), gestartet mit `-javaagent:Jumpstart.jar=hotswap=true` (Windows in
-`ProjectZomboid64.json`, macOS/Linux in den Steam-Startoptionen). Dazu kommt der Mod-Ordner
+Jumpstart darin), unter Windows gestartet über den kleinen Loader `jsNative.dll`
+(`-agentlib:jsNative=hotswap=true` in `ProjectZomboid64.json`), unter macOS/Linux mit
+`-javaagent:Jumpstart.jar=hotswap=true` in den Steam-Startoptionen. Dazu kommt der Mod-Ordner
 `Zomboid/mods/ZombieBuddy` (ohne Jar), im Mod-Menü eingeschaltet. Eine eigene ZombieBuddy.jar wird
 als `ZombieBuddy.jar.before-jumpstart` aufgehoben. **ZombieBuddy muss nicht mehr im Workshop
 abonniert werden**; ein vorhandenes Abo stört nicht.
@@ -83,7 +84,6 @@ Danach einmal ohne N/Warten wiederholen: Alle drücken J → niemand wird getren
 
 ## Bekannte Grenzen dieser Testversion
 
-- Der Lua-Teil einer Mod wird nicht live geladen, nur der Java-Teil.
 - Die Pause ist dieselbe wie beim Speichern des Servers: Die Clients halten an. Ob die Welt auf dem
   Server dabei ganz stillsteht, ist Teil des Tests.
 - Ein Update holt genau die Datei, die auf dem Server liegt. Beim Hosten ist das die Datei auf dem
