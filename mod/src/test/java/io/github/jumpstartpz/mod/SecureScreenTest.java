@@ -1043,7 +1043,6 @@ class SecureScreenTest {
         @Override public int[] mousePosition() { return null; }
         @Override public boolean physicalMouseDown(int button) { return false; }
         @Override public int wheel() { return 0; }
-        @Override public void drawCursor() { }
         @Override public boolean inGame() { return false; }
         @Override public void pause(boolean paused) { }
         @Override public String language() { return "DE"; }
@@ -1124,7 +1123,6 @@ class SecureScreenTest {
         @Override public int[] mousePosition() { return mouse; }
         @Override public boolean physicalMouseDown(int button) { return button == 0 && mouseDown; }
         @Override public int wheel() { int w = wheel; wheel = 0; return w; }
-        @Override public void drawCursor() { }
         @Override public void rect(int x, int y, int w, int h, float r, float g, float b, float a) { }
         @Override public boolean image(String file, int x, int y, int w, int h) { drawn.add("image:" + file); return true; }
         @Override public boolean physicalKeyDown(int glfwKey) { return down.contains(glfwKey); }

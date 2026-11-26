@@ -446,7 +446,8 @@ public final class SecureScreen {
             detailArea = null;
             draw(now);
             drawBusy(now);
-            game.drawCursor(); // the game's cursor (if it draws one) on top of the screen
+            // no cursor of our own: the system's shows, and with "lock cursor to window" the game draws
+            // its cursor picture itself after all UI (Core), on top of this screen
             lastHits = hits;
             lastListArea = listArea;
             lastDetailArea = detailArea;
@@ -1320,7 +1321,11 @@ public final class SecureScreen {
 
     private void uninstallNow(Actions.InstalledMod mod) {
         String result = actions.uninstall(mod.id());
-        if (result.startsWith("OK workshop")) {
+        if (result.startsWith("OK unsubscribed")) {
+            say(String.format(Locale.ROOT, texts.get("uninstalled.unsubscribed"), mod.name()), true);
+        } else if (result.startsWith("OK shared ")) {
+            say(String.format(Locale.ROOT, texts.get("uninstalled.shared"), mod.name(), result.substring("OK shared ".length())), true);
+        } else if (result.startsWith("OK workshop")) {
             say(String.format(Locale.ROOT, texts.get("uninstalled.workshop"), mod.name()) + result.substring("OK workshop".length()).replaceFirst("^ \\d+", ""), true);
         } else if (result.startsWith("OK local ")) {
             say(String.format(Locale.ROOT, texts.get("uninstalled.local"), mod.name(), result.substring("OK local ".length())), true);

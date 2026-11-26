@@ -706,6 +706,16 @@ final class GameActions implements Actions {
         }
         long item = workshopIdOf(dir);
         if (item > 0) {
+            List<String> sharing = otherModsOfItem(modId, item);
+            if (!sharing.isEmpty()) {
+                // ending the subscription would take these away too: the item stays
+                System.out.println("[Jumpstart] uninstalled " + modId + "; Workshop item " + item + " stays for " + sharing);
+                return "OK shared " + String.join(", ", sharing);
+            }
+            if (workshop().unsubscribe(item)) {
+                System.out.println("[Jumpstart] uninstalled " + modId + "; unsubscribed from Workshop item " + item);
+                return "OK unsubscribed " + item;
+            }
             try {
                 Class.forName("zombie.Lua.LuaManager$GlobalObject").getMethod("activateSteamOverlayToWorkshopItem", String.class)
                         .invoke(null, Long.toString(item));
@@ -728,6 +738,17 @@ final class GameActions implements Actions {
         } catch (IOException | RuntimeException e) {
             return "cannot move " + dir + ": " + e;
         }
+    }
+
+    /** Other mods of the same Workshop item that are still on (in a mod list). */
+    private List<String> otherModsOfItem(String modId, long item) {
+        List<String> others = new ArrayList<>();
+        for (Map.Entry<String, String> e : downloadedModDirs.entrySet()) {
+            if (!e.getKey().equals(modId) && workshopIdOf(e.getValue()) == item && luaGame.isActive(e.getKey())) {
+                others.add(e.getKey());
+            }
+        }
+        return others;
     }
 
     private static void resetModFolders() {
@@ -970,6 +991,52 @@ final class GameActions implements Actions {
                 return (String) ws.getClass().getMethod("GetItemInstallFolder", long.class).invoke(ws, itemId);
             } catch (ReflectiveOperationException | RuntimeException e) {
                 return null;
+            }
+        }
+
+        /**
+         * The game's own Steam bridge can subscribe but not unsubscribe, so this calls Steam's flat C
+         * API (ISteamUGC::UnsubscribeItem in steam_api) through JNA, which the game ships. Steam
+         * answers later; the files go when the game no longer uses them.
+         */
+        @Override
+        public boolean unsubscribe(long itemId) {
+            try {
+                Class<?> nativeLibrary = Class.forName("com.sun.jna.NativeLibrary");
+                Class<?> function = Class.forName("com.sun.jna.Function");
+                Object lib = null;
+                for (String name : List.of("steam_api64", "steam_api")) {
+                    try {
+                        lib = nativeLibrary.getMethod("getInstance", String.class).invoke(null, name);
+                        break;
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        // not this name on this system
+                    }
+                }
+                if (lib == null) {
+                    return false;
+                }
+                Method getFunction = nativeLibrary.getMethod("getFunction", String.class);
+                Object ugc = null;
+                for (int v = 30; v >= 14 && ugc == null; v--) {
+                    try {
+                        Object accessor = getFunction.invoke(lib, String.format(Locale.ROOT, "SteamAPI_SteamUGC_v%03d", v));
+                        ugc = function.getMethod("invokePointer", Object[].class).invoke(accessor, (Object) new Object[0]);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        // this interface version is not in this steam_api
+                    }
+                }
+                if (ugc == null) {
+                    System.out.println("[Jumpstart] Steam's UGC interface is not available");
+                    return false;
+                }
+                Object call = getFunction.invoke(lib, "SteamAPI_ISteamUGC_UnsubscribeItem");
+                long handle = (Long) function.getMethod("invokeLong", Object[].class).invoke(call, (Object) new Object[] {ugc, itemId});
+                System.out.println("[Jumpstart] Steam: unsubscribe from item " + itemId + (handle != 0 ? " sent" : " refused"));
+                return handle != 0;
+            } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+                System.out.println("[Jumpstart] Steam unsubscribe failed: " + e);
+                return false;
             }
         }
     }
