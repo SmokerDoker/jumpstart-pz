@@ -97,7 +97,6 @@ final class ReflectiveGameScreen implements GameScreen {
     private Method glfwGetWindowSize;
     private Method glfwGetMouseButton;
     private Method mouseWheel;
-    private Method renderCursor;
 
     private void mouseMethods() throws ReflectiveOperationException {
         if (glfwGetCursorPos == null) {
@@ -107,7 +106,6 @@ final class ReflectiveGameScreen implements GameScreen {
             glfwGetMouseButton = glfw.getMethod("glfwGetMouseButton", long.class, int.class);
             Class<?> mouse = Class.forName("zombie.input.Mouse");
             mouseWheel = mouse.getMethod("getWheelState");
-            renderCursor = mouse.getMethod("renderCursorTexture");
         }
     }
 
@@ -155,15 +153,6 @@ final class ReflectiveGameScreen implements GameScreen {
         }
     }
 
-    @Override
-    public void drawCursor() {
-        try {
-            mouseMethods();
-            renderCursor.invoke(null);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            // no game cursor: the system's is there
-        }
-    }
 
     /** Loaded pictures by file; a file that failed to load is kept as null, so it is tried once. */
     private final Map<String, Object> textures = new java.util.HashMap<>();

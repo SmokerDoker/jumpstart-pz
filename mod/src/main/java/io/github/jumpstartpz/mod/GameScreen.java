@@ -49,9 +49,6 @@ interface GameScreen {
     /** The mouse wheel this frame: positive up, negative down, 0 still. */
     int wheel();
 
-    /** Draws the game's own mouse cursor again, on top of the screen (when the game shows one). */
-    void drawCursor();
-
     boolean inGame();
 
     /** Stops game time while the screen is open (single player), and restores it afterwards. */
