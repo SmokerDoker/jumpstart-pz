@@ -69,6 +69,14 @@ server cannot, nobody changes anything. Whoever says no or is not ready in time 
 is disconnected. Dedicated servers:
 [kit/SERVER.md](kit/SERVER.md).
 
+## Faster start
+
+The game loads every mod of the main menu's list at start, and then again for the game you start or
+join, which loads its own list (a server's, a save's, a new game's). With Jumpstart the main menu loads
+only ZombieBuddy; the list itself stays as it is, and your mods load once, with the game. Mod options
+of mods that are not loaded are not in the main menu's options then; they are in the game. To load all
+of them in the main menu again: add `-Dzombiebuddy.fullMenu=true` to the game's launch options.
+
 ## Install
 
 | System | Download | Note |
