@@ -721,6 +721,10 @@ class SecureScreenTest {
         frame();
         screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
         openScreen();
+        assertEquals(SecureScreen.Tab.SERVER, screen.tab(), "on a server Jumpstart opens on its tab");
+        assertEquals(List.of(SecureScreen.Tab.SERVER, SecureScreen.Tab.INSTALLED, SecureScreen.Tab.JAVA_LIBRARY,
+                SecureScreen.Tab.LUA_LIBRARY, SecureScreen.Tab.SHARING), screen.tabOrder());
+        tap(SecureScreen.KEY_TAB);
         tap(SecureScreen.KEY_TAB);
         type("x");
         tap(SecureScreen.KEY_ENTER);
@@ -794,15 +798,31 @@ class SecureScreenTest {
     }
 
     @Test
+    void theServerListScrollsWithTheSelection() {
+        link.connected = true;
+        frame();
+        StringBuilder mods = new StringBuilder();
+        for (int i = 0; i < 60; i++) {
+            mods.append("Mod").append(i).append("\t\t\t\tlua\n");
+        }
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", mods.toString()));
+        openScreen();
+        for (int i = 0; i < 59; i++) {
+            tap(SecureScreen.KEY_DOWN);
+        }
+        game.drawn.clear();
+        frame();
+        assertTrue(game.drew("Mod59"), "the last one is on screen when it is selected");
+        assertFalse(game.drew("Mod0"), "the first ones scrolled away");
+        assertTrue(game.drew("more above"));
+    }
+
+    @Test
     void anAdminRemovesAModForEverybody() {
         link.connected = true;
         frame();
         screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", "Minimap\t201\t\t\tlua\n"));
         openScreen();
-        tap(SecureScreen.KEY_TAB);
-        tap(SecureScreen.KEY_TAB);
-        tap(SecureScreen.KEY_TAB);
-        tap(SecureScreen.KEY_TAB);
         assertEquals(SecureScreen.Tab.SERVER, screen.tab());
         tap(SecureScreen.KEY_A);
         assertTrue(screen.describe().contains("removed with U"), "a Lua mod has no off/on for everybody: " + screen.describe());

@@ -72,6 +72,7 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Native libraries in a helper process
 - [ ] Placeholder items in saves
 - [ ] Performance measurement per mod
+- [ ] Join time: measure what Jumpstart adds to loading (Lua recording); slow PCs lose the connection while the game loads its tiles
 - [ ] A list of mods tested with Jumpstart
 - [ ] An in-game test that gets into a save by itself (today the tests wait for a click)
 - [ ] Self-update of the running core; releases checked through the BiteCheck registry
@@ -82,5 +83,6 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Dependencies (e.g. a library and the car mods that need it)
 - [ ] Busy notice and download progress
 - [ ] Restoring a snapshot; static Java values restored
+- [x] Switching a mod off and on for everybody on a real server (Linux, 0.5.5)
 - [ ] Install, update and remove for everybody on a real server
 - [ ] `tools\startmodtest.ps1` after its last fix; `tools\gametest.ps1` with the current build

@@ -144,4 +144,20 @@ class ServerSetupTest {
                 new Texts(false), log::add);
         org.junit.jupiter.api.Assertions.assertThrows(IOException.class, s::repair);
     }
+
+    @Test
+    void anErrorSaysWhatIsWrongNotJustThePath() {
+        Texts t = new Texts(false);
+        String access = InstallerMain.describe(new java.nio.file.AccessDeniedException("/usr/games/Zomboid"), t);
+        assertTrue(access.contains("/usr/games/Zomboid") && access.contains("--zomboid-dir"), access);
+        String other = InstallerMain.describe(new java.nio.file.NoSuchFileException("/srv/x"), t);
+        assertEquals("/srv/x: NoSuchFileException", other);
+        assertEquals("broken", InstallerMain.describe(new IOException("broken"), t));
+    }
+
+    @Test
+    void noRunningServerForAFolderNobodyUses(@TempDir Path dir) {
+        assertTrue(InstallerMain.runningServer(new ServerSetup.Options(dir, Optional.of("no-such-server-" + System.nanoTime()),
+                dir, Optional.empty(), false)).isEmpty());
+    }
 }
