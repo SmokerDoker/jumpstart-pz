@@ -30,7 +30,7 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
 
     private ServerSide(GameActions actions) {
         this.actions = actions;
-        this.coordinator = new ServerCoordinator<>(this, ServerCoordinator.DEFAULT_DEADLINE_MS);
+        this.coordinator = new ServerCoordinator<>(this, ServerCoordinator.deadlineMs(actions.serverCountdown()));
         for (ModEntry mod : clientJars()) {
             loadedSha.put(mod.id(), hash(mod.jar()));
         }
@@ -80,6 +80,11 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
         } catch (ReflectiveOperationException e) {
             System.out.println("[Jumpstart] cannot send " + command + ": " + e);
         }
+    }
+
+    @Override
+    public void pauseWorld(boolean paused) {
+        Net.pauseWorld(paused);
     }
 
     @Override

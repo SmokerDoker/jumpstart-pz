@@ -21,11 +21,16 @@ import java.util.Set;
  *   <li><b>change</b> (admins only; nobody else switches Java mods in multiplayer): action
  *       <i>update</i> (load or reload the jar the server has on disk now), <i>off</i> or <i>on</i>.
  *       Every connected client gets <b>prepare</b> with the action, the mod, the hash and a deadline.
- *       The game pauses; every player except the admin who started it must agree, and for an update
- *       the client gets exactly that jar (Steam Workshop), BiteCheck checks it (the player answers its
- *       questions) and loads it. Then <b>ready</b>, or <b>failed</b> with a reason.</li>
- *   <li>When everybody is ready, or the deadline passed, clients that are not ready are kicked, the
- *       server loads the same jar itself and everybody gets <b>done</b>.</li>
+ *       The game goes on meanwhile (phase 1, nothing changes yet): every player except the admin who
+ *       started it must agree, and for an update the client gets exactly that jar (Steam Workshop)
+ *       and BiteCheck checks it (the player answers its questions). Then <b>ready</b>, or
+ *       <b>failed</b> with a reason.</li>
+ *   <li>When everybody is ready, or the deadline passed, clients that are not ready are kicked and
+ *       the world stops (a real server pause, {@link Port#pauseWorld}). Phase 2: the server changes
+ *       the mod first. If that fails, everybody gets <b>abort</b>: nobody changed anything, the game
+ *       goes on as before. Else every ready client gets <b>commit</b>, does the change it prepared and
+ *       answers <b>applied</b> (or <b>failed</b>: it is kicked, it no longer matches the server).
+ *       Then the world goes on and everybody gets <b>done</b>.</li>
  *   <li><b>install</b> (admins only) with a Steam Workshop item: the server downloads it first; then
  *       the same round as an update with action <i>install</i>: every client gets the item, BiteCheck
  *       checks a Java part, the mod's Java and Lua parts load live; at the end the server loads it
@@ -41,6 +46,19 @@ import java.util.Set;
 public final class ServerCoordinator<C> {
     public static final String MODULE = "Jumpstart";
     public static final long DEFAULT_DEADLINE_MS = 180_000;
+
+    /**
+     * The time for phase 1 from a server's setting in seconds (30 to 900; the game goes on
+     * meanwhile), {@link #DEFAULT_DEADLINE_MS} when it is missing or not a number.
+     */
+    public static long deadlineMs(String seconds) {
+        try {
+            long s = Long.parseLong(seconds == null ? "" : seconds.strip());
+            return Math.max(30, Math.min(900, s)) * 1000;
+        } catch (NumberFormatException e) {
+            return DEFAULT_DEADLINE_MS;
+        }
+    }
 
     /**
      * A mod of the server. {@code diskSha256} differs from {@code sha256} when a new version is
@@ -98,6 +116,12 @@ public final class ServerCoordinator<C> {
 
         /** The downloaded item, or null while Steam is still at it. */
         Fetched fetched(String workshopId);
+
+        /**
+         * Stops or restarts the world (zombies, time, players) while the network keeps running, like
+         * the game's own pause on an empty server; clients are paused with {@code commit}.
+         */
+        void pauseWorld(boolean paused);
     }
 
     /** What an admin can do to a Java mod for everybody. */
@@ -118,9 +142,21 @@ public final class ServerCoordinator<C> {
         }
     }
 
+    /**
+     * A round. Phase 1 ({@code committing} false): {@code ready} are the clients that prepared the
+     * change. Phase 2: {@code ready} are those still in it, {@code applied} those that did it.
+     */
     private record Update(Action action, String mod, String sha256, String workshopId, Object admin, long deadline,
-                          Set<Object> expected, Set<Object> ready, Map<Object, String> failed) {
+                          Set<Object> expected, Set<Object> ready, Map<Object, String> failed,
+                          boolean committing, long commitDeadline, Set<Object> applied) {
+        Update commit(long until) {
+            return new Update(action, mod, sha256, workshopId, admin, deadline, expected, ready, new LinkedHashMap<>(),
+                    true, until, new LinkedHashSet<>());
+        }
     }
+
+    /** How long clients have for phase 2 (the change itself, BiteCheck answered already). */
+    public static final long COMMIT_DEADLINE_MS = 60_000;
 
     /** A Workshop item the server downloads before an install round starts. */
     private record Download(String workshopId, Object admin, long deadline) {
@@ -163,13 +199,19 @@ public final class ServerCoordinator<C> {
             }
             case "install" -> startInstall(c, args.getOrDefault("item", "").strip(), now);
             case "ready" -> {
-                if (pending != null && pending.mod().equals(args.get("mod")) && pending.sha256().equals(args.get("sha"))) {
+                if (pending != null && !pending.committing() && pending.mod().equals(args.get("mod"))
+                        && pending.sha256().equals(args.get("sha"))) {
                     pending.ready().add(c);
                     pending.failed().remove(c);
                 }
             }
+            case "applied" -> {
+                if (pending != null && pending.committing() && pending.ready().contains(c) && pending.mod().equals(args.get("mod"))) {
+                    pending.applied().add(c);
+                }
+            }
             case "failed" -> {
-                if (pending != null && pending.mod().equals(args.get("mod"))) {
+                if (pending != null && pending.mod().equals(args.get("mod")) && !pending.applied().contains(c)) {
                     pending.failed().put(c, args.getOrDefault("reason", "failed"));
                 }
             }
@@ -277,7 +319,7 @@ public final class ServerCoordinator<C> {
     private void startRound(Object admin, Action action, String mod, String sha, String workshop, boolean java, long now) {
         Set<Object> expected = new LinkedHashSet<>(port.connections());
         pending = new Update(action, mod, sha, workshop, admin, now + deadlineMs,
-                expected, new LinkedHashSet<>(), new LinkedHashMap<>());
+                expected, new LinkedHashSet<>(), new LinkedHashMap<>(), false, 0, new LinkedHashSet<>());
         for (Object c : expected) {
             Map<String, String> args = new LinkedHashMap<>();
             args.put("action", action.wire());
@@ -301,8 +343,16 @@ public final class ServerCoordinator<C> {
             return;
         }
         List<C> connected = port.connections();
-        pending.expected().retainAll(connected); // who left does not hold the others up
         tokens.keySet().retainAll(connected);
+        if (pending.committing()) {
+            pending.ready().retainAll(connected);
+            boolean allAnswered = pending.ready().stream().allMatch(c -> pending.applied().contains(c) || pending.failed().containsKey(c));
+            if (allAnswered || now >= pending.commitDeadline()) {
+                finishCommit();
+            }
+            return;
+        }
+        pending.expected().retainAll(connected); // who left does not hold the others up
         boolean allAnswered = true;
         for (Object c : pending.expected()) {
             if (!pending.ready().contains(c) && !pending.failed().containsKey(c)) {
@@ -310,32 +360,83 @@ public final class ServerCoordinator<C> {
             }
         }
         if (allAnswered || now >= pending.deadline()) {
-            finish();
+            commit(now);
         }
     }
 
-    private void finish() {
+    /** End of phase 1: kick who is not ready, stop the world, change the server, then the clients. */
+    private void commit(long now) {
         Update u = pending;
-        pending = null;
-        List<String> kicked = new ArrayList<>();
+        u.ready().retainAll(u.expected());
         for (Object o : u.expected()) {
             if (!u.ready().contains(o)) {
-                C c = cast(o);
                 String why = u.failed().containsKey(o) ? u.failed().get(o) : "not ready in time";
-                kicked.add(port.name(c) + " (" + why + ")");
-                port.kick(c, "Jumpstart: " + u.mod() + " " + u.action().wire() + ": " + why);
+                kick(o, u, why);
             }
         }
-        String problem = port.apply(u.action(), u.mod(), u.sha256(), u.ready().contains(u.admin()));
+        port.pauseWorld(true);
+        String problem;
+        try {
+            problem = port.apply(u.action(), u.mod(), u.sha256(), u.ready().contains(u.admin()));
+        } catch (RuntimeException e) {
+            problem = String.valueOf(e);
+        }
+        if (problem != null) {
+            // the server could not: nobody changed anything yet, so everybody simply goes on
+            pending = null;
+            kickedNames.clear();
+            port.pauseWorld(false);
+            Map<String, String> args = result(u, false, "server: " + problem);
+            for (Object o : u.ready()) {
+                port.send(cast(o), "abort", args);
+            }
+            return;
+        }
+        pending = u.commit(now + COMMIT_DEADLINE_MS);
         Map<String, String> args = new LinkedHashMap<>();
         args.put("action", u.action().wire());
         args.put("mod", u.mod());
-        args.put("ok", problem == null ? "1" : "0");
-        args.put("message", problem != null ? "server: " + problem
-                : kicked.isEmpty() ? "" : "kicked: " + String.join(", ", kicked));
+        args.put("sha", u.sha256());
         for (Object o : u.ready()) {
+            port.send(cast(o), "commit", args);
+        }
+        tick(now); // nobody left to wait for: done at once
+    }
+
+    /** End of phase 2: who could not follow the server is kicked, the world goes on. */
+    private void finishCommit() {
+        Update u = pending;
+        pending = null;
+        for (Object o : u.ready()) {
+            if (!u.applied().contains(o)) {
+                String why = u.failed().containsKey(o) ? u.failed().get(o) : "not done in time";
+                kick(o, u, why);
+            }
+        }
+        port.pauseWorld(false);
+        Map<String, String> args = result(u, true, kickedNames.isEmpty() ? "" : "kicked: " + String.join(", ", kickedNames));
+        kickedNames.clear();
+        for (Object o : u.applied()) {
             port.send(cast(o), "done", args);
         }
+    }
+
+    /** Who was kicked during the running round, "name (why)", for the closing message. */
+    private final List<String> kickedNames = new ArrayList<>();
+
+    private void kick(Object o, Update u, String why) {
+        C c = cast(o);
+        kickedNames.add(port.name(c) + " (" + why + ")");
+        port.kick(c, "Jumpstart: " + u.mod() + " " + u.action().wire() + ": " + why);
+    }
+
+    private static Map<String, String> result(Update u, boolean ok, String message) {
+        Map<String, String> args = new LinkedHashMap<>();
+        args.put("action", u.action().wire());
+        args.put("mod", u.mod());
+        args.put("ok", ok ? "1" : "0");
+        args.put("message", message);
+        return args;
     }
 
     private void followDownload(long now) {

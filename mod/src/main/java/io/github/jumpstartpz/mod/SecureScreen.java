@@ -191,7 +191,8 @@ public final class SecureScreen {
 
     // multiplayer
     private int serverSelected;
-    private boolean openedByServer;
+    /** Phase 2 of a server change: what this client prepared in phase 1, run on the server's commit. */
+    private Runnable serverCommit;
     private boolean lookBusy;
     /** The time of the current frame, for work handed over from other threads. */
     private long frameTime;
@@ -349,6 +350,37 @@ public final class SecureScreen {
         return String.format(Locale.ROOT, texts.get("download.status"), d.item().title()) + percent + more;
     }
 
+    /** With the screen closed: during phase 1 of a server change, what the player has to do. */
+    private void drawServerLine(long now) {
+        ClientSession.Update u = session.update;
+        if (u == null || u.phase == ClientSession.Phase.APPLYING) {
+            return;
+        }
+        long left = Math.max(0, (u.deadline - now) / 1000);
+        String text;
+        boolean act = false;
+        if (u.phase == ClientSession.Phase.CONSENT) {
+            text = String.format(Locale.ROOT, texts.get("mp.line.consent"), u.by, actionText(u.action), u.mod, left);
+            act = true;
+        } else if (pending != null && pending.server()) {
+            text = String.format(Locale.ROOT, texts.get("mp.line.question"), u.mod, left);
+            act = true;
+        } else if (session.answered()) {
+            text = texts.get(u.phase == ClientSession.Phase.FAILED ? "mp.line.failed" : "mp.line.ready");
+        } else {
+            text = (u.status.isEmpty() ? texts.get("mp.getting") : u.status) + "  " + String.format(Locale.ROOT, texts.get("mp.left"), left);
+        }
+        text = "Jumpstart: " + text;
+        int w = Math.min(game.width() / 2 - 30, game.textWidth(GameScreen.Font.SMALL, text) + 24);
+        int h = game.fontHeight(GameScreen.Font.SMALL) + 10;
+        if (act) {
+            game.rect(20, 12, w, h, 0.35f, 0.25f, 0.05f, 0.92f);
+        } else {
+            game.rect(20, 12, w, h, 0.07f, 0.09f, 0.11f, 0.85f);
+        }
+        game.text(GameScreen.Font.SMALL, 32, 17, fit(GameScreen.Font.SMALL, text, w - 24), 1f, act ? 0.9f : 0.95f, act ? 0.5f : 0.8f, 1f);
+    }
+
     /** With the screen closed: a small line at the top while a download runs. */
     private void drawDownloadLine() {
         String status = downloadStatus();
@@ -423,6 +455,7 @@ public final class SecureScreen {
             mouseDown = false;
             pressedHit = null;
             drawDownloadLine();
+            drawServerLine(now);
             drawBusy(now); // work started with the screen closed (a download that came in) shows too
         }
         if (busyWork != null) {
@@ -696,6 +729,16 @@ public final class SecureScreen {
         if (game.inGame()) {
             actions.beginSnapshot(); // a copy of the save before anything is switched
         }
+        ClientSession.Update u = session.update;
+        if (u != null && pending != null && pending.server()) {
+            tab = Tab.SERVER; // BiteCheck's question about the server's jar waited for the player
+            mode = Mode.CONFIRM_ONCE;
+            questionSince = frameTime;
+        } else if (u != null && u.phase == ClientSession.Phase.CONSENT) {
+            tab = Tab.SERVER;
+            mode = Mode.SERVER_CONSENT;
+            u.since = frameTime; // the delay before J counts from now: no key pressed in the game answers it
+        }
     }
 
     private void close() {
@@ -770,7 +813,8 @@ public final class SecureScreen {
 
     private void onKeys(Set<Integer> pressed, long now) {
         pressed = waitForSnapshot(pressed);
-        if (pressed.contains(KEY_ESCAPE) && session.update == null) {
+        // during phase 1 the game goes on and the player may go back to it; during phase 2 it waits
+        if (pressed.contains(KEY_ESCAPE) && (session.update == null || session.update.phase != ClientSession.Phase.APPLYING)) {
             close();
             return;
         }
@@ -1334,6 +1378,11 @@ public final class SecureScreen {
             }
             case ALLOW -> run(BiteCheckGate.Consent.NONE);
             case CONFIRM, CONFIRM_TWICE -> {
+                if (server && mode == Mode.CLOSED) {
+                    // the game goes on during phase 1: the question waits until the player opens Jumpstart
+                    session.update.status = texts.get("mp.openToAnswer");
+                    return;
+                }
                 mode = Mode.CONFIRM_ONCE;
                 questionSince = now;
             }
@@ -1374,7 +1423,16 @@ public final class SecureScreen {
     private void run(BiteCheckGate.Consent consent) {
         Pending p = pending;
         pending = null;
-        mode = Mode.LIST;
+        if (mode != Mode.CLOSED) {
+            mode = Mode.LIST; // a server change BiteCheck allows runs on with the screen closed
+        }
+        if (p.server()) {
+            // phase 1: answered and checked, nothing changes until every player is ready
+            serverCommit = () -> runNow(p, consent);
+            session.ready();
+            say(texts.get("mp.waiting"), true);
+            return;
+        }
         busy(String.format(Locale.ROOT, texts.get(p.update() ? "busy.update" : "busy.load"), p.mod().name()), () -> runNow(p, consent));
     }
 
@@ -1414,8 +1472,8 @@ public final class SecureScreen {
                 if (u != null && u.action.equals("install")) {
                     actions.loadLuaForServer(p.mod().id()); // its Lua, which may use the Java part just loaded
                 }
-                session.ready();
-                say(texts.get("mp.waiting"), true);
+                session.applied();
+                say(texts.get("mp.applied"), true);
             } else {
                 session.failed(outcome.kind() + " " + outcome.message());
             }
@@ -1723,29 +1781,52 @@ public final class SecureScreen {
         }
         switch (what) {
             case "prepare" -> {
-                if (mode == Mode.CLOSED) {
-                    open();
-                    openedByServer = true;
-                } else if (mode != Mode.LIST) {
-                    pending = null; // a question of the player's own is dropped for the server's
-                    mode = Mode.LIST;
-                }
-                tab = Tab.SERVER;
+                serverCommit = null;
                 ClientSession.Update u = session.update;
                 say(String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), true);
-                if (u.phase == ClientSession.Phase.CONSENT) {
-                    mode = Mode.SERVER_CONSENT;
-                } else if (!fetches(u)) {
+                if (mode != Mode.CLOSED) {
+                    if (mode != Mode.LIST) {
+                        pending = null; // a question of the player's own is dropped for the server's
+                        mode = Mode.LIST;
+                    }
+                    tab = Tab.SERVER;
+                    if (u.phase == ClientSession.Phase.CONSENT) {
+                        mode = Mode.SERVER_CONSENT;
+                    }
+                }
+                // with the screen closed the game goes on; a line at the top asks the player to open it
+                if (u.phase != ClientSession.Phase.CONSENT && !fetches(u)) {
                     switchForServer(u);
                 }
+            }
+            case "commit" -> {
+                ClientSession.Update u = session.update;
+                Runnable work = serverCommit;
+                serverCommit = null;
+                if (work == null) {
+                    session.failed("nothing prepared");
+                    return;
+                }
+                u.phase = ClientSession.Phase.APPLYING;
+                if (busyWork != null) {
+                    work.run(); // something of the player's own waits to run: the server's change goes first
+                } else {
+                    busy(String.format(Locale.ROOT, texts.get("busy.server"), actionText(u.action), u.mod), work);
+                }
+            }
+            case "abort" -> {
+                serverCommit = null;
+                if (pending != null && pending.server()) {
+                    pending = null;
+                    if (mode != Mode.CLOSED) {
+                        mode = Mode.LIST;
+                    }
+                }
+                say(texts.get("mp.aborted") + (session.lastNote.isEmpty() ? "" : " " + session.lastNote), false);
             }
             case "done" -> {
                 say(session.lastNote.isEmpty() ? texts.get("mp.done") : texts.get("mp.done") + " " + session.lastNote, true);
                 refreshStates();
-                if (openedByServer && mode == Mode.LIST) {
-                    close();
-                }
-                openedByServer = false;
             }
             default -> say(session.lastNote, false);
         }
@@ -1754,13 +1835,15 @@ public final class SecureScreen {
     /** Every frame during a server update: get the exact jar the server wants, then BiteCheck. */
     private void followServerUpdate(long now) {
         ClientSession.Update u = session.update;
-        if (u.phase == ClientSession.Phase.SENT) {
-            return;
+        if (session.answered()) {
+            return; // phase 1 done here; the server decides when phase 2 starts
         }
         if (now > u.deadline) {
             if ((pending != null && pending.server()) || mode == Mode.SERVER_CONSENT) {
                 pending = null;
-                mode = Mode.LIST;
+                if (mode != Mode.CLOSED) {
+                    mode = Mode.LIST;
+                }
             }
             session.failed("not ready in time");
             say(texts.get("mp.tooLate"), false);
@@ -1839,15 +1922,19 @@ public final class SecureScreen {
             return;
         }
         if (!u.java || mod.java() == null) {
-            LuaLive.Result r = actions.loadLuaForServer(u.mod);
-            if (r.status() == LuaLive.Status.FAILED) {
-                session.failed("Lua: " + String.join("; ", r.errors()));
-                say(describeLua(mod.name(), r), false);
-                return;
-            }
-            refreshStates();
+            serverCommit = () -> {
+                LuaLive.Result r = actions.loadLuaForServer(u.mod);
+                refreshStates();
+                if (r.status() == LuaLive.Status.FAILED) {
+                    session.failed("Lua: " + String.join("; ", r.errors()));
+                    say(describeLua(mod.name(), r), false);
+                } else {
+                    session.applied();
+                    say(describeLua(mod.name(), r) + "  " + texts.get("mp.applied"), true);
+                }
+            };
             session.ready();
-            say(describeLua(mod.name(), r) + "  " + texts.get("mp.waiting"), true);
+            say(texts.get("mp.waiting"), true);
             return;
         }
         lookBusy = true;
@@ -1930,8 +2017,21 @@ public final class SecureScreen {
         return u.action.equals("update") || u.action.equals("install");
     }
 
-    /** Off / on for the server: the same switch as the installed tab, then the answer. */
+    /** Off / on / remove for the server, phase 1: can it be done here? Then wait for the commit. */
     private void switchForServer(ClientSession.Update u) {
+        if (u.action.equals("on") && actions.stateOf(u.mod).equals("not loaded")) {
+            String result = "FAILED " + u.mod + " is not loaded here";
+            session.failed(result);
+            say(result, false);
+            return;
+        }
+        serverCommit = () -> switchNow(u);
+        session.ready();
+        say(texts.get("mp.waiting"), true);
+    }
+
+    /** Phase 2: the same switch as the installed tab, then the answer. */
+    private void switchNow(ClientSession.Update u) {
         String state = actions.stateOf(u.mod);
         String result;
         if (u.action.equals("remove")) {
@@ -1949,8 +2049,8 @@ public final class SecureScreen {
         }
         refreshStates();
         if (result.startsWith("OK")) {
-            session.ready();
-            say(texts.get("mp.waiting"), true);
+            session.applied();
+            say(texts.get("mp.applied"), true);
         } else {
             session.failed(result);
             say(result, false);
@@ -1987,7 +2087,9 @@ public final class SecureScreen {
             game.rect(x - 6, y - 4, width + 12, medium * 2 + small + 16, 0.35f, 0.25f, 0.05f, 1f);
             game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.banner"), actionText(u.action), u.mod, u.by), 1f, 0.9f, 0.5f, 1f);
             long left = Math.max(0, (u.deadline - frameTime) / 1000);
-            game.text(GameScreen.Font.MEDIUM, x, y + medium + 4, (u.status.isEmpty() ? texts.get("mp.getting") : u.status)
+            String status = session.answered() ? texts.get(u.phase == ClientSession.Phase.FAILED ? "mp.line.failed" : "mp.line.ready")
+                    : u.status.isEmpty() ? texts.get("mp.getting") : u.status;
+            game.text(GameScreen.Font.MEDIUM, x, y + medium + 4, status
                     + "   " + String.format(Locale.ROOT, texts.get("mp.left"), left), 1f, 1f, 1f, 1f);
             game.text(GameScreen.Font.SMALL, x, y + medium * 2 + 8, texts.get("mp.paused"), 0.85f, 0.85f, 0.85f, 1f);
             y += medium * 2 + small + 24;

@@ -98,6 +98,33 @@ public final class Net {
         }
     }
 
+    /** Longest world pause: a round that never ends must not freeze the server for good. */
+    public static final long MAX_WORLD_PAUSE_MS = 3 * 60_000;
+    private static volatile long worldPausedSince;
+
+    /** Stops (true) or restarts the server's world; the network and {@link #serverTick} keep running. */
+    public static void pauseWorld(boolean paused) {
+        worldPausedSince = paused ? System.currentTimeMillis() : 0;
+        System.out.println("[Jumpstart] multiplayer: world " + (paused ? "paused" : "running again"));
+    }
+
+    /**
+     * Called by IngameState.update on the server with the game's own decision (empty server with
+     * PauseEmpty): paused also while Jumpstart switches a mod for everybody.
+     */
+    public static boolean worldPaused(boolean game) {
+        long since = worldPausedSince;
+        if (since == 0) {
+            return game;
+        }
+        if (System.currentTimeMillis() - since > MAX_WORLD_PAUSE_MS) {
+            worldPausedSince = 0;
+            System.out.println("[Jumpstart] multiplayer: world pause took too long, the world runs again");
+            return game;
+        }
+        return true;
+    }
+
     // --- sending ---------------------------------------------------------------------------------
 
     /** Server to one client. */

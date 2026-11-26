@@ -59,7 +59,14 @@ class ServerCoordinatorTest {
         assertEquals("1", port.last("admin", "prepare").get("yours"), "the admin who started it is not asked again");
         assertEquals("0", port.last("anna", "prepare").get("yours"));
         assertTrue(port.kicked.isEmpty());
+        assertEquals(List.of(true), port.pauses, "the world stops once everybody is ready, not before");
+        assertNull(port.last("anna", "done"), "first everybody does the change");
+        assertEquals(NEW, port.last("anna", "commit").get("sha"));
+        assertTrue(server.updateRunning());
+        applied("Mod", "admin", "anna", "ben");
+        server.tick(3000);
         assertEquals("1", port.last("anna", "done").get("ok"));
+        assertEquals(List.of(true, false), port.pauses);
         assertFalse(server.updateRunning());
     }
 
@@ -110,6 +117,10 @@ class ServerCoordinatorTest {
         ready("anna");
         port.connections.remove("ben");
         server.tick(5);
+        assertNull(port.last("ben", "commit"));
+        applied("Mod", "admin");
+        port.connections.remove("anna"); // leaves in phase 2 too
+        server.tick(6);
         assertFalse(server.updateRunning());
         assertTrue(port.kicked.isEmpty());
     }
@@ -133,6 +144,8 @@ class ServerCoordinatorTest {
         }
         server.tick(2);
         assertEquals(List.of("OFF Mod " + "a".repeat(64) + " admin=true"), port.applied);
+        applied("Mod", "admin", "anna", "ben");
+        server.tick(3);
         assertEquals("off", port.last("anna", "done").get("action"));
     }
 
@@ -159,6 +172,8 @@ class ServerCoordinatorTest {
         }
         server.tick(4000);
         assertEquals(List.of("INSTALL RealLimbs " + NEW + " admin=true"), port.applied);
+        applied("RealLimbs", "admin", "anna", "ben");
+        server.tick(4001);
         assertEquals("1", port.last("ben", "done").get("ok"));
     }
 
@@ -205,6 +220,74 @@ class ServerCoordinatorTest {
         assertEquals(List.of("REMOVE Minimap  admin=true"), port.applied);
     }
 
+    @Test
+    void whenTheServerCannotNobodyChangesAnything() {
+        port.applyProblem = "FAILED the jar does not load";
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        ready("admin");
+        ready("anna");
+        ready("ben");
+        server.tick(1);
+        for (String c : List.of("admin", "anna", "ben")) {
+            assertNull(port.last(c, "commit"), c + " must not change anything");
+            Map<String, String> abort = port.last(c, "abort");
+            assertEquals("0", abort.get("ok"));
+            assertTrue(abort.get("message").contains("the jar does not load"));
+        }
+        assertEquals(List.of(true, false), port.pauses);
+        assertTrue(port.kicked.isEmpty());
+        assertFalse(server.updateRunning());
+    }
+
+    @Test
+    void whoCannotFollowTheServerIsKickedTheOthersGoOn() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        ready("admin");
+        ready("anna");
+        ready("ben");
+        server.tick(1);
+        applied("Mod", "admin");
+        server.onCommand("anna", "failed", Map.of("token", token("anna"), "mod", "Mod", "reason", "FAILED no memory"), 2);
+        server.tick(3);
+        assertTrue(server.updateRunning(), "ben still has time");
+        assertEquals(List.of(true), port.pauses, "the world stays stopped meanwhile");
+        server.tick(1 + ServerCoordinator.COMMIT_DEADLINE_MS);
+        assertEquals(Set.of("anna", "ben"), port.kicked.keySet());
+        assertTrue(port.kicked.get("anna").contains("no memory"));
+        assertTrue(port.kicked.get("ben").contains("not done in time"));
+        assertTrue(port.last("admin", "done").get("message").contains("anna"));
+        assertEquals(List.of(true, false), port.pauses);
+    }
+
+    @Test
+    void readyAfterTheCommitAndAppliedBeforeItDoNotCount() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        applied("Mod", "admin", "anna", "ben"); // too early: nobody was told to change yet
+        ready("admin");
+        server.tick(60_000); // anna and ben are kicked
+        ready("anna"); // too late
+        applied("Mod", "admin");
+        server.tick(60_001);
+        assertFalse(server.updateRunning());
+        assertEquals(Set.of("anna", "ben"), port.kicked.keySet());
+        assertNull(port.last("anna", "done"));
+    }
+
+    @Test
+    void theCountdownComesFromTheServersSetting() {
+        assertEquals(120_000, ServerCoordinator.deadlineMs("120"));
+        assertEquals(30_000, ServerCoordinator.deadlineMs("5"));
+        assertEquals(900_000, ServerCoordinator.deadlineMs("99999"));
+        assertEquals(ServerCoordinator.DEFAULT_DEADLINE_MS, ServerCoordinator.deadlineMs(null));
+        assertEquals(ServerCoordinator.DEFAULT_DEADLINE_MS, ServerCoordinator.deadlineMs("soon"));
+    }
+
+    private void applied(String mod, String... clients) {
+        for (String c : clients) {
+            server.onCommand(c, "applied", Map.of("token", token(c), "mod", mod), 2);
+        }
+    }
+
     private void ready(String c) {
         server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Mod", "sha", NEW), 1);
     }
@@ -246,7 +329,14 @@ class ServerCoordinatorTest {
         }
         @Override public String apply(ServerCoordinator.Action action, String modId, String sha256, boolean adminConfirmed) {
             applied.add(action + " " + modId + " " + sha256 + " admin=" + adminConfirmed);
-            return null;
+            return applyProblem;
+        }
+
+        String applyProblem;
+        final List<Boolean> pauses = new ArrayList<>();
+
+        @Override public void pauseWorld(boolean paused) {
+            pauses.add(paused);
         }
 
         final List<String> fetching = new ArrayList<>();

@@ -74,4 +74,18 @@ for a new installer version.
    everybody, A = off/on for everybody, U = remove. Every other player has to agree; whoever says no or
    is not ready within 3 minutes is disconnected.
 
+### How a change for everybody runs
+
+1. **Getting ready, the game goes on.** Every player gets a line at the top of the screen, opens
+   Jumpstart (Ctrl+Shift+J) and agrees; their game fetches the server's exact jar and BiteCheck checks
+   it. Nothing changes yet.
+2. **The change, the world stops.** When everybody is ready (or the time is up, then whoever is not
+   ready is disconnected), the server stops its world (zombies, time, players; the network keeps
+   running) and changes the mod first. If that fails, nobody changes anything and the game goes on.
+   Else every player changes it too; whoever cannot is disconnected. Then the world runs again.
+
+The time for step 1 is 3 minutes. To change it (30 to 900 seconds), put
+`server_countdown_seconds = 120` into BiteCheck's `config.toml` on the server, or start the server
+with `-Djumpstart.countdown=120`. The world never stays stopped longer than 3 minutes.
+
 Remove: the same line with `--uninstall` instead of `--headless --update`.

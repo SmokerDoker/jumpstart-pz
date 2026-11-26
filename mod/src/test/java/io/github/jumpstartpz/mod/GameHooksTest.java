@@ -23,7 +23,7 @@ class GameHooksTest {
                 FileJournal.class, List.of("onFileWriter", "onModFileWriter"),
                 ModDataJournal.class, List.of("onKey"),
                 LuaStartJournal.class, List.of("onLoadDir", "onSet"),
-                io.github.jumpstartpz.mod.net.Net.class, List.of("clientEvent", "serverEvent", "serverTick"));
+                io.github.jumpstartpz.mod.net.Net.class, List.of("clientEvent", "serverEvent", "serverTick", "worldPaused"));
         called.forEach((type, methods) -> {
             assertTrue(Modifier.isPublic(type.getModifiers()), type.getSimpleName() + " must be public");
             for (String name : methods) {
@@ -35,5 +35,18 @@ class GameHooksTest {
                 }
             }
         });
+    }
+
+    @Test
+    void theServerWorldStopsOnlyWhileJumpstartSaysSo() {
+        assertTrue(!io.github.jumpstartpz.mod.net.Net.worldPaused(false), "runs as the game decides");
+        assertTrue(io.github.jumpstartpz.mod.net.Net.worldPaused(true), "the game's own pause (empty server) stays");
+        io.github.jumpstartpz.mod.net.Net.pauseWorld(true);
+        try {
+            assertTrue(io.github.jumpstartpz.mod.net.Net.worldPaused(false));
+        } finally {
+            io.github.jumpstartpz.mod.net.Net.pauseWorld(false);
+        }
+        assertTrue(!io.github.jumpstartpz.mod.net.Net.worldPaused(false));
     }
 }
