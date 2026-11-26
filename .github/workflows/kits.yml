@@ -88,6 +88,9 @@ jobs:
           unzip -l "$jar" | grep -q 'embedded-mod/io/github/jumpstartpz/mod/Main.class'
           unzip -l "$jar" | grep -q 'me/zed_0xff/zombie_buddy/Agent.class'
 
+      - name: The agent patches the real game classes (a patch that does not apply means no Java mods, no Jumpstart)
+        run: bash kit/agent-check.sh "$PWD/mod/build/agent/Jumpstart.jar" "$PZ_JAR" "$JAVA_HOME_25_X64/bin/java"
+
       - name: The fork's ZombieBuddy mod folder (no jar)
         run: bash kit/zombiebuddy-mod.sh third_party/zombiebuddy-jumpstart dist-mods
 
