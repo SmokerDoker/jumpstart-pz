@@ -650,10 +650,43 @@ class SecureScreenTest {
     }
 
     @Test
+    void joiningTheClientFollowsTheServersSyncStepsAtOnce() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
+        screen.onServerCommand("sync", Map.of("action", "off", "mod", "Verified", "sha", "verified.jar", "workshop", "",
+                "java", "1", "seconds", "60"));
+        frame(); settle();
+        assertEquals("off", actions.states.get("Verified"), "the server has it off: off here at once, no commit");
+        assertEquals("applied {mod=Verified, sync=1, token=T}", link.sent.get(link.sent.size() - 1));
+        assertNull(screen.session().update, "the step is over");
+
+        screen.onServerCommand("sync", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar", "workshop", "",
+                "java", "1", "seconds", "60"));
+        frame();
+        frame(); settle();
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "BiteCheck's question waits for the player");
+        openScreen();
+        assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode());
+        now += SecureScreen.FIRST_DELAY_MS;
+        tap(SecureScreen.KEY_J);
+        frame(); settle();
+        assertEquals(List.of("install Unknown CONFIRMED"), actions.calls, "loads at once: the server runs it already");
+        assertEquals("applied {mod=Unknown, sync=1, token=T}", link.sent.get(link.sent.size() - 1));
+
+        screen.onServerCommand("synced", Map.of());
+        frame();
+        assertTrue(screen.describe().contains("match the server"), screen.describe());
+    }
+
+    @Test
     void aServerChangeMustBeAgreedToAndNoIsReported() {
         link.connected = true;
         frame();
-        assertEquals(List.of("hello {v=1}"), link.sent, "hello once when the multiplayer game starts");
+        assertEquals(1, link.sent.size(), "hello once when the multiplayer game starts");
+        assertTrue(link.sent.get(0).startsWith("hello {mods=Verified\t"), link.sent.get(0));
+        assertTrue(link.sent.get(0).contains("Unknown\t") && link.sent.get(0).endsWith("v=2}"), "with its Java mods for the server");
         screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", "Unknown\t\told\tunknown.jar\ton\n"));
         frame();
         assertTrue(screen.session().connected());

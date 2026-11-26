@@ -37,6 +37,13 @@ import java.util.Set;
  *       too and puts it into its mod list (and .ini), so players who join later get it.</li>
  *   <li><b>change</b> with action <i>remove</i> (admins only): the mod goes off everywhere (Java
  *       switched off, Lua event handlers stopped) and out of the server's mod list.</li>
+ *   <li><b>Joining:</b> hello carries the client's Java mods (id, hash, state). The server compares
+ *       them with its own and sends <b>sync</b>, one mod at a time, until the client matches: load the
+ *       server's version, switch on, or switch off (also Java mods the server does not run). The
+ *       client answers <b>applied</b> or <b>failed</b>; who fails or is too slow is kicked. Who joins
+ *       during phase 1 of a round takes part in it; who joins during phase 2 is compared after it.
+ *       The client reports its own hashes, so this keeps honest clients in line, it does not catch a
+ *       client that lies.</li>
  * </ul>
  *
  * Not thread-safe: the game calls it from its server thread only.
@@ -146,11 +153,11 @@ public final class ServerCoordinator<C> {
      * A round. Phase 1 ({@code committing} false): {@code ready} are the clients that prepared the
      * change. Phase 2: {@code ready} are those still in it, {@code applied} those that did it.
      */
-    private record Update(Action action, String mod, String sha256, String workshopId, Object admin, long deadline,
+    private record Update(Action action, String mod, String sha256, String workshopId, boolean java, Object admin, long deadline,
                           Set<Object> expected, Set<Object> ready, Map<Object, String> failed,
                           boolean committing, long commitDeadline, Set<Object> applied) {
         Update commit(long until) {
-            return new Update(action, mod, sha256, workshopId, admin, deadline, expected, ready, new LinkedHashMap<>(),
+            return new Update(action, mod, sha256, workshopId, java, admin, deadline, expected, ready, new LinkedHashMap<>(),
                     true, until, new LinkedHashSet<>());
         }
     }
@@ -180,10 +187,94 @@ public final class ServerCoordinator<C> {
         return pending != null || download != null;
     }
 
+    /** A Java mod as a client reports it in hello: loaded hash and state there ("on", "off", "not loaded"). */
+    public record ClientMod(String id, String sha256, String state) {
+    }
+
+    /** One step to bring a client in line with the server. */
+    public record Sync(Action action, String mod, String sha256, String workshopId) {
+    }
+
+    /** "id\thash\tstate" lines, as hello carries them; null when the client sent none (an older one). */
+    public static List<ClientMod> parseClientMods(String lines) {
+        if (lines == null) {
+            return null;
+        }
+        List<ClientMod> mods = new ArrayList<>();
+        for (String line : lines.split("\n")) {
+            String[] f = line.split("\t", -1);
+            if (f.length >= 3 && !f[0].isBlank()) {
+                mods.add(new ClientMod(f[0], f[1], f[2]));
+            }
+        }
+        return mods;
+    }
+
+    /**
+     * What a client has to do to match the server's Java mods: the server's version where it is
+     * missing, another or not loaded; on where only the client has it off; off where the server has
+     * it off or does not run it at all.
+     */
+    public static List<Sync> differences(List<ModInfo> server, List<ClientMod> client) {
+        List<Sync> steps = new ArrayList<>();
+        Map<String, ClientMod> byId = new LinkedHashMap<>();
+        for (ClientMod m : client) {
+            byId.put(m.id(), m);
+        }
+        Set<String> serverIds = new LinkedHashSet<>();
+        for (ModInfo m : server) {
+            serverIds.add(m.id());
+            if (m.lua()) {
+                continue; // the game checks Lua mods itself when a player joins
+            }
+            ClientMod mine = byId.get(m.id());
+            boolean clientOn = mine != null && "on".equals(mine.state());
+            if ("off".equals(m.state())) {
+                if (clientOn) {
+                    steps.add(new Sync(Action.OFF, m.id(), mine.sha256(), nz(m.workshopId())));
+                }
+            } else if (nz(m.sha256()).isEmpty()) {
+                continue; // the server does not know which version it runs: nothing to compare
+            } else if (mine == null || !m.sha256().equals(mine.sha256()) || "not loaded".equals(mine.state())) {
+                steps.add(new Sync(Action.UPDATE, m.id(), m.sha256(), nz(m.workshopId())));
+            } else if (!clientOn) {
+                steps.add(new Sync(Action.ON, m.id(), m.sha256(), nz(m.workshopId())));
+            }
+        }
+        for (ClientMod m : client) {
+            if (!serverIds.contains(m.id()) && "on".equals(m.state())) {
+                steps.add(new Sync(Action.OFF, m.id(), m.sha256(), "")); // Java the server does not run
+            }
+        }
+        return steps;
+    }
+
+    /** A client being brought in line: the steps left (the first is running) and its deadline. */
+    private static final class Syncing {
+        final java.util.ArrayDeque<Sync> steps;
+        long deadline;
+
+        Syncing(List<Sync> steps) {
+            this.steps = new java.util.ArrayDeque<>(steps);
+        }
+    }
+
+    private final Map<C, Syncing> syncing = new LinkedHashMap<>();
+    /** Clients that joined while a round ran: compared with the server when it is over. */
+    private final Map<C, List<ClientMod>> joinedDuringRound = new LinkedHashMap<>();
+
+    public boolean syncing(C c) {
+        return syncing.containsKey(c);
+    }
+
     /** A Jumpstart command from a client (already filtered to this module by the channel). */
     public void onCommand(C c, String command, Map<String, String> args, long now) {
         if (command.equals("hello")) {
             welcome(c);
+            List<ClientMod> mods = parseClientMods(args.get("mods"));
+            if (mods != null && !syncing.containsKey(c)) {
+                joined(c, mods, now);
+            }
             return;
         }
         String token = tokens.get(c);
@@ -206,12 +297,20 @@ public final class ServerCoordinator<C> {
                 }
             }
             case "applied" -> {
-                if (pending != null && pending.committing() && pending.ready().contains(c) && pending.mod().equals(args.get("mod"))) {
+                if ("1".equals(args.get("sync"))) {
+                    synced(c, args.getOrDefault("mod", ""), now);
+                } else if (pending != null && pending.committing() && pending.ready().contains(c) && pending.mod().equals(args.get("mod"))) {
                     pending.applied().add(c);
                 }
             }
             case "failed" -> {
-                if (pending != null && pending.mod().equals(args.get("mod")) && !pending.applied().contains(c)) {
+                if ("1".equals(args.get("sync"))) {
+                    Syncing s = syncing.get(c);
+                    if (s != null && !s.steps.isEmpty() && s.steps.peek().mod().equals(args.get("mod"))) {
+                        syncing.remove(c);
+                        port.kick(c, "Jumpstart: " + args.get("mod") + " does not match the server: " + args.getOrDefault("reason", "failed"));
+                    }
+                } else if (pending != null && pending.mod().equals(args.get("mod")) && !pending.applied().contains(c)) {
                     pending.failed().put(c, args.getOrDefault("reason", "failed"));
                 }
             }
@@ -219,6 +318,81 @@ public final class ServerCoordinator<C> {
                 // newer commands are ignored
             }
         }
+    }
+
+    /** A client said hello with its Java mods: in line with the server now, or after the running round. */
+    private void joined(C c, List<ClientMod> mods, long now) {
+        if (pending != null) {
+            joinedDuringRound.put(c, mods);
+            if (!pending.committing() && !pending.expected().contains(c)) {
+                pending.expected().add(c); // phase 1: takes part like everybody else
+                sendPrepare(c, pending, now);
+            }
+            return;
+        }
+        startSync(c, differences(port.manifest(), mods), now);
+    }
+
+    private void startSync(C c, List<Sync> steps, long now) {
+        if (steps.isEmpty()) {
+            return;
+        }
+        syncing.put(c, new Syncing(steps));
+        sendSync(c, now);
+    }
+
+    private void sendSync(C c, long now) {
+        Syncing s = syncing.get(c);
+        if (s.steps.isEmpty()) {
+            syncing.remove(c);
+            port.send(c, "synced", Map.of());
+            return;
+        }
+        Sync step = s.steps.peek();
+        s.deadline = now + deadlineMs;
+        Map<String, String> args = new LinkedHashMap<>();
+        args.put("action", step.action().wire());
+        args.put("mod", step.mod());
+        args.put("sha", step.sha256());
+        args.put("workshop", step.workshopId());
+        args.put("java", "1");
+        args.put("seconds", String.valueOf(deadlineMs / 1000));
+        port.send(c, "sync", args);
+    }
+
+    private void synced(C c, String mod, long now) {
+        Syncing s = syncing.get(c);
+        if (s != null && !s.steps.isEmpty() && s.steps.peek().mod().equals(mod)) {
+            s.steps.poll();
+            sendSync(c, now);
+        }
+    }
+
+    /** Clients that are too slow to match the server are kicked. */
+    private void followSyncs(long now) {
+        List<C> connected = port.connections();
+        syncing.keySet().retainAll(connected);
+        joinedDuringRound.keySet().retainAll(connected);
+        for (Map.Entry<C, Syncing> e : new ArrayList<>(syncing.entrySet())) {
+            if (now >= e.getValue().deadline) {
+                syncing.remove(e.getKey());
+                Sync step = e.getValue().steps.peek();
+                port.kick(e.getKey(), "Jumpstart: " + (step == null ? "" : step.mod() + " ") + "not in line with the server in time");
+            }
+        }
+    }
+
+    /**
+     * After a round: who joined during it says hello again (check), so it is compared with the server
+     * as it is now. Everybody who got done or abort says hello again anyway.
+     */
+    private void afterRound(Set<Object> answered) {
+        for (C c : new ArrayList<>(joinedDuringRound.keySet())) {
+            if (!answered.contains(c) && port.connections().contains(c)) {
+                port.send(c, "check", Map.of());
+            }
+        }
+        joinedDuringRound.clear();
     }
 
     private void welcome(C c) {
@@ -318,24 +492,29 @@ public final class ServerCoordinator<C> {
 
     private void startRound(Object admin, Action action, String mod, String sha, String workshop, boolean java, long now) {
         Set<Object> expected = new LinkedHashSet<>(port.connections());
-        pending = new Update(action, mod, sha, workshop, admin, now + deadlineMs,
+        pending = new Update(action, mod, sha, workshop, java, admin, now + deadlineMs,
                 expected, new LinkedHashSet<>(), new LinkedHashMap<>(), false, 0, new LinkedHashSet<>());
         for (Object c : expected) {
-            Map<String, String> args = new LinkedHashMap<>();
-            args.put("action", action.wire());
-            args.put("mod", mod);
-            args.put("sha", sha);
-            args.put("workshop", workshop);
-            args.put("java", java ? "1" : "0");
-            args.put("seconds", String.valueOf(deadlineMs / 1000));
-            args.put("by", port.name(cast(admin)));
-            args.put("yours", c.equals(admin) ? "1" : "0"); // the admin who started it is not asked again
-            port.send(cast(c), "prepare", args);
+            sendPrepare(cast(c), pending, now);
         }
+    }
+
+    private void sendPrepare(C c, Update u, long now) {
+        Map<String, String> args = new LinkedHashMap<>();
+        args.put("action", u.action().wire());
+        args.put("mod", u.mod());
+        args.put("sha", u.sha256());
+        args.put("workshop", u.workshopId());
+        args.put("java", u.java() ? "1" : "0");
+        args.put("seconds", String.valueOf(Math.max(1, (u.deadline() - now) / 1000)));
+        args.put("by", port.name(cast(u.admin())));
+        args.put("yours", c.equals(u.admin()) ? "1" : "0"); // the admin who started it is not asked again
+        port.send(c, "prepare", args);
     }
 
     /** Every server tick: follows a download, finishes a round when everybody answered or the deadline passed. */
     public void tick(long now) {
+        followSyncs(now);
         if (download != null) {
             followDownload(now);
         }
@@ -390,6 +569,7 @@ public final class ServerCoordinator<C> {
             for (Object o : u.ready()) {
                 port.send(cast(o), "abort", args);
             }
+            afterRound(u.ready());
             return;
         }
         pending = u.commit(now + COMMIT_DEADLINE_MS);
@@ -419,6 +599,7 @@ public final class ServerCoordinator<C> {
         for (Object o : u.applied()) {
             port.send(cast(o), "done", args);
         }
+        afterRound(u.applied());
     }
 
     /** Who was kicked during the running round, "name (why)", for the closing message. */

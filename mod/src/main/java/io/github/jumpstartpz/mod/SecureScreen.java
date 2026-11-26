@@ -228,6 +228,7 @@ public final class SecureScreen {
         this.testInput = testInput;
         this.background = background;
         this.session = new ClientSession(link);
+        this.session.localMods = this::localModsLine;
         libraries.put(Tab.JAVA_LIBRARY, new Library(LibraryClient.Kind.JAVA));
         libraries.put(Tab.LUA_LIBRARY, new Library(LibraryClient.Kind.LUA));
     }
@@ -1429,6 +1430,12 @@ public final class SecureScreen {
         if (mode != Mode.CLOSED) {
             mode = Mode.LIST; // a server change BiteCheck allows runs on with the screen closed
         }
+        if (p.server() && session.update != null && session.update.solo) {
+            // joining: the server runs this version already, so it loads now
+            session.update.phase = ClientSession.Phase.APPLYING;
+            busy(String.format(Locale.ROOT, texts.get("busy.update"), p.mod().name()), () -> runNow(p, consent));
+            return;
+        }
         if (p.server()) {
             // phase 1: answered and checked, nothing changes until every player is ready
             serverCommit = () -> runNow(p, consent);
@@ -1783,10 +1790,11 @@ public final class SecureScreen {
             return;
         }
         switch (what) {
-            case "prepare" -> {
+            case "prepare", "sync" -> {
                 serverCommit = null;
                 ClientSession.Update u = session.update;
-                say(String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), true);
+                say(what.equals("sync") ? String.format(Locale.ROOT, texts.get("mp.sync"), actionText(u.action), u.mod)
+                        : String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), true);
                 if (mode != Mode.CLOSED) {
                     if (mode != Mode.LIST) {
                         pending = null; // a question of the player's own is dropped for the server's
@@ -1831,8 +1839,26 @@ public final class SecureScreen {
                 say(session.lastNote.isEmpty() ? texts.get("mp.done") : texts.get("mp.done") + " " + session.lastNote, true);
                 refreshStates();
             }
+            case "synced" -> {
+                say(texts.get("mp.synced"), true);
+                refreshStates();
+            }
             default -> say(session.lastNote, false);
         }
+    }
+
+    /** This client's Java mods for the server: "id\thash\tstate" lines, state "on", "off" or "not loaded". */
+    String localModsLine() {
+        StringBuilder sb = new StringBuilder();
+        for (ModEntry mod : actions.javaMods()) {
+            if (mod.id().equals(SELF)) {
+                continue;
+            }
+            String state = actions.stateOf(mod.id());
+            String wire = state.startsWith("on") ? "on" : state.equals("off") ? "off" : "not loaded";
+            sb.append(mod.id()).append('\t').append(actions.loadedHash(mod)).append('\t').append(wire).append('\n');
+        }
+        return sb.toString();
     }
 
     /** Every frame during a server update: get the exact jar the server wants, then BiteCheck. */
@@ -2026,6 +2052,10 @@ public final class SecureScreen {
             String result = "FAILED " + u.mod + " is not loaded here";
             session.failed(result);
             say(result, false);
+            return;
+        }
+        if (u.solo) {
+            switchNow(u); // joining: the server has it this way already
             return;
         }
         serverCommit = () -> switchNow(u);

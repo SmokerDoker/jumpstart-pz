@@ -42,6 +42,11 @@ final class ClientSession {
         final long deadline;
         /** Install or remove: whether the mod has a Java part (a Lua-only mod has no hash). */
         boolean java = true;
+        /**
+         * Brings only this client in line with the server (sync, when joining): the server runs it
+         * already, so the change is made as soon as it is ready, without a commit.
+         */
+        boolean solo;
         Phase phase = Phase.GETTING;
         boolean downloadRequested;
         long nextLook;
@@ -60,6 +65,8 @@ final class ClientSession {
     }
 
     private final ServerLink link;
+    /** This client's Java mods for hello, "id\thash\tstate" lines (see ServerCoordinator.ClientMod). */
+    java.util.function.Supplier<String> localMods = () -> null;
 
     /** In a multiplayer game (with or without Jumpstart on the server): nobody switches mods alone. */
     boolean inMultiplayer() {
@@ -96,14 +103,25 @@ final class ClientSession {
         }
         if (!helloSent) {
             helloSent = true;
-            link.send("hello", Map.of("v", "1"));
+            hello();
         }
     }
 
     void refresh() {
         if (link.connected()) {
-            link.send("hello", Map.of("v", "1"));
+            hello();
         }
+    }
+
+    /** Hello with this client's Java mods, so the server can compare them with its own. */
+    private void hello() {
+        Map<String, String> args = new LinkedHashMap<>();
+        args.put("v", "2");
+        String mods = localMods.get();
+        if (mods != null && update == null) {
+            args.put("mods", mods); // not in the middle of a change: the server would compare half of it
+        }
+        link.send("hello", args);
     }
 
     /** A command from the server. Returns what the screen should do: "prepare", "done" or null. */
@@ -130,6 +148,24 @@ final class ClientSession {
                 update.since = now;
                 update.java = !"0".equals(args.get("java"));
                 return "prepare"; // the game goes on while everybody gets ready
+            }
+            case "sync" -> {
+                long seconds = parse(args.get("seconds"), 180);
+                update = new Update(args.getOrDefault("action", "update"), true,
+                        args.getOrDefault("mod", ""), args.getOrDefault("sha", ""),
+                        args.getOrDefault("workshop", ""), "server", now + seconds * 1000);
+                update.since = now;
+                update.java = !"0".equals(args.get("java"));
+                update.solo = true;
+                return "sync";
+            }
+            case "synced" -> {
+                lastNote = "";
+                return "synced";
+            }
+            case "check" -> {
+                refresh();
+                return null;
             }
             case "commit" -> {
                 if (update == null || !update.mod.equals(args.get("mod"))) {
@@ -184,11 +220,18 @@ final class ClientSession {
         }
     }
 
-    /** Phase 2 done: the change is made here too. */
+    /** Phase 2 done: the change is made here too. A sync step is over with it. */
     void applied() {
         if (update != null && token != null) {
             update.phase = Phase.APPLIED;
-            link.send("applied", Map.of("token", token, "mod", update.mod));
+            Map<String, String> args = new LinkedHashMap<>();
+            args.put("token", token);
+            args.put("mod", update.mod);
+            if (update.solo) {
+                args.put("sync", "1");
+                update = null;
+            }
+            link.send("applied", args);
         }
     }
 
@@ -205,6 +248,9 @@ final class ClientSession {
             args.put("token", token);
             args.put("mod", update.mod);
             args.put("reason", reason);
+            if (update.solo) {
+                args.put("sync", "1");
+            }
             link.send("failed", args);
         }
     }

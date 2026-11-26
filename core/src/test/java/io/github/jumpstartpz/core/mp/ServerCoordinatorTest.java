@@ -282,6 +282,89 @@ class ServerCoordinatorTest {
         assertEquals(ServerCoordinator.DEFAULT_DEADLINE_MS, ServerCoordinator.deadlineMs("soon"));
     }
 
+    private static final String OLD = "a".repeat(64);
+
+    @Test
+    void differencesBringAClientInLineWithTheServer() {
+        List<ServerCoordinator.ModInfo> server = List.of(
+                new ServerCoordinator.ModInfo("Same", "1", OLD, OLD, "on"),
+                new ServerCoordinator.ModInfo("Other", "2", OLD, OLD, "on"),
+                new ServerCoordinator.ModInfo("Missing", "3", OLD, OLD, "client only"),
+                new ServerCoordinator.ModInfo("OffThere", "4", OLD, OLD, "off"),
+                new ServerCoordinator.ModInfo("OffHere", "5", OLD, OLD, "on"),
+                new ServerCoordinator.ModInfo("Minimap", "6", "", "", ServerCoordinator.LUA));
+        List<ServerCoordinator.ClientMod> client = List.of(
+                new ServerCoordinator.ClientMod("Same", OLD, "on"),
+                new ServerCoordinator.ClientMod("Other", NEW, "on"),
+                new ServerCoordinator.ClientMod("OffThere", OLD, "on"),
+                new ServerCoordinator.ClientMod("OffHere", OLD, "off"),
+                new ServerCoordinator.ClientMod("Cheat", NEW, "on"),
+                new ServerCoordinator.ClientMod("Idle", NEW, "off"));
+        List<String> steps = ServerCoordinator.differences(server, client).stream()
+                .map(st -> st.action().wire() + " " + st.mod()).toList();
+        assertEquals(List.of("update Other", "update Missing", "off OffThere", "on OffHere", "off Cheat"), steps);
+    }
+
+    @Test
+    void aJoiningClientWithAnotherVersionIsBroughtInLine() {
+        port.connections.add("cleo");
+        server.onCommand("cleo", "hello", Map.of("mods", "Mod\t" + NEW + "\ton\n"), 0);
+        Map<String, String> sync = port.last("cleo", "sync");
+        assertEquals("update", sync.get("action"));
+        assertEquals(OLD, sync.get("sha"), "the version the server runs");
+        assertEquals("123", sync.get("workshop"));
+        assertTrue(server.syncing("cleo"));
+        server.onCommand("cleo", "applied", Map.of("token", token("cleo"), "mod", "Mod", "sync", "1"), 5);
+        assertFalse(server.syncing("cleo"));
+        assertTrue(port.sent.get("cleo").stream().anyMatch(e -> e.getKey().equals("synced")));
+        assertTrue(port.kicked.isEmpty());
+    }
+
+    @Test
+    void aJoiningClientThatCannotFollowIsKicked() {
+        port.connections.add("cleo");
+        port.connections.add("dan");
+        server.onCommand("cleo", "hello", Map.of("mods", ""), 0);
+        server.onCommand("dan", "hello", Map.of("mods", ""), 0);
+        server.onCommand("cleo", "failed", Map.of("token", token("cleo"), "mod", "Mod", "sync", "1", "reason", "BiteCheck blocks the jar"), 1);
+        assertTrue(port.kicked.get("cleo").contains("BiteCheck blocks the jar"));
+        server.tick(59_999);
+        assertFalse(port.kicked.containsKey("dan"));
+        server.tick(60_000);
+        assertTrue(port.kicked.get("dan").contains("not in line with the server in time"));
+    }
+
+    @Test
+    void aClientInLineGetsNothingAndAnOlderClientIsLeftAlone() {
+        port.connections.add("cleo");
+        server.onCommand("cleo", "hello", Map.of("mods", "Mod\t" + OLD + "\ton\n"), 0);
+        assertNull(port.last("cleo", "sync"));
+        server.onCommand("ben", "hello", Map.of(), 0);
+        assertNull(port.last("ben", "sync"), "a client without the list is not compared");
+    }
+
+    @Test
+    void whoJoinsDuringPhaseOneTakesPartWhoJoinsDuringPhaseTwoIsCheckedAfter() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        port.connections.add("cleo");
+        server.onCommand("cleo", "hello", Map.of("mods", ""), 1000);
+        Map<String, String> p = port.last("cleo", "prepare");
+        assertEquals(NEW, p.get("sha"), "phase 1: cleo takes part");
+        assertEquals("59", p.get("seconds"), "with the time that is left");
+        assertNull(port.last("cleo", "sync"), "no comparison in the middle of a round");
+        for (String c : List.of("admin", "anna", "ben", "cleo")) {
+            ready(c);
+        }
+        server.tick(2000); // phase 2
+        port.connections.add("dan");
+        server.onCommand("dan", "hello", Map.of("mods", ""), 2001);
+        assertNull(port.last("dan", "prepare"), "too late for this round");
+        applied("Mod", "admin", "anna", "ben", "cleo");
+        server.tick(3000);
+        assertEquals(Map.of(), port.last("dan", "check"), "dan says hello again and is compared with the new state");
+        assertNull(port.last("cleo", "check"), "cleo got done and says hello again anyway");
+    }
+
     private void applied(String mod, String... clients) {
         for (String c : clients) {
             server.onCommand(c, "applied", Map.of("token", token(c), "mod", mod), 2);

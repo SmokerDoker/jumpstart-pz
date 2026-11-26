@@ -378,12 +378,27 @@ final class GameActions implements Actions {
 
     @Override
     public LiveInstaller.Outcome install(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return installer.install(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player);
+        return loaded(mod, installer.install(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player));
     }
 
     @Override
     public LiveInstaller.Outcome update(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return installer.update(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player);
+        return loaded(mod, installer.update(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player));
+    }
+
+    /** The hash of each Java mod's running version (see {@link Actions#loadedHash}). */
+    private final Map<String, String> loadedHashes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public String loadedHash(ModEntry mod) {
+        return loadedHashes.computeIfAbsent(mod.id(), id -> Actions.super.loadedHash(mod));
+    }
+
+    private LiveInstaller.Outcome loaded(ModEntry mod, LiveInstaller.Outcome outcome) {
+        if (outcome.kind() == LiveInstaller.Kind.DONE) {
+            loadedHashes.put(mod.id(), Actions.super.loadedHash(mod));
+        }
+        return outcome;
     }
 
     @Override
