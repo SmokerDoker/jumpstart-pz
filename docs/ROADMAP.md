@@ -69,10 +69,11 @@ Next after the current multiplayer block, before the marketplace:
 - [x] Download in the background, pause only when everybody is ready
 - [x] A real server pause (the world stops like on an empty server with PauseEmpty; the network runs on)
 - [x] Two-phase switch with rollback (the server switches first; if it cannot, nobody changes anything)
-- [ ] Players who join during a switch wait and get the new manifest
+- [x] Players who join during a switch: in phase 1 they take part, in phase 2 they are compared after it
 - [ ] Checksums compared after a switch, including the game's Lua checksum for live-installed files
-- [ ] Check the manifest on every join and fetch missing mods
-- [ ] The server compares its players' Java mod hashes (BiteCheck's point 5 against manipulated clients)
+- [x] Check the Java mods on every join (and after every change) and bring the player in line: the server's version, on or off, off for Java the server does not run
+- [x] The server compares its players' Java mod hashes (they report them: this keeps honest clients in line)
+- [ ] Against manipulated clients that lie about their hashes: a check the client cannot answer from a list (BiteCheck's point 5, research)
 - [x] Countdown configurable (`server_countdown_seconds`, see kit/SERVER.md)
 - [ ] Emergency switch-off from the server
 - [ ] Save snapshots on servers

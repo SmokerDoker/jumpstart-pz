@@ -25,6 +25,19 @@ interface Actions {
     String stateOf(String modId);
 
     /**
+     * The hash of the version of a Java mod that runs (or would run) in this game: the jar's hash
+     * when Jumpstart first looked, or the one Jumpstart loaded since. A newer jar Steam put on disk
+     * meanwhile does not count. Empty when the jar cannot be read.
+     */
+    default String loadedHash(ModEntry mod) {
+        try {
+            return io.github.bitecheckpz.core.Hashing.sha256Hex(mod.jar());
+        } catch (IOException e) {
+            return "";
+        }
+    }
+
+    /**
      * A mod's Lua side: "on" (enabled, running), "off", "on, next load" (enabled, runs with the next
      * load of the save) or "off, next load" (switched off, gone completely with the next load).
      */

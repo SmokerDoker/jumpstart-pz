@@ -74,6 +74,15 @@ for a new installer version.
    everybody, A = off/on for everybody, U = remove. Every other player has to agree; whoever says no or
    is not ready within 3 minutes is disconnected.
 
+### Joining
+
+Every player who joins tells the server which Java mods run on their side, with their hashes. Where
+they differ from the server's, the player's game follows the server one mod at a time: it fetches the
+server's version (BiteCheck checks it, the player answers its questions), switches mods on or off, and
+switches off Java mods the server does not run. Whoever cannot follow in time is disconnected. Lua mods
+are checked by the game itself when a player joins. Who joins while a change for everybody runs takes
+part in it, or is compared right after it.
+
 ### How a change for everybody runs
 
 1. **Getting ready, the game goes on.** Every player gets a line at the top of the screen, opens
