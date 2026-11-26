@@ -22,8 +22,13 @@ final class ClientSession {
         }
     }
 
-    /** CONSENT: the player has to agree first (everybody except the admin who started it). */
-    enum Phase { CONSENT, GETTING, ASKING, SENT }
+    /**
+     * Phase 1, while the game goes on: CONSENT (the player has to agree first, everybody except the
+     * admin who started it), GETTING the server's files, ASKING BiteCheck's questions, then READY
+     * (prepared, nothing changed yet). Phase 2, paused: APPLYING the change, APPLIED. FAILED: told
+     * the server why not.
+     */
+    enum Phase { CONSENT, GETTING, ASKING, READY, APPLYING, APPLIED, FAILED }
 
     /** A server update this client takes part in. */
     static final class Update {
@@ -124,8 +129,21 @@ final class ClientSession {
                         args.getOrDefault("workshop", ""), args.getOrDefault("by", "?"), now + seconds * 1000);
                 update.since = now;
                 update.java = !"0".equals(args.get("java"));
-                link.pause(true);
-                return "prepare";
+                return "prepare"; // the game goes on while everybody gets ready
+            }
+            case "commit" -> {
+                if (update == null || !update.mod.equals(args.get("mod"))) {
+                    return null;
+                }
+                link.pause(true); // the server stopped its world too
+                return "commit";
+            }
+            case "abort" -> {
+                update = null;
+                link.pause(false);
+                lastNote = args.getOrDefault("message", "");
+                refresh();
+                return "abort";
             }
             case "done" -> {
                 update = null;
@@ -158,16 +176,31 @@ final class ClientSession {
         }
     }
 
+    /** Phase 1 done: prepared, nothing changed yet. */
     void ready() {
         if (update != null && token != null) {
-            update.phase = Phase.SENT;
+            update.phase = Phase.READY;
             link.send("ready", Map.of("token", token, "mod", update.mod, "sha", update.sha256));
         }
     }
 
+    /** Phase 2 done: the change is made here too. */
+    void applied() {
+        if (update != null && token != null) {
+            update.phase = Phase.APPLIED;
+            link.send("applied", Map.of("token", token, "mod", update.mod));
+        }
+    }
+
+    /** Waiting for the server: prepared, or the change made, or told it why not. */
+    boolean answered() {
+        return update != null && (update.phase == Phase.READY || update.phase == Phase.APPLYING
+                || update.phase == Phase.APPLIED || update.phase == Phase.FAILED);
+    }
+
     void failed(String reason) {
         if (update != null && token != null) {
-            update.phase = Phase.SENT;
+            update.phase = Phase.FAILED;
             Map<String, String> args = new LinkedHashMap<>();
             args.put("token", token);
             args.put("mod", update.mod);

@@ -421,6 +421,27 @@ final class GameActions implements Actions {
         return String.join("; ", installer.gate().indexSource().notes());
     }
 
+    /**
+     * Server: seconds players have to get ready for a change for everybody: -Djumpstart.countdown,
+     * else {@code server_countdown_seconds} in BiteCheck's config.toml, else null (the default).
+     */
+    String serverCountdown() {
+        String property = System.getProperty("jumpstart.countdown");
+        if (property != null && !property.isBlank()) {
+            return property;
+        }
+        try {
+            Path file = biteCheckDir.resolve("config.toml");
+            if (Files.isRegularFile(file)) {
+                Object value = io.github.bitecheckpz.core.Toml.parse(file).get("server_countdown_seconds");
+                return value == null ? null : String.valueOf(value);
+            }
+        } catch (IOException | io.github.bitecheckpz.core.Toml.TomlException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot read the countdown: " + e);
+        }
+        return null;
+    }
+
     // --- marketplace ---------------------------------------------------------------------------------
 
     /** -Djumpstart.cloudUrl, else cloud_url in BiteCheck's config.toml, else BiteCheck's default. */

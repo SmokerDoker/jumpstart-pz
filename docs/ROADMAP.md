@@ -54,14 +54,14 @@ in-process restart of the game's start phases) or *restart*.
 
 ## 4. Multiplayer
 
-- [ ] Download in the background, pause only when everybody is ready (today the game pauses at once)
-- [ ] A real server pause with timeouts suspended (today only the clients pause)
-- [ ] Two-phase switch with rollback
+- [x] Download in the background, pause only when everybody is ready
+- [x] A real server pause (the world stops like on an empty server with PauseEmpty; the network runs on)
+- [x] Two-phase switch with rollback (the server switches first; if it cannot, nobody changes anything)
 - [ ] Players who join during a switch wait and get the new manifest
 - [ ] Checksums compared after a switch, including the game's Lua checksum for live-installed files
 - [ ] Check the manifest on every join and fetch missing mods
 - [ ] The server compares its players' Java mod hashes (BiteCheck's point 5 against manipulated clients)
-- [ ] Countdown configurable (fixed at 180 s today)
+- [x] Countdown configurable (`server_countdown_seconds`, see kit/SERVER.md)
 - [ ] Emergency switch-off from the server
 - [ ] Save snapshots on servers
 - [ ] Workshop items with several mods (the server takes only the first today)

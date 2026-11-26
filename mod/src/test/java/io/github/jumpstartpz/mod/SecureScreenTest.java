@@ -3,6 +3,7 @@ package io.github.jumpstartpz.mod;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -660,11 +661,15 @@ class SecureScreenTest {
         screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar", "workshop", "",
                 "seconds", "60", "by", "admin", "yours", "0"));
         frame();
-        assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode(), "the server opened the screen and the player is asked");
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "the game goes on, nothing pops up over it");
+        assertFalse(link.paused);
+        assertTrue(game.drew("Jumpstart: admin wants to load the server's version Unknown for everybody. Ctrl+Shift+J to answer ("));
+        now += SecureScreen.CONSENT_DELAY_MS; // a while later the player opens Jumpstart
+        openScreen();
+        assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode(), "the player is asked");
         assertEquals(SecureScreen.Tab.SERVER, screen.tab());
-        assertTrue(link.paused);
         assertTrue(game.drew("Admin admin changes a mod for everybody"));
-        tap(SecureScreen.KEY_J); // too early
+        tap(SecureScreen.KEY_J); // too early: the delay starts when the question shows
         assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode());
         tap(SecureScreen.KEY_N);
         assertEquals("failed {mod=Unknown, reason=the player said no, token=T}", link.sent.get(link.sent.size() - 1));
@@ -673,7 +678,6 @@ class SecureScreenTest {
         screen.onServerCommand("done", Map.of("action", "update", "mod", "Unknown", "ok", "1", "message", ""));
         frame();
         assertFalse(link.paused);
-        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "the screen the server opened closes again");
     }
 
     @Test
@@ -684,6 +688,7 @@ class SecureScreenTest {
         screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar", "workshop", "",
                 "seconds", "60", "by", "admin", "yours", "0"));
         frame();
+        openScreen();
         now += SecureScreen.CONSENT_DELAY_MS;
         tap(SecureScreen.KEY_J); // agrees to the admin's change ...
         frame();
@@ -699,10 +704,15 @@ class SecureScreenTest {
         assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "the admin who started it is not asked to agree, BiteCheck asks");
         now += SecureScreen.FIRST_DELAY_MS;
         tap(SecureScreen.KEY_J);
-        assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
+        assertTrue(actions.calls.isEmpty(), "phase 1 changes nothing");
         assertEquals("ready {mod=Unknown, sha=unknown.jar, token=T}", link.sent.get(link.sent.size() - 1));
-        tap(SecureScreen.KEY_ESCAPE);
-        assertEquals(SecureScreen.Mode.LIST, screen.mode(), "stays open until the server says done");
+
+        screen.onServerCommand("abort", Map.of("action", "update", "mod", "Unknown", "ok", "0", "message", "server: FAILED no"));
+        frame();
+        assertNull(screen.session().update);
+        screen.onServerCommand("commit", Map.of("action", "update", "mod", "Unknown", "sha", "unknown.jar"));
+        frame(); settle();
+        assertTrue(actions.calls.isEmpty(), "after an abort nothing is done, not even on a late commit");
     }
 
     @Test
@@ -735,17 +745,24 @@ class SecureScreenTest {
         screen.onServerCommand("prepare", Map.of("action", "install", "mod", "LuaMod", "sha", "", "workshop", "201",
                 "java", "0", "seconds", "60", "by", "admin", "yours", "0"));
         frame();
+        openScreen();
         assertEquals(SecureScreen.Mode.SERVER_CONSENT, screen.mode());
         now += SecureScreen.CONSENT_DELAY_MS;
         tap(SecureScreen.KEY_J);
+        tap(SecureScreen.KEY_ESCAPE); // back to the game while Steam works
         frame();
         assertEquals(List.of(201L), actions.workshop.subscribed, "Steam brings the item");
         assertTrue(actions.luaLoaded.isEmpty(), "nothing loads before Steam has it");
         actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
         now += 2500;
         frame(); settle();
-        assertEquals(List.of("server:LuaMod"), actions.luaLoaded, "its Lua joins the running game");
+        assertTrue(actions.luaLoaded.isEmpty(), "nothing loads before everybody is ready");
         assertEquals("ready {mod=LuaMod, sha=, token=T}", link.sent.get(link.sent.size() - 1));
+        assertTrue(game.drew("Jumpstart: ready for the server's change; waiting for the other players"));
+        screen.onServerCommand("commit", Map.of("action", "install", "mod", "LuaMod", "sha", ""));
+        frame(); settle();
+        assertEquals(List.of("server:LuaMod"), actions.luaLoaded, "its Lua joins the running game");
+        assertEquals("applied {mod=LuaMod, token=T}", link.sent.get(link.sent.size() - 1));
     }
 
     @Test
@@ -759,12 +776,21 @@ class SecureScreenTest {
                 "java", "1", "seconds", "60", "by", "me", "yours", "1"));
         frame();
         frame();
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "the game goes on: the question waits for the player");
+        assertTrue(game.drew("Jumpstart: BiteCheck has a question about Unknown. Ctrl+Shift+J to answer ("));
+        assertFalse(link.paused);
+        openScreen();
         assertEquals(SecureScreen.Mode.CONFIRM_ONCE, screen.mode(), "BiteCheck asks about the unknown jar");
         now += SecureScreen.FIRST_DELAY_MS;
         tap(SecureScreen.KEY_J);
+        assertTrue(actions.calls.isEmpty(), "phase 1 changes nothing");
+        assertEquals("ready {mod=Unknown, sha=unknown.jar, token=T}", link.sent.get(link.sent.size() - 1));
+
+        screen.onServerCommand("commit", Map.of("action", "install", "mod", "Unknown", "sha", "unknown.jar"));
+        frame(); settle();
         assertEquals(List.of("install Unknown CONFIRMED"), actions.calls);
         assertEquals(List.of("server:Unknown"), actions.luaLoaded, "then its Lua part");
-        assertEquals("ready {mod=Unknown, sha=unknown.jar, token=T}", link.sent.get(link.sent.size() - 1));
+        assertEquals("applied {mod=Unknown, token=T}", link.sent.get(link.sent.size() - 1));
     }
 
     @Test
@@ -786,8 +812,32 @@ class SecureScreenTest {
         screen.onServerCommand("prepare", Map.of("action", "remove", "mod", "Minimap", "sha", "", "workshop", "201",
                 "java", "0", "seconds", "60", "by", "me", "yours", "1"));
         frame();
-        assertEquals(List.of("server:Minimap"), actions.unloaded, "its Lua stops here too");
+        assertTrue(actions.unloaded.isEmpty(), "nothing changes before everybody is ready");
         assertEquals("ready {mod=Minimap, sha=, token=T}", link.sent.get(link.sent.size() - 1));
+        screen.onServerCommand("commit", Map.of("action", "remove", "mod", "Minimap", "sha", ""));
+        frame(); settle();
+        assertEquals(List.of("server:Minimap"), actions.unloaded, "its Lua stops here too");
+        assertEquals("applied {mod=Minimap, token=T}", link.sent.get(link.sent.size() - 1));
+    }
+
+    @Test
+    void aVerifiedServerJarGetsReadyWithoutInterruptingTheGame() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "update", "mod", "Verified", "sha", "verified.jar", "workshop", "",
+                "seconds", "60", "by", "me", "yours", "1"));
+        frame();
+        frame(); settle();
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "BiteCheck has no question: nothing opens");
+        assertFalse(link.paused);
+        assertTrue(actions.calls.isEmpty());
+        assertEquals("ready {mod=Verified, sha=verified.jar, token=T}", link.sent.get(link.sent.size() - 1));
+        now += 61_000; // the deadline passes while the server still waits for others: nothing more to do here
+        frame();
+        assertEquals("ready {mod=Verified, sha=verified.jar, token=T}", link.sent.get(link.sent.size() - 1));
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode());
     }
 
     @Test
@@ -799,10 +849,19 @@ class SecureScreenTest {
         screen.onServerCommand("prepare", Map.of("action", "off", "mod", "Verified", "sha", "s", "workshop", "",
                 "seconds", "60", "by", "admin", "yours", "0"));
         frame();
+        openScreen();
         now += SecureScreen.CONSENT_DELAY_MS;
         tap(SecureScreen.KEY_J);
-        assertEquals("off", actions.states.get("Verified"));
+        assertEquals("on", actions.states.get("Verified"), "nothing changes before everybody is ready");
         assertEquals("ready {mod=Verified, sha=s, token=T}", link.sent.get(link.sent.size() - 1));
+        screen.onServerCommand("commit", Map.of("action", "off", "mod", "Verified", "sha", "s"));
+        frame(); settle();
+        assertTrue(link.paused, "paused while it changes");
+        assertEquals("off", actions.states.get("Verified"));
+        assertEquals("applied {mod=Verified, token=T}", link.sent.get(link.sent.size() - 1));
+        screen.onServerCommand("done", Map.of("action", "off", "mod", "Verified", "ok", "1", "message", ""));
+        frame();
+        assertFalse(link.paused);
     }
 
     @Test

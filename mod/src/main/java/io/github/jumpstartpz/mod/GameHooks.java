@@ -134,6 +134,21 @@ final class GameHooks {
                 .type(named("zombie.network.GameServer")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .method(named("receiveClientCommand"), (t, m, mv, c, p, w, r) -> redirect(mv, TRIGGER4, "serverEvent"))))
+                // a real pause while a mod changes for everybody: the world stops like on an empty
+                // server with PauseEmpty (IngameState.update sets paused, then skips the world)
+                .type(named("zombie.gameStates.IngameState")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("update").and(takesArguments(0)), (t, m, mv, c, p, w, r) -> new MethodVisitor(Opcodes.ASM9, mv) {
+                                    @Override
+                                    public void visitFieldInsn(int opcode, String owner, String name, String descriptor) {
+                                        if (opcode == Opcodes.PUTFIELD && owner.equals("zombie/gameStates/IngameState")
+                                                && name.equals("paused") && descriptor.equals("Z")) {
+                                            // stack: this, value -> this, Net.worldPaused(value)
+                                            super.visitMethodInsn(Opcodes.INVOKESTATIC, NET, "worldPaused", "(Z)Z", false);
+                                        }
+                                        super.visitFieldInsn(opcode, owner, name, descriptor);
+                                    }
+                                })))
                 .type(named("zombie.network.ServerMap")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .method(named("preupdate").and(takesArguments(0)), (t, m, mv, c, p, w, r) -> new MethodVisitor(Opcodes.ASM9, mv) {
