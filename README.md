@@ -62,9 +62,11 @@ Press **Ctrl+Shift+J** in the game (main menu or a running save) to open Jumpsta
 The server (dedicated, or a game you host) runs Jumpstart too, with a channel between server and
 players that Lua can neither read nor fake. The screen's **Server** tab compares the server's Java mods
 with yours. Nobody switches Java mods alone, not even an admin: an admin installs, updates, switches
-or removes a mod for everybody at once. The game pauses, every player has to agree, every client gets
-exactly the server's jar and BiteCheck checks it on the player's computer; whoever says no or is not
-ready within 3 minutes is disconnected, then the server follows. Dedicated servers:
+or removes a mod for everybody at once. First everybody gets ready while the game goes on: every player
+has to agree, every client gets exactly the server's jar and BiteCheck checks it on the player's
+computer. Then the server stops its world for a moment, switches first, and the players follow; if the
+server cannot, nobody changes anything. Whoever says no or is not ready in time (3 minutes, adjustable)
+is disconnected. Dedicated servers:
 [kit/SERVER.md](kit/SERVER.md).
 
 ## Install

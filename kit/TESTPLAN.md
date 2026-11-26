@@ -62,15 +62,17 @@ Admin…“. Bitte bei jedem einmal ausprobieren.
 Der Host (Admin) wählt im Reiter **Server** die Java-Mod: **Enter** = Version des Servers für alle
 laden, **A** = für alle aus- bzw. einschalten. Dann bei allen anderen:
 
-1. Das Spiel pausiert, der Jumpstart-Bildschirm geht auf: „Admin … ändert eine Java-Mod für alle“
-   mit Restzeit (3 Minuten). **J** (nach 2 Sekunden) = einverstanden, **N** = nein.
+1. Das Spiel läuft weiter. Oben links erscheint eine Zeile „… will … für alle. Strg+Umschalt+J zum
+   Antworten“ mit Restzeit (3 Minuten). Jumpstart öffnen: „Admin … ändert eine Mod für alle“.
+   **J** (nach 2 Sekunden) = einverstanden, **N** = nein. Mit Esc geht es zurück ins Spiel.
 2. Beim Laden findet Jumpstart genau die Version des Servers. Ist sie nicht von BiteCheck geprüft,
    fragt der Bildschirm zusätzlich (J erst nach 3 Sekunden). Antworten:
-   - Spieler A: **J** → lädt, „warte auf die anderen Spieler“.
+   - Spieler A: **J** → „Bereit, noch nichts geändert; warte auf die anderen Spieler“.
    - Spieler B: **N** → wird am Ende vom Server getrennt (Grund: „the player said no“).
    - Spieler C: gar nicht antworten → nach 3 Minuten getrennt („not ready in time“).
-3. Wenn alle geantwortet haben (oder die Zeit um ist), lädt der Server die Mod selbst, der
-   Bildschirm schließt sich, das Spiel läuft weiter.
+3. Wenn alle geantwortet haben (oder die Zeit um ist), steht die Welt kurz still (auch auf dem
+   Server: Zombies und Uhrzeit bleiben stehen). Der Server schaltet zuerst um, dann alle Spieler
+   („Server-Änderung für alle …“). Danach läuft das Spiel weiter, mit der neuen Version.
 
 Danach einmal ohne N/Warten wiederholen: Alle drücken J → niemand wird getrennt. Und einmal **A**
 (ausschalten für alle) und wieder **A** (einschalten).
@@ -84,7 +86,8 @@ Danach einmal ohne N/Warten wiederholen: Alle drücken J → niemand wird getren
 
 ## Bekannte Grenzen dieser Testversion
 
-- Die Pause ist dieselbe wie beim Speichern des Servers: Die Clients halten an. Ob die Welt auf dem
-  Server dabei ganz stillsteht, ist Teil des Tests.
+- Die Pause beim Umschalten nutzt dieselbe Stelle wie „PauseEmpty“ auf einem leeren Server. Ob die
+  Welt dabei wirklich stillsteht (Zombies, Uhrzeit) und niemand wegen Zeitüberschreitung getrennt
+  wird, ist Teil des Tests.
 - Ein Update holt genau die Datei, die auf dem Server liegt. Beim Hosten ist das die Datei auf dem
   PC des Hosts; ein Workshop-Update holt der Host vorher im Marktplatz („Update verfügbar“).
