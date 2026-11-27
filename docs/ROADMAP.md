@@ -114,7 +114,7 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Join: skip the game's second load of all mods when the menu already has the server's list (research; deep in the game's loading)
 - [ ] Slow PCs lose the connection while the game loads its tiles on join (game side)
 - [ ] A list of mods tested with Jumpstart
-- [ ] An in-game test that gets into a save by itself (today the tests wait for a click)
+- [x] An in-game test that gets into a save by itself: `tools/lua/new-game.lua` starts a new sandbox game from the main menu through the test jar's Lua server (as the menu's New Game and the game's debug scenarios do); `tools/cleanremovaltest.ps1` and `tools/startmodtest.ps1` use it and wait for a person only if it fails. First run 2026-11-28: `cleanremovaltest.ps1` fully by itself, 23 of 23 checks OK in the real game (snapshot, a Lua mod on, off, on, uninstalled; its file parked and back)
 - [ ] Self-update of the running core; releases checked through the BiteCheck registry
 
 ## Tests in the real game still to do
