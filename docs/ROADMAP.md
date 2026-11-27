@@ -56,7 +56,7 @@ in-process restart of the game's start phases) or *restart*.
 - [x] The same check for the Java side: every call into a switched-off mod's code is caught by the trip wire and counted; the details say when something still calls it
 - [ ] Move structural class changes out (nestmates, invokedynamic)
 - [x] Registration journal: entries a mod adds to the game's tables while it loads live (a key binding in `keyBinding`, list and lookup entries) go when it is switched off; lists close up (`table.remove`), the entry comes back at the end
-- [ ] Registrations a mod made in a save it came with (no record from before it loaded), and values it changed in existing entries
+- [x] Registrations a mod made in a save it came with, and values it changed in existing entries (live and with the save): the start record keeps what a mod's running code writes into a global table; lists count by value, so an entry inserted at the front goes and the entries it moved stay; a value the game changed again since stays without a word. Not covered: a registration a game function makes for the mod (the innermost Lua function counts), entries two tables down
 - [x] Files a mod created wait in `Zomboid/jumpstart/parked/<mod>/` while it is off and come back when it is on (never over a new file); uninstalling archives them
 - [x] Java writes into instance fields of game objects go back when the mod is switched off (per object, only where the field still holds the mod's value; not in the mod's constructors)
 - [ ] ModData on single objects; placeholder items for items of a removed mod

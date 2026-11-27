@@ -208,10 +208,6 @@ final class LuaLive {
             reloadAnimations(game, restart, live, errors);
             return new Result(Status.NO_LUA, 0, errors, restart, List.of(), live);
         }
-        Set<String> modFiles = new java.util.HashSet<>();
-        for (String file : files.values()) {
-            modFiles.add(file.replace('\\', '/').toLowerCase(Locale.ROOT));
-        }
         LuaJournal.Snapshot globalsBefore = LuaJournal.snapshot(game);
         Map<String, List<Object>> before = game.handlers(START_EVENTS);
         for (String file : lua) {
@@ -250,7 +246,7 @@ final class LuaLive {
         afterLua(game, side, scriptsLive, serverLua, errors);
         reloadAnimations(game, restart, live, errors);
         // after the missed start events too: handlers often set up globals then
-        List<LuaJournal.Change> changes = LuaJournal.diff(game, globalsBefore, LuaJournal.snapshot(game), modFiles::contains);
+        List<LuaJournal.Change> changes = LuaJournal.diff(globalsBefore, LuaJournal.snapshot(game));
         return new Result(Status.LOADED, lua.size(), errors, restart, changes, live);
     }
 

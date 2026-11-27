@@ -72,6 +72,12 @@ public class LoadGameClasses {
             "zombie.core.skinnedmodel.ModelManager#instance", "zombie.core.skinnedmodel.ModelManager.loadModAnimations()",
             "zombie.Lua.LuaManager$GlobalObject.refreshAnimSets(boolean)", "zombie.Lua.LuaManager$GlobalObject.reloadActionGroups()",
             "zombie.core.skinnedmodel.advancedanimation.AdvancedAnimator.load()", "zombie.core.skinnedmodel.advancedanimation.AdvancedAnimator.getChecksum()",
+            // Lua's globals and the running file (LuaStartJournal, LuaSource, ReflectiveLuaGame)
+            "zombie.Lua.LuaManager#env", "zombie.Lua.LuaManager#thread", "se.krka.kahlua.j2se.KahluaTableImpl#delegate",
+            "se.krka.kahlua.j2se.KahluaTableImpl.rawget(java.lang.Object)",
+            "se.krka.kahlua.vm.LuaClosure#prototype", "se.krka.kahlua.vm.Prototype#filename",
+            "se.krka.kahlua.vm.KahluaThread#currentCoroutine", "se.krka.kahlua.vm.Coroutine.getCallframeTop()",
+            "se.krka.kahlua.vm.Coroutine.getCallFrame(int)", "se.krka.kahlua.vm.LuaCallFrame#closure",
         };
         ClassLoader cl = LoadGameClasses.class.getClassLoader();
         java.util.List<String> missing = new java.util.ArrayList<>();

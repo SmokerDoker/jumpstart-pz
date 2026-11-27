@@ -13,16 +13,20 @@ import java.util.function.Predicate;
  * a snapshot of the global table (its entries and the direct entries of the tables in it, where
  * mods replace functions such as {@code ISInventoryPane.render}) before and after the mod's files
  * ran. Kept are new globals, functions the mod's files define that replaced something or were
- * added to a table, and entries the mod added to the game's tables (registrations: a key binding in
- * {@code keyBinding}, an entry in a list or a lookup table). Values it changed in existing entries
- * stay: those are the game's state.
+ * added to a table, entries the mod added to the game's tables (registrations: a key binding in
+ * {@code keyBinding}, an entry in a list or a lookup table), and values it changed in existing
+ * entries (a setting in a game table).
  *
- * <p>An entry added to a list (key 1, 2, 3, ...) goes like {@code table.remove}: the entries after it
- * move up, so {@code ipairs} does not stop at a hole; it comes back at the end of the list.
+ * <p>Lists (keys 1, 2, 3, ...) count by value: what is in the list afterwards and was not before is
+ * what the mod added, wherever it went ({@code table.insert} at a position moves the entries after
+ * it; those moves are no changes of their own). Such an entry goes like {@code table.remove}: the
+ * entries after it move up, so {@code ipairs} does not stop at a hole; it comes back at the end.
  *
  * <p>Undo and redo only touch an entry that still holds what the mod (or, for redo, the game) put
- * there. If another mod replaced it again since (for example by wrapping the mod's function), it
- * stays and is reported: forcing it back would break that other mod.
+ * there; numbers, strings and booleans compare by value. If another mod replaced it again since
+ * (for example by wrapping the mod's function), it stays and is reported: forcing it back would
+ * break that other mod. A changed value the game changed again since stays without a word: it is
+ * the game's state now.
  */
 final class LuaJournal {
 
@@ -100,33 +104,94 @@ final class LuaJournal {
     }
 
     /**
-     * What changed between the snapshots that the mod did: new globals (any value), functions from
-     * the mod's files that are new or replaced something, at the top level or one table down, and
-     * entries added one table down (only the mod ran between the snapshots). Changed values in
-     * existing entries (game counters, data) are the game's own and stay out.
+     * What changed between the snapshots (only the mod ran in between): at the top level and one
+     * table down, new entries, replaced functions and changed values; in lists the values the mod
+     * added. Entries removed and entries inside tables the mod added itself are not changes of their
+     * own (going with that table is enough).
      */
-    static List<Change> diff(LuaLive.Game game, Snapshot before, Snapshot after, Predicate<String> modFile) {
+    static List<Change> diff(Snapshot before, Snapshot after) {
         List<Change> changes = new ArrayList<>();
+        Map<Object, Boolean> lists = new IdentityHashMap<>();
         for (Map.Entry<Ref, Object> e : after.values.entrySet()) {
             Ref ref = e.getKey();
             Object now = e.getValue();
             Object old = before.get(ref.table(), ref.key());
-            if (old == now) {
+            if (same(old, now)) {
                 continue;
             }
             boolean top = ref.table() == after.env;
             if (!top && !before.names.containsKey(ref.table())) {
                 continue; // inside a table the mod added: going with that table is enough
             }
-            boolean fromMod = modFile.test(game.sourceOf(now));
-            if (old == ABSENT || fromMod) {
-                String path = top ? String.valueOf(ref.key())
-                        : after.names.getOrDefault(ref.table(), "?") + "." + ref.key();
-                changes.add(new Change(ref.table(), ref.key(), path, old, now));
+            if (!top && index(ref.key()) > 0) {
+                lists.put(ref.table(), true); // by value below
+                continue;
+            }
+            String path = top ? String.valueOf(ref.key())
+                    : after.names.getOrDefault(ref.table(), "?") + "." + ref.key();
+            changes.add(new Change(ref.table(), ref.key(), path, old, now));
+        }
+        for (Object table : lists.keySet()) {
+            List<Object> was = listOf(before, table);
+            List<Object> is = listOf(after, table);
+            String name = after.names.getOrDefault(table, "?");
+            for (int i : added(was, is)) {
+                Object key = (double) (i + 1);
+                changes.add(new Change(table, key, name + "." + key, ABSENT, is.get(i)));
             }
         }
         changes.sort((a, b) -> a.path().compareTo(b.path())); // a stable order for messages and tests
         return changes;
+    }
+
+    /** A table's list part (keys 1, 2, ... up to the first nil) in a snapshot. */
+    private static List<Object> listOf(Snapshot s, Object table) {
+        List<Object> list = new ArrayList<>();
+        for (long i = 1; ; i++) {
+            Object v = s.get(table, (double) i);
+            if (v == ABSENT) {
+                return list;
+            }
+            list.add(v);
+        }
+    }
+
+    /**
+     * Where in {@code after} the values are that {@code before} did not have (by identity, each
+     * occurrence counted): what was added to a list, wherever it went.
+     */
+    static List<Integer> added(List<Object> before, List<Object> after) {
+        Map<Object, Integer> left = new IdentityHashMap<>();
+        for (Object v : before) {
+            left.merge(v, 1, Integer::sum);
+        }
+        List<Integer> added = new ArrayList<>();
+        for (int i = 0; i < after.size(); i++) {
+            Object v = after.get(i);
+            Integer n = left.get(v);
+            if (n != null && n > 0) {
+                left.put(v, n - 1);
+            } else {
+                added.add(i);
+            }
+        }
+        return added;
+    }
+
+    /** The same Lua value: the same object, or equal numbers, strings or booleans (Lua compares those by value). */
+    static boolean same(Object a, Object b) {
+        if (a == b) {
+            return true;
+        }
+        if (a instanceof Number x && b instanceof Number y) {
+            return x.doubleValue() == y.doubleValue();
+        }
+        return (a instanceof String || a instanceof Boolean) && a.equals(b);
+    }
+
+    /** A changed value of an existing entry that is no function of a mod: the game's state once changed again. */
+    private static boolean changedData(LuaLive.Game game, Change c) {
+        return c.before() != ABSENT && game.sourceOf(c.after()) == null;
     }
 
     /** Takes the changes back (newest first), each only if it still holds the mod's value. */
@@ -145,10 +210,10 @@ final class LuaJournal {
                 }
                 continue;
             }
-            if (game.get(c.table(), c.key()) == c.after()) {
+            if (same(game.get(c.table(), c.key()), c.after())) {
                 game.set(c.table(), c.key(), c.before() == ABSENT ? null : c.before());
                 done++;
-            } else {
+            } else if (!changedData(game, c)) {
                 kept.add(c.path());
             }
         }
@@ -173,10 +238,10 @@ final class LuaJournal {
             }
             Object now = game.get(c.table(), c.key());
             Object expected = c.before() == ABSENT ? null : c.before();
-            if (now == expected) {
+            if (same(now, expected)) {
                 game.set(c.table(), c.key(), c.after());
                 done++;
-            } else {
+            } else if (!changedData(game, c)) {
                 kept.add(c.path());
             }
         }
