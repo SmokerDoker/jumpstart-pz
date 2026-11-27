@@ -474,6 +474,26 @@ class SecureScreenTest {
     }
 
     @Test
+    void aLibraryAnotherModBroughtInAnotherVersionIsShown() {
+        actions.clashes.put("Verified", java.util.List.of(new Actions.ClassClash("OWN_COPY", "OtherMod", 3, "libshared.Lib")));
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Library also in OtherMod, in another version (libshared.Lib, +2): this mod uses its own copy."));
+    }
+
+    @Test
+    void theForksClashLinesAreRead() {
+        java.util.List<Actions.ClassClash> clashes = GameActions.parseClashes(
+                "own-copy\tOtherMod\t3\tlibshared.Lib\tjslib1.\nrequired\tBaseMod\t1\tlib.X\t\nnew-kind\tX\t1\ty\t");
+        assertEquals(java.util.List.of(new Actions.ClassClash("OWN_COPY", "OtherMod", 3, "libshared.Lib"),
+                new Actions.ClassClash("REQUIRED", "BaseMod", 1, "lib.X")), clashes, "an unknown kind is left out");
+        assertTrue(GameActions.parseClashes("").isEmpty());
+        assertTrue(GameActions.parseClashes(null).isEmpty());
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -1638,6 +1658,8 @@ class SecureScreenTest {
         @Override public boolean canReloadSave() { return singlePlayer; }
         @Override public String reloadSave() { reloads++; return null; }
         final Map<String, Long> held = new HashMap<>();
+        final Map<String, java.util.List<Actions.ClassClash>> clashes = new HashMap<>();
+        @Override public java.util.List<Actions.ClassClash> classClashes(String modId) { return clashes.getOrDefault(modId, java.util.List.of()); }
         @Override public long callsWhileOff(String modId) { return held.getOrDefault(modId, 0L); }
 
         @Override

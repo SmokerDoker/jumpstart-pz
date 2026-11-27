@@ -2744,6 +2744,13 @@ public final class SecureScreen {
             if (held > 0) {
                 y = wrapped(GameScreen.Font.SMALL, tx, y, tw, String.format(Locale.ROOT, texts.get("java.held"), held), 1f, 0.8f, 0.3f);
             }
+            for (Actions.ClassClash c : actions.classClashes(mod.id())) {
+                String more = c.count() > 1 ? ", +" + (c.count() - 1) : "";
+                float[] col = c.kind().equals("OWN_COPY") ? new float[] {0.5f, 0.8f, 1f}
+                        : c.kind().equals("REQUIRED") ? new float[] {1f, 0.8f, 0.3f} : new float[] {1f, 0.45f, 0.4f};
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, String.format(Locale.ROOT, texts.get("clash." + c.kind()),
+                        c.otherMod(), c.example(), more), col[0], col[1], col[2]);
+            }
             if (!mod.id().equals(SELF) && actions.updateReady(mod.java())) {
                 y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(actions.verifiedUpdatesOnly() ? "updates.readyVerified" : "updates.ready"),
                         0.5f, 0.8f, 1f);

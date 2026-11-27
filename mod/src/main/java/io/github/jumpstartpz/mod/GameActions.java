@@ -1115,6 +1115,42 @@ final class GameActions implements Actions {
     }
 
     @Override
+    public List<ClassClash> classClashes(String modId) {
+        return parseClashes(zombieBuddy.classClashes(modId));
+    }
+
+    /** The fork's lines: kind, other mod, count, one class, prefix, separated by tabs. */
+    static List<ClassClash> parseClashes(String text) {
+        List<ClassClash> clashes = new ArrayList<>();
+        if (text == null || text.isBlank()) {
+            return clashes;
+        }
+        for (String line : text.split("\n")) {
+            String[] f = line.split("\t", -1);
+            if (f.length < 4) {
+                continue;
+            }
+            String kind = switch (f[0]) {
+                case "own-copy" -> "OWN_COPY";
+                case "required" -> "REQUIRED";
+                case "own-package" -> "OWN_PACKAGE";
+                default -> null;
+            };
+            if (kind == null) {
+                continue;
+            }
+            int count;
+            try {
+                count = Integer.parseInt(f[2].strip());
+            } catch (NumberFormatException e) {
+                count = 0;
+            }
+            clashes.add(new ClassClash(kind, f[1], count, f[3]));
+        }
+        return clashes;
+    }
+
+    @Override
     public boolean canReloadSave() {
         return luaGame.inGame() && !luaGame.multiplayer() && !luaGame.isServer();
     }
