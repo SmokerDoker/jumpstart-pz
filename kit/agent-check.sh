@@ -95,6 +95,9 @@ public class LoadGameClasses {
             "zombie.inventory.InventoryItem.setCustomName(boolean)", "zombie.inventory.InventoryItem.getModData()",
             "zombie.inventory.InventoryItem.getFullType()", "zombie.inventory.ItemContainer.getItems()",
             "zombie.inventory.ItemContainer.Remove(zombie.inventory.InventoryItem)", "zombie.core.Translator.getLanguage()",
+            "zombie.network.GameServer#server",
+            "zombie.network.GameServer.sendAddItemToContainer(zombie.inventory.ItemContainer,zombie.inventory.InventoryItem)",
+            "zombie.network.GameServer.sendRemoveItemFromContainer(zombie.inventory.ItemContainer,zombie.inventory.InventoryItem)",
         };
         ClassLoader cl = LoadGameClasses.class.getClassLoader();
         java.util.List<String> missing = new java.util.ArrayList<>();
