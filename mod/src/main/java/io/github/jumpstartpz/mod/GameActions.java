@@ -1101,6 +1101,32 @@ final class GameActions implements Actions {
         return blocked;
     }
 
+    @Override
+    public String crashReport() {
+        StringBuilder mods = new StringBuilder("id\tkind\tstate\tworkshop\tjar sha256 (running)\tBiteCheck\tcrash protection\tjar\n");
+        for (InstalledMod m : installedMods()) {
+            String sha = m.java() == null ? "" : loadedHash(m.java());
+            Verifier.Status status = sha.isEmpty() ? null : indexStatus(sha);
+            mods.append(m.id()).append('\t').append(kindOf(m)).append('\t').append(m.java() == null ? luaState(m.id()) : stateOf(m.id()))
+                    .append('\t').append(m.workshopId() > 0 ? m.workshopId() : "").append('\t').append(sha).append('\t')
+                    .append(status == null ? "" : status.name().toLowerCase(Locale.ROOT)).append('\t')
+                    .append(m.java() == null ? "" : guardStatus(m.id()).replace('\t', ' ')).append('\t')
+                    .append(m.java() == null ? "" : m.java().jar()).append('\n');
+        }
+        String guard;
+        try {
+            guard = guardEvents("0");
+        } catch (RuntimeException e) {
+            guard = "cannot read: " + e;
+        }
+        try {
+            Path gameDir = Path.of(System.getProperty("user.dir", "."));
+            return "OK " + CrashReport.write(Main.cacheDir(), gameDir, mods.toString(), guard);
+        } catch (IOException | RuntimeException e) {
+            return "cannot write the report: " + e;
+        }
+    }
+
     /** Per jar and its last change: its hash (an update check hashes each jar once). */
     private final Map<String, String> diskHashes = new java.util.concurrent.ConcurrentHashMap<>();
 

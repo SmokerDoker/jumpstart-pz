@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -46,6 +47,8 @@ public final class InstallerMain {
         Optional<Path> zomboidDir = Optional.empty();
         Optional<String> agentArgs = Optional.empty();
         Optional<String> systemd = Optional.empty();
+        Optional<String> restoreSnapshot = Optional.empty();
+        boolean listSnapshots = false;
         boolean closeSteam = false;
         boolean autoUpdate = true;
         boolean force = false;
@@ -62,6 +65,8 @@ public final class InstallerMain {
                 case "--zomboid-dir" -> zomboidDir = Optional.of(Path.of(value(args, ++i)));
                 case "--agent-args" -> agentArgs = Optional.of(value(args, ++i));
                 case "--systemd" -> systemd = Optional.of(value(args, ++i));
+                case "--snapshots" -> listSnapshots = true;
+                case "--restore-snapshot" -> restoreSnapshot = Optional.of(value(args, ++i));
                 case "--headless" -> headless = true;
                 case "--close-steam" -> closeSteam = true;
                 case "--no-auto-update" -> autoUpdate = false;
@@ -85,6 +90,10 @@ public final class InstallerMain {
         if (serverDir.isPresent()) {
             Path data = zomboidDir.orElse(Path.of(System.getProperty("user.home"), "Zomboid"));
             ServerSetup.Options o = new ServerSetup.Options(serverDir.get(), name, data, agentArgs, headless);
+            if (listSnapshots || restoreSnapshot.isPresent()) {
+                System.exit(snapshots(o, restoreSnapshot, t));
+                return;
+            }
             System.exit(server(o, "uninstall".equals(action), update, payloadDir, systemd, t));
             return;
         }
@@ -125,6 +134,9 @@ public final class InstallerMain {
                   --headless         no console: policy=deny-new (new Java mods stay off)
                   --update           only if a newer signed release exists (else just repair); for ExecStartPre
                   --systemd UNIT     also a drop-in for this systemd unit that runs --update before every start (root)
+                  --snapshots        list the save snapshots the server took before its changes (needs --name)
+                  --restore-snapshot latest|FILE   put the save back as it was (server stopped; the current
+                                     save folder is kept next to the snapshots)
                   --uninstall        remove it from the server
                 Every install and update also writes StartServer64-Jumpstart.bat / start-server-jumpstart.sh next
                 to the game's start script: start the server with it and a game update through SteamCMD
@@ -279,6 +291,44 @@ public final class InstallerMain {
     }
 
     static final Path SYSTEMD_DIR = Path.of("/etc/systemd/system");
+
+    /** --snapshots / --restore-snapshot: the server's save snapshots. */
+    static int snapshots(ServerSetup.Options o, Optional<String> restore, Texts t) {
+        Consumer<String> log = line -> System.out.println("[Jumpstart] " + line);
+        if (o.name().isEmpty()) {
+            log.accept(t.get("snapshots.name"));
+            return 2;
+        }
+        ServerSnapshots snapshots = new ServerSnapshots(o.zomboidDir(), o.name().get());
+        try {
+            if (restore.isEmpty()) {
+                List<Path> all = snapshots.list();
+                if (all.isEmpty()) {
+                    log.accept(t.get("snapshots.none"));
+                }
+                for (Path p : all) {
+                    log.accept(p.getFileName() + "   " + (Files.size(p) / (1024 * 1024)) + " MB");
+                }
+                return 0;
+            }
+            Optional<Long> running = runningServer(o);
+            if (running.isPresent()) {
+                log.accept(t.get("snapshots.running", running.get()));
+                return 1;
+            }
+            Optional<Path> snapshot = snapshots.find(restore.get());
+            if (snapshot.isEmpty()) {
+                log.accept(t.get("snapshots.notFound", restore.get()));
+                return 1;
+            }
+            Path replaced = snapshots.restore(snapshot.get());
+            log.accept(t.get("snapshots.restored", snapshot.get().getFileName(), replaced == null ? "-" : replaced.toString()));
+            return 0;
+        } catch (IOException | RuntimeException e) {
+            log.accept(t.get("error", describe(e, t)));
+            return 1;
+        }
+    }
 
     /**
      * After an install or update: Jumpstart's start script next to the game's, and with {@code --systemd}

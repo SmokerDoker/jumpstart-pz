@@ -57,6 +57,7 @@ public final class SecureScreen {
     static final int KEY_PAGE_UP = 266;
     static final int KEY_PAGE_DOWN = 267;
     static final int KEY_A = 65;
+    static final int KEY_C = 67;
     static final int KEY_H = 72;
     static final int KEY_J = 74;
     static final int KEY_N = 78;
@@ -978,6 +979,13 @@ public final class SecureScreen {
             selected = 0;
             reload();
             say(texts.get(updatesOnly ? (mods.isEmpty() ? "updates.none" : "updates.only") : "updates.all"), true);
+            return;
+        }
+        if (pressed.contains(KEY_C)) {
+            busy(texts.get("busy.report"), () -> {
+                String r = actions.crashReport();
+                say(r.startsWith("OK ") ? String.format(Locale.ROOT, texts.get("report.done"), r.substring(3)) : r, r.startsWith("OK "));
+            });
             return;
         }
         if (pressed.contains(KEY_H)) {
