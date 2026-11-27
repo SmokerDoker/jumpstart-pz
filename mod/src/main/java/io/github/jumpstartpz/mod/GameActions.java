@@ -658,6 +658,12 @@ final class GameActions implements Actions {
     }
 
     private LuaLive.Result loadLua(String modId, boolean forServer) {
+        if (!forServer) {
+            int back = FileJournal.unpark(modId); // files it created wait while it is off
+            if (back > 0) {
+                System.out.println("[Jumpstart] " + modId + ": " + back + " files it created are back");
+            }
+        }
         ModJournal journal = journals.get(modId);
         if (journal != null && journal.parked()) {
             luaGame.giveBack(journal.parkedHandlers);
@@ -714,6 +720,12 @@ final class GameActions implements Actions {
         }
         Map<String, List<Object>> taken = luaGame.takeHandlers(dirs);
         journal.parkedHandlers = taken;
+        if (!forServer) {
+            int parked = FileJournal.park(modId, dirs); // back when it is switched on
+            if (parked > 0) {
+                System.out.println("[Jumpstart] " + modId + ": " + parked + " files it created are parked");
+            }
+        }
         int windows = luaGame.closeWindows(journal.addedTables(luaGame));
         LuaJournal.Outcome undo = LuaJournal.undo(luaGame, journal.changes);
         if (touchesHotbar(journal.changes, luaTexts(luaGame.modFolders(modId)))) {
@@ -727,7 +739,10 @@ final class GameActions implements Actions {
             List<String> stays = LuaJournal.functionsFrom(luaGame, modFile);
             journal.leftovers = stays.isEmpty() ? "" : "start:" + stays.size() + ":" + LuaJournal.shortList(stays, 5);
         } else {
-            journal.leftovers = "";
+            // the check after switching off: functions from its files the record did not cover (set later,
+            // by a handler, or deeper in a table) are still reachable from the globals
+            List<String> alive = LuaJournal.functionsFrom(luaGame, modFile);
+            journal.leftovers = alive.isEmpty() ? "" : "alive:" + alive.size() + ":" + LuaJournal.shortList(alive, 5);
         }
         int count = taken.values().stream().mapToInt(List::size).sum();
         System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet()
@@ -1087,6 +1102,32 @@ final class GameActions implements Actions {
             }
         }
         return blocked;
+    }
+
+    @Override
+    public String crashReport() {
+        StringBuilder mods = new StringBuilder("id\tkind\tstate\tworkshop\tjar sha256 (running)\tBiteCheck\tcrash protection\tjar\n");
+        for (InstalledMod m : installedMods()) {
+            String sha = m.java() == null ? "" : loadedHash(m.java());
+            Verifier.Status status = sha.isEmpty() ? null : indexStatus(sha);
+            mods.append(m.id()).append('\t').append(kindOf(m)).append('\t').append(m.java() == null ? luaState(m.id()) : stateOf(m.id()))
+                    .append('\t').append(m.workshopId() > 0 ? m.workshopId() : "").append('\t').append(sha).append('\t')
+                    .append(status == null ? "" : status.name().toLowerCase(Locale.ROOT)).append('\t')
+                    .append(m.java() == null ? "" : guardStatus(m.id()).replace('\t', ' ')).append('\t')
+                    .append(m.java() == null ? "" : m.java().jar()).append('\n');
+        }
+        String guard;
+        try {
+            guard = guardEvents("0");
+        } catch (RuntimeException e) {
+            guard = "cannot read: " + e;
+        }
+        try {
+            Path gameDir = Path.of(System.getProperty("user.dir", "."));
+            return "OK " + CrashReport.write(Main.cacheDir(), gameDir, mods.toString(), guard);
+        } catch (IOException | RuntimeException e) {
+            return "cannot write the report: " + e;
+        }
     }
 
     /** Per jar and its last change: its hash (an update check hashes each jar once). */

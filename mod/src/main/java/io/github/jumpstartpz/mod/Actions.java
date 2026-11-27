@@ -176,6 +176,11 @@ interface Actions {
         return List.of();
     }
 
+    /** Writes a report zip (logs, mods, crash protection, system); "OK path" or what went wrong. */
+    default String crashReport() {
+        return "not in the game";
+    }
+
     /** The kept versions of a Java mod, newest first: {hash, label}; "*" marks the one that runs. */
     default List<String[]> versions(ModEntry mod) {
         return List.of();

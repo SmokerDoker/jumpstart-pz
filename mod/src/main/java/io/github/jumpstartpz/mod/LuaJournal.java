@@ -12,8 +12,13 @@ import java.util.function.Predicate;
  * What a mod's Lua changed in Lua's globals while it loaded, so switching it off can take it back:
  * a snapshot of the global table (its entries and the direct entries of the tables in it, where
  * mods replace functions such as {@code ISInventoryPane.render}) before and after the mod's files
- * ran. Kept are new globals, and functions the mod's files define that replaced something or were
- * added to a table.
+ * ran. Kept are new globals, functions the mod's files define that replaced something or were
+ * added to a table, and entries the mod added to the game's tables (registrations: a key binding in
+ * {@code keyBinding}, an entry in a list or a lookup table). Values it changed in existing entries
+ * stay: those are the game's state.
+ *
+ * <p>An entry added to a list (key 1, 2, 3, ...) goes like {@code table.remove}: the entries after it
+ * move up, so {@code ipairs} does not stop at a hole; it comes back at the end of the list.
  *
  * <p>Undo and redo only touch an entry that still holds what the mod (or, for redo, the game) put
  * there. If another mod replaced it again since (for example by wrapping the mod's function), it
@@ -95,9 +100,10 @@ final class LuaJournal {
     }
 
     /**
-     * What changed between the snapshots that the mod did: new globals (any value), and functions
-     * from the mod's files that are new or replaced something, at the top level or one table down.
-     * Other changes (game counters, data tables) are the game's own and stay out.
+     * What changed between the snapshots that the mod did: new globals (any value), functions from
+     * the mod's files that are new or replaced something, at the top level or one table down, and
+     * entries added one table down (only the mod ran between the snapshots). Changed values in
+     * existing entries (game counters, data) are the game's own and stay out.
      */
     static List<Change> diff(LuaLive.Game game, Snapshot before, Snapshot after, Predicate<String> modFile) {
         List<Change> changes = new ArrayList<>();
@@ -113,7 +119,7 @@ final class LuaJournal {
                 continue; // inside a table the mod added: going with that table is enough
             }
             boolean fromMod = modFile.test(game.sourceOf(now));
-            if ((top && old == ABSENT) || fromMod) {
+            if (old == ABSENT || fromMod) {
                 String path = top ? String.valueOf(ref.key())
                         : after.names.getOrDefault(ref.table(), "?") + "." + ref.key();
                 changes.add(new Change(ref.table(), ref.key(), path, old, now));
@@ -129,6 +135,16 @@ final class LuaJournal {
         List<String> kept = new ArrayList<>();
         for (int i = changes.size() - 1; i >= 0; i--) {
             Change c = changes.get(i);
+            if (c.before() == ABSENT && index(c.key()) > 0 && c.table() != null) {
+                long at = find(game, c.table(), c.after());
+                if (at > 0) {
+                    removeAt(game, c.table(), at, c.key());
+                    done++;
+                } else {
+                    kept.add(c.path());
+                }
+                continue;
+            }
             if (game.get(c.table(), c.key()) == c.after()) {
                 game.set(c.table(), c.key(), c.before() == ABSENT ? null : c.before());
                 done++;
@@ -144,6 +160,17 @@ final class LuaJournal {
         int done = 0;
         List<String> kept = new ArrayList<>();
         for (Change c : changes) {
+            if (c.before() == ABSENT && index(c.key()) > 0 && c.table() != null) {
+                if (find(game, c.table(), c.after()) == 0) {
+                    long end = 1;
+                    while (game.get(c.table(), key(c.key(), end)) != null) {
+                        end++;
+                    }
+                    game.set(c.table(), key(c.key(), end), c.after()); // table.insert: at the end
+                }
+                done++;
+                continue;
+            }
             Object now = game.get(c.table(), c.key());
             Object expected = c.before() == ABSENT ? null : c.before();
             if (now == expected) {
@@ -172,6 +199,53 @@ final class LuaJournal {
         }
         paths.sort(null);
         return paths;
+    }
+
+    /** The list index a key stands for (Lua numbers are doubles), or 0 when it is no list index. */
+    static long index(Object key) {
+        if (key instanceof Number n) {
+            double d = n.doubleValue();
+            if (d >= 1 && d == Math.rint(d) && d < 1e9) {
+                return (long) d;
+            }
+        }
+        return 0;
+    }
+
+    /** A key for index {@code i} of the same number type as {@code like}. */
+    private static Object key(Object like, long i) {
+        if (like instanceof Double) {
+            return (double) i;
+        }
+        if (like instanceof Integer) {
+            return (int) i;
+        }
+        return i;
+    }
+
+    /** Where in the list (1..n) the value is, by identity; 0 when it is not in it. */
+    private static long find(LuaLive.Game game, Object table, Object value) {
+        Object like = 1.0;
+        for (long i = 1; i < 1_000_000; i++) {
+            Object v = game.get(table, key(like, i));
+            if (v == null) {
+                return 0;
+            }
+            if (v == value) {
+                return i;
+            }
+        }
+        return 0;
+    }
+
+    /** table.remove(t, at): the entries after it move up one. */
+    private static void removeAt(LuaLive.Game game, Object table, long at, Object like) {
+        long i = at;
+        while (game.get(table, key(like, i + 1)) != null) {
+            game.set(table, key(like, i), game.get(table, key(like, i + 1)));
+            i++;
+        }
+        game.set(table, key(like, i), null);
     }
 
     /** "a, b, c and 4 more" for messages. */

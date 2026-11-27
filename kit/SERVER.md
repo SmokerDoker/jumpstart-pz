@@ -134,8 +134,16 @@ At the start of every change for everybody (not an emergency switch-off), the se
 and copies the save into `<data folder>/jumpstart/snapshots/Multiplayer_<servername>/<time>.zip` (the
 last 5), while the game goes on; step 2 waits for the copy (at most 2 minutes more). Setting:
 `snapshots=auto|on|off` in `<data folder>/jumpstart/settings.properties`; `auto` (the default) skips
-saves of 500 MB or more. To go back: stop the server, move `Saves/Multiplayer/<servername>` away, and
-unzip the snapshot into `Saves/` (the zip holds `Multiplayer/<servername>/...`).
+saves of 500 MB or more. To go back: stop the server, then
+
+```sh
+<server>/jre64/bin/java -jar JumpstartSetup.jar --server <server> --name <servername> --snapshots
+<server>/jre64/bin/java -jar JumpstartSetup.jar --server <server> --name <servername> --restore-snapshot latest
+```
+
+(`--zomboid-dir <data folder>` as for the install; a file name from `--snapshots` instead of `latest`).
+The save it replaces moves next to the snapshots (`replaced-<time>`), nothing is deleted. By hand:
+move `Saves/Multiplayer/<servername>` away and unzip the snapshot into `Saves/`.
 
 ### Emergency switch-off
 
