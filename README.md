@@ -16,22 +16,28 @@ Indie Stone. "Project Zomboid" is a trademark of The Indie Stone.
 
 Press **Ctrl+Shift+J** in the game (main menu or a running save) to open Jumpstart's screen.
 
-- **Installed mods.** Every Java and Lua mod in your mod folders, with its state and BiteCheck's
-  verdict. **A** switches a mod on or off live, **Enter** loads a Java mod or reloads its jar,
-  **U** uninstalls it, **R** updates BiteCheck's index. The detail pane shows what a mod needs and
-  which mods need it.
-- **Libraries.** Search the Steam Workshop for Java and Lua mods without leaving the game. Enter
-  subscribes and downloads the mod through Steam; a Java mod goes through BiteCheck's check, then
-  the mod loads live. If a mod needs other Workshop items that are not installed, Jumpstart offers
-  to install them first.
+- **Installed mods.** Every Java, Lua and data mod in your mod folders, with its state and BiteCheck's
+  verdict (BiteCheck checks Java jars; Lua runs unchecked, as with every Lua mod). **A** switches a mod
+  on or off live, **Enter** loads a Java mod or reloads its jar, **U** uninstalls it, **R** updates
+  BiteCheck's index. The detail pane shows what a mod needs, which mods need it, and Java mods that patch
+  the same game method. **N** shows only mods with an update on disk; **V** is the channel "verified
+  updates only"; **H** lists the versions of a Java mod Jumpstart kept (every version that ran, the last
+  5) and loads one of them live. Live loads read Jumpstart's own copy of a jar, so Steam cannot swap the
+  file under the running game. A running Java mod BiteCheck blocks later goes off at once.
+- **Libraries.** Search the Steam Workshop for Java and Lua mods without leaving the game, sorted by
+  popularity, newest or trending this week (Left/Right). Enter subscribes and downloads the mod through
+  Steam; a Java mod goes through BiteCheck's check, then the mod loads live. If a mod needs other
+  Workshop items that are not installed, Jumpstart offers to install them first; an item with several
+  mods (variants like 60 / 80 %) asks which one.
 - **Dependencies.** Switching off a library asks to switch off the mods that need it too; switching
   on a mod switches on the libraries it needs first; a library nothing needs any more is offered for
   switching off; a library that comes back on offers the mods that went off with it.
 - **Clean switching.** Switching a mod off takes back what its Lua changed (new globals, replaced
   game functions, event handlers, windows of its own classes), also for mods that came with the save,
   and restores static values its Java code changed in the game. A function another mod changed again
-  since stays and is named. Switching it on puts it all back. Parts the game reads only while a save
-  loads (items, animations, sounds, ...) follow with the next load of the save, and the screen says so.
+  since stays and is named. Switching it on puts it all back. Items, recipes, loot tables and animations of a mod
+  load live too; parts the game reads only while a save loads (maps, sandbox options, sounds, 3D models,
+  ...) follow with the next load of the save, and the screen says so.
 - **Crash protection.** If a mod's Java patch throws, the game keeps running; after repeated errors
   (or at once right after a live load) the mod is switched off and a banner names it.
 - **Clean uninstall.** Files the mod created move to `Zomboid/jumpstart/archive/`, ModData tables it

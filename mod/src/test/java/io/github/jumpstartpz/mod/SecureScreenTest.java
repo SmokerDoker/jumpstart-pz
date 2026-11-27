@@ -319,6 +319,135 @@ class SecureScreenTest {
     }
 
     @Test
+    void aRunningModBiteCheckBlocksNowGoesOffAtOnce() {
+        actions.states.put("Verified", "on");
+        actions.blockedNow = List.<String[]>of(new String[] {"Verified", "blocked"});
+        frame();
+        assertEquals("off", actions.states.get("Verified"));
+        assertTrue(game.drew("BiteCheck blocks Verified now (blocked): it was switched off. Ctrl+Shift+J: details"));
+    }
+
+    @Test
+    void inMultiplayerTheServerSwitchesABlockedModOffNotThePlayer() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        actions.blockedNow = List.<String[]>of(new String[] {"Verified", "blocked"});
+        frame();
+        assertEquals("on", actions.states.get("Verified"));
+    }
+
+    @Test
+    void anItemWithSeveralModsAsksWhichOneInSinglePlayer() {
+        actions.folders.put("/workshop/201", List.of(new Actions.FolderMod("Car60", "Car 60 %", null),
+                new Actions.FolderMod("Car80", "Car 80 %", null)));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER); // install "Lua Mod" (201)
+        actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame(); settle();
+        assertTrue(actions.activated.isEmpty(), "variants are not all switched on");
+        assertTrue(game.drew("Car 80 %"));
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertEquals(List.of("Car80"), actions.activated);
+    }
+
+    @Test
+    void twoModsPatchingTheSameMethodAreShownInTheDetails() {
+        actions.states.put("Verified", "on");
+        actions.states.put("Unknown", "on");
+        actions.states.put("Shady", "off");
+        var update = new io.github.jumpstartpz.core.PatchTargets.Target("zombie.iso.IsoWorld", "update", true);
+        var render = new io.github.jumpstartpz.core.PatchTargets.Target("zombie.core.Core", "EndFrame", false);
+        actions.targets.put("Verified", java.util.Set.of(update, render));
+        actions.targets.put("Unknown", java.util.Set.of(update));
+        actions.targets.put("Shady", java.util.Set.of(render));
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Unknown patches zombie.iso.IsoWorld.update too: both run, their order can matter."));
+        assertFalse(game.drew("Conflict: Shady"), "a mod that is off clashes with nothing");
+        actions.states.put("Shady", "on");
+        tap(SecureScreen.KEY_ESCAPE);
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Conflict: Shady patches zombie.core.Core.EndFrame too and one of them replaces the method; only one can work."));
+    }
+
+    @Test
+    void updatesAreMarkedFilteredAndTheVerifiedChannelHoldsUnverifiedOnesBack() {
+        actions.states.put("Verified", "on");
+        actions.states.put("Unknown", "on");
+        actions.updates.addAll(List.of("Verified", "Unknown"));
+        openScreen();
+        settle();
+        assertTrue(game.drew("update ready"));
+        tap(SecureScreen.KEY_N);
+        assertTrue(screen.describe().contains("Only mods with an update ready"), screen.describe());
+        tap(SecureScreen.KEY_V);
+        assertTrue(actions.verifiedOnly);
+        selectInstalled("Unknown");
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertTrue(screen.describe().contains("unknown mod: this update is not verified by BiteCheck"), screen.describe());
+        assertTrue(actions.calls.isEmpty(), "held back");
+        selectInstalled("Verified");
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertEquals(List.of("update Verified NONE"), actions.calls, "a verified update loads");
+    }
+
+    @Test
+    void hListsTheKeptVersionsAndEnterGoesBackToOne() {
+        actions.states.put("Verified", "on");
+        openScreen();
+        settle();
+        selectInstalled("Unknown");
+        tap(SecureScreen.KEY_H);
+        assertTrue(screen.describe().contains("No kept versions of this mod yet"), screen.describe());
+        selectInstalled("Verified");
+        tap(SecureScreen.KEY_H);
+        frame();
+        assertTrue(game.drew("2026-11-20 09:00   old   verified"));
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertEquals(List.of("update Verified NONE"), actions.calls, "the kept version loads like an update, through BiteCheck");
+    }
+
+    @Test
+    void leftAndRightSortTheLibrary() {
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_RIGHT);
+        tap(SecureScreen.KEY_RIGHT);
+        tap(SecureScreen.KEY_RIGHT);
+        tap(SecureScreen.KEY_LEFT);
+        assertEquals(List.of(LibraryClient.Sort.POPULAR, LibraryClient.Sort.RECENT, LibraryClient.Sort.TREND,
+                LibraryClient.Sort.POPULAR, LibraryClient.Sort.TREND), actions.sorts);
+        assertTrue(game.drew("Sort: trending this week (Left/Right)"));
+    }
+
+    @Test
+    void aLuaModSaysBiteCheckDoesNotCheckLua() {
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        frame();
+        assertTrue(game.drew("BiteCheck checks Java jars only: Lua runs unchecked, as with every Lua mod in the game."));
+    }
+
+    @Test
     void theJavaLibrarySearchesDownloadsAndLoadsThroughBiteCheck() {
         actions.folders.put("/workshop/111", List.of(new Actions.FolderMod("Verified", "A verified mod", VERIFIED)));
         openScreen();
@@ -1445,6 +1574,46 @@ class SecureScreenTest {
         final FakeWorkshop workshop = new FakeWorkshop();
         final Map<String, List<FolderMod>> folders = new HashMap<>();
         final List<String> activated = new ArrayList<>();
+
+        final List<LibraryClient.Sort> sorts = new ArrayList<>();
+        List<String[]> blockedNow = List.of();
+        final Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> targets = new HashMap<>();
+        final java.util.Set<String> updates = new java.util.HashSet<>();
+        boolean verifiedOnly;
+
+        @Override public boolean updateReady(ModEntry mod) { return updates.contains(mod.id()); }
+
+        @Override
+        public List<String[]> versions(ModEntry mod) {
+            return mod.id().equals("Verified")
+                    ? List.of(new String[] {"new", "2026-11-27 12:00   new   verified   *"}, new String[] {"old", "2026-11-20 09:00   old   verified"})
+                    : List.of();
+        }
+
+        @Override
+        public ModEntry version(ModEntry mod, String sha256) {
+            return new ModEntry(mod.id(), mod.name(), mod.jar(), "kept-" + sha256);
+        }
+        @Override public boolean verifiedUpdatesOnly() { return verifiedOnly; }
+        @Override public void setVerifiedUpdatesOnly(boolean on) { verifiedOnly = on; }
+
+        @Override
+        public java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
+            return targets.getOrDefault(mod.id(), java.util.Set.of());
+        }
+
+        @Override
+        public List<String[]> newlyBlocked() {
+            List<String[]> b = blockedNow;
+            blockedNow = List.of();
+            return b;
+        }
+
+        @Override
+        public LibraryClient.Page search(LibraryClient.Kind kind, String query, LibraryClient.Sort sort, String cursor) {
+            sorts.add(sort);
+            return search(kind, query, cursor);
+        }
 
         @Override
         public LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) {

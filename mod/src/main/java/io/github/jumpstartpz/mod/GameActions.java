@@ -378,12 +378,69 @@ final class GameActions implements Actions {
 
     @Override
     public LiveInstaller.Outcome install(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return loaded(mod, installer.install(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player));
+        ModEntry copy = cached(mod);
+        return loaded(copy, installer.install(copy.jar(), mod.javaPackage(), mod.id(), workshopIdFor(mod), player));
     }
 
     @Override
     public LiveInstaller.Outcome update(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return loaded(mod, installer.update(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player));
+        ModEntry copy = cached(mod);
+        return loaded(copy, installer.update(copy.jar(), mod.javaPackage(), mod.id(), workshopIdFor(mod), player));
+    }
+
+    // --- own copies of the jars, by hash (JarCache) ----------------------------------------------------
+
+    private final io.github.jumpstartpz.core.JarCache jarCache =
+            new io.github.jumpstartpz.core.JarCache(Main.cacheDir().resolve("jumpstart").resolve("jar-cache"));
+    private final java.util.concurrent.ExecutorService copier = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "Jumpstart jar cache");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * The mod with its jar copied into Jumpstart's cache: a live load reads the copy, so Steam
+     * updating the Workshop file under the running game changes nothing. The jar itself if the copy
+     * cannot be made.
+     */
+    private ModEntry cached(ModEntry mod) {
+        if (jarCache.contains(mod.jar())) {
+            return mod; // a kept version (going back to it)
+        }
+        try {
+            return new ModEntry(mod.id(), mod.name(), jarCache.store(mod.id(), mod.jar(), null), mod.javaPackage());
+        } catch (IOException | RuntimeException e) {
+            System.out.println("[Jumpstart] no copy of " + mod.jar() + " in the jar cache: " + e);
+            return mod;
+        }
+    }
+
+    /** The Workshop item of a mod's jar, also for a copy in the cache (from where the copy came). */
+    private String workshopIdFor(ModEntry mod) {
+        if (jarCache.contains(mod.jar())) {
+            String sha = mod.jar().getFileName().toString().replaceFirst("\\.jar$", "");
+            return jarCache.sourceOf(mod.id(), sha).map(s -> UsageSharing.Jar.workshopIdOf(Path.of(s))).orElse("");
+        }
+        return UsageSharing.Jar.workshopIdOf(mod.jar());
+    }
+
+    @Override
+    public List<String[]> versions(ModEntry mod) {
+        String running = loadedHash(mod);
+        List<String[]> out = new ArrayList<>();
+        java.time.format.DateTimeFormatter time = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                .withZone(java.time.ZoneId.systemDefault());
+        for (io.github.jumpstartpz.core.JarCache.Version v : jarCache.versions(mod.id())) {
+            Verifier.Status status = indexStatus(v.sha256());
+            out.add(new String[] {v.sha256(), time.format(v.seen()) + "   " + v.sha256().substring(0, 12) + "   "
+                    + (status == null ? "?" : status.name().toLowerCase(Locale.ROOT)) + (v.sha256().equals(running) ? "   *" : "")});
+        }
+        return out;
+    }
+
+    @Override
+    public ModEntry version(ModEntry mod, String sha256) {
+        return jarCache.copy(mod.id(), sha256).map(p -> new ModEntry(mod.id(), mod.name(), p, mod.javaPackage())).orElse(null);
     }
 
     /** The hash of each Java mod's running version (see {@link Actions#loadedHash}). */
@@ -391,7 +448,20 @@ final class GameActions implements Actions {
 
     @Override
     public String loadedHash(ModEntry mod) {
-        return loadedHashes.computeIfAbsent(mod.id(), id -> Actions.super.loadedHash(mod));
+        return loadedHashes.computeIfAbsent(mod.id(), id -> {
+            String sha = Actions.super.loadedHash(mod);
+            if (!sha.isEmpty()) {
+                // the version that runs since the start: kept, so the player can come back to it
+                copier.execute(() -> {
+                    try {
+                        jarCache.store(id, mod.jar(), sha);
+                    } catch (IOException | RuntimeException e) {
+                        System.out.println("[Jumpstart] no copy of " + mod.jar() + " in the jar cache: " + e);
+                    }
+                });
+            }
+            return sha;
+        });
     }
 
     private LiveInstaller.Outcome loaded(ModEntry mod, LiveInstaller.Outcome outcome) {
@@ -474,8 +544,13 @@ final class GameActions implements Actions {
 
     @Override
     public LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) throws IOException {
+        return search(kind, query, LibraryClient.Sort.POPULAR, cursor);
+    }
+
+    @Override
+    public LibraryClient.Page search(LibraryClient.Kind kind, String query, LibraryClient.Sort sort, String cursor) throws IOException {
         URI url = cloudUrl().orElseThrow(() -> new IOException("no Jumpstart cloud set up yet (cloud_url)"));
-        return new LibraryClient(url).search(kind, query, LibraryClient.Sort.POPULAR, cursor);
+        return new LibraryClient(url).search(kind, query, sort, cursor);
     }
 
     @Override
@@ -968,6 +1043,147 @@ final class GameActions implements Actions {
     @Override
     public String recomputeLuaChecksum(String why) {
         return LuaChecksum.recomputeQuietly(why);
+    }
+
+    /** How often a player's game fetches BiteCheck's index again to find running mods it blocks now. */
+    static final long INDEX_WATCH_MS = 15 * 60_000;
+    private volatile boolean indexFresh;
+    private Thread indexWatch;
+    private final Set<String> blockedSeen = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    @Override
+    public List<String[]> newlyBlocked() {
+        if (luaGame.isServer()) {
+            return List.of(); // the server has its own watch (ServerSide) and switches off for everybody
+        }
+        if (indexWatch == null) {
+            indexWatch = new Thread(() -> {
+                while (true) {
+                    try {
+                        Thread.sleep(INDEX_WATCH_MS);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    refreshIndexQuietly();
+                    indexFresh = true;
+                }
+            }, "Jumpstart index watch");
+            indexWatch.setDaemon(true);
+            indexWatch.start();
+        }
+        if (!indexFresh) {
+            return List.of();
+        }
+        indexFresh = false;
+        List<String[]> blocked = new ArrayList<>();
+        for (ModEntry mod : javaMods()) {
+            if (!stateOf(mod.id()).startsWith("on")) {
+                continue;
+            }
+            String sha = loadedHash(mod);
+            Verifier.Status status = sha.isEmpty() ? null : indexStatus(sha);
+            if ((status == Verifier.Status.BLOCKED || status == Verifier.Status.INVALID) && blockedSeen.add(mod.id() + " " + sha)) {
+                blocked.add(new String[] {mod.id(), status.name().toLowerCase(Locale.ROOT)});
+            }
+        }
+        return blocked;
+    }
+
+    /** Per jar and its last change: its hash (an update check hashes each jar once). */
+    private final Map<String, String> diskHashes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public boolean updateReady(ModEntry mod) {
+        if (stateOf(mod.id()).equals("not loaded")) {
+            return false;
+        }
+        String loaded = loadedHash(mod);
+        String disk;
+        try {
+            long changed = Files.getLastModifiedTime(mod.jar()).toMillis();
+            disk = diskHashes.computeIfAbsent(mod.jar() + "@" + changed, k -> Actions.super.loadedHash(mod));
+        } catch (IOException e) {
+            return false;
+        }
+        return !loaded.isEmpty() && !disk.isEmpty() && !loaded.equals(disk);
+    }
+
+    private Path settingsFile() {
+        return Main.cacheDir().resolve("jumpstart").resolve("settings.properties");
+    }
+
+    /** The channel setting, read from the file once. */
+    private volatile Boolean verifiedOnly;
+
+    @Override
+    public boolean verifiedUpdatesOnly() {
+        Boolean cached = verifiedOnly;
+        if (cached != null) {
+            return cached;
+        }
+        java.util.Properties p = new java.util.Properties();
+        try (java.io.InputStream in = Files.newInputStream(settingsFile())) {
+            p.load(in);
+        } catch (IOException e) {
+            // no settings yet: every update
+        }
+        boolean on = "verified".equals(p.getProperty("updates", "all").strip());
+        verifiedOnly = on;
+        return on;
+    }
+
+    @Override
+    public void setVerifiedUpdatesOnly(boolean on) {
+        java.util.Properties p = new java.util.Properties();
+        Path file = settingsFile();
+        try {
+            if (Files.isRegularFile(file)) {
+                try (java.io.InputStream in = Files.newInputStream(file)) {
+                    p.load(in);
+                }
+            }
+            p.setProperty("updates", on ? "verified" : "all");
+            verifiedOnly = on;
+            Files.createDirectories(file.getParent());
+            try (java.io.OutputStream out = Files.newOutputStream(file)) {
+                p.store(out, "Jumpstart settings: snapshots=auto|on|off, updates=all|verified");
+            }
+        } catch (IOException e) {
+            System.out.println("[Jumpstart] cannot save the settings: " + e);
+        }
+    }
+
+    /** Per jar and its last change: what it patches (read once). */
+    private final Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> patchTargets = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
+        Path jar = mod.jar();
+        long changed;
+        try {
+            changed = Files.getLastModifiedTime(jar).toMillis();
+        } catch (IOException e) {
+            return java.util.Set.of();
+        }
+        return patchTargets.computeIfAbsent(jar + "@" + changed, k -> {
+            try {
+                return io.github.jumpstartpz.core.PatchTargets.of(jar);
+            } catch (IOException | RuntimeException e) {
+                return java.util.Set.of();
+            }
+        });
+    }
+
+    /** Per mod folder: looking for Lua files walks the folder once. */
+    private final Map<String, ModKind> kinds = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public ModKind kindOf(InstalledMod mod) {
+        if (mod.java() != null) {
+            return ModKind.JAVA;
+        }
+        String dir = modDirOf(mod.id());
+        return dir == null ? ModKind.LUA : kinds.computeIfAbsent(dir, d -> ModKind.of(Path.of(d), false));
     }
 
     @Override

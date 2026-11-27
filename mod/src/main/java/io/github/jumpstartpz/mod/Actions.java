@@ -61,6 +61,11 @@ interface Actions {
     /** Searches a library of the Jumpstart cloud; throws when there is none or it cannot be reached. */
     LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) throws IOException;
 
+    /** The same, sorted (most popular, newest, trending this week); without words only, Steam sorts a text search itself. */
+    default LibraryClient.Page search(LibraryClient.Kind kind, String query, LibraryClient.Sort sort, String cursor) throws IOException {
+        return search(kind, query, cursor);
+    }
+
     Workshop workshop();
 
     /** The mods in a downloaded Workshop item folder, with their Java part (null for Lua-only mods). */
@@ -161,6 +166,47 @@ interface Actions {
     /** "count TAB state" (ok, off-by-guard, probation), or "" when the mod had no error. */
     default String guardStatus(String modId) {
         return "";
+    }
+
+    /**
+     * Running Java mods BiteCheck blocks now ({mod id, status}), each once: the index is fetched
+     * again every few minutes in the background, the check runs on the caller's (main) thread.
+     */
+    default List<String[]> newlyBlocked() {
+        return List.of();
+    }
+
+    /** The kept versions of a Java mod, newest first: {hash, label}; "*" marks the one that runs. */
+    default List<String[]> versions(ModEntry mod) {
+        return List.of();
+    }
+
+    /** A kept version of a Java mod as a mod entry (its jar is the kept copy), or null. */
+    default ModEntry version(ModEntry mod, String sha256) {
+        return null;
+    }
+
+    /** A newer jar of a running Java mod is on disk (Steam updated it): Enter loads it. */
+    default boolean updateReady(ModEntry mod) {
+        return false;
+    }
+
+    /** The "verified updates only" channel: an update BiteCheck has not verified does not load live. */
+    default boolean verifiedUpdatesOnly() {
+        return false;
+    }
+
+    default void setVerifiedUpdatesOnly(boolean on) {
+    }
+
+    /** The game methods a Java mod's jar patches (its @Patch annotations); empty when unknown. */
+    default java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
+        return java.util.Set.of();
+    }
+
+    /** Java, Lua or only data (items, textures, ...): for the label. */
+    default ModKind kindOf(InstalledMod mod) {
+        return mod.java() != null ? ModKind.JAVA : ModKind.LUA;
     }
 
     // --- multiplayer: after a mod was installed or removed for everybody ---

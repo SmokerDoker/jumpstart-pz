@@ -52,13 +52,17 @@ public final class SecureScreen {
     static final int KEY_KP_ENTER = 335;
     static final int KEY_UP = 265;
     static final int KEY_DOWN = 264;
+    static final int KEY_LEFT = 263;
+    static final int KEY_RIGHT = 262;
     static final int KEY_PAGE_UP = 266;
     static final int KEY_PAGE_DOWN = 267;
     static final int KEY_A = 65;
+    static final int KEY_H = 72;
     static final int KEY_J = 74;
     static final int KEY_N = 78;
     static final int KEY_R = 82;
     static final int KEY_U = 85;
+    static final int KEY_V = 86;
     static final int KEY_X = 88;
     static final int KEY_Y = 89;
     static final int KEY_LEFT_SHIFT = 340;
@@ -211,6 +215,8 @@ public final class SecureScreen {
         int selected;
         boolean busy;
         String status = "";
+        /** How the list without words is sorted; Left/Right changes it. */
+        LibraryClient.Sort sort = LibraryClient.Sort.POPULAR;
 
         Library(LibraryClient.Kind kind) {
             this.kind = kind;
@@ -242,7 +248,7 @@ public final class SecureScreen {
 
     private static int[] watched() {
         List<Integer> keys = new ArrayList<>(List.of(KEY_SPACE, KEY_MINUS, KEY_ESCAPE, KEY_ENTER, KEY_TAB, KEY_BACKSPACE,
-                KEY_KP_ENTER, KEY_UP, KEY_DOWN, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_LEFT_SHIFT, KEY_LEFT_CONTROL,
+                KEY_KP_ENTER, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_PAGE_UP, KEY_PAGE_DOWN, KEY_LEFT_SHIFT, KEY_LEFT_CONTROL,
                 KEY_RIGHT_SHIFT, KEY_RIGHT_CONTROL));
         for (int k = '0'; k <= '9'; k++) {
             keys.add(k);
@@ -411,6 +417,7 @@ public final class SecureScreen {
         runMainThreadWork();
         runBusyWork();
         followGuard(now);
+        followBlocked(now);
         session.tick();
         Set<Integer> pressed = poll();
         if (mode != Mode.CLOSED) {
@@ -638,6 +645,37 @@ public final class SecureScreen {
         return banner != null && now < bannerUntil ? banner : null;
     }
 
+    /**
+     * A running Java mod BiteCheck blocks now goes off at once (single player; on a server the server
+     * switches it off for everybody), with a banner that says why.
+     */
+    private void followBlocked(long now) {
+        List<String[]> blocked;
+        try {
+            blocked = actions.newlyBlocked();
+        } catch (RuntimeException e) {
+            return;
+        }
+        for (String[] b : blocked) {
+            if (session.inMultiplayer()) {
+                System.out.println("[Jumpstart] BiteCheck blocks " + b[0] + " now; the server switches it off for everybody");
+                continue;
+            }
+            String result = actions.off(b[0]);
+            try {
+                actions.unloadLua(b[0]);
+            } catch (RuntimeException e) {
+                System.out.println("[Jumpstart] cannot stop the Lua of " + b[0] + ": " + e);
+            }
+            System.out.println("[Jumpstart] BiteCheck blocks " + b[0] + " (" + b[1] + "): " + result);
+            banner = String.format(Locale.ROOT, texts.get("blocked.off"), b[0], b[1]);
+            bannerUntil = now + BANNER_MS;
+        }
+        if (!blocked.isEmpty() && mode != Mode.CLOSED) {
+            refreshStates();
+        }
+    }
+
     private void drawBanner(long now) {
         String text = banner(now);
         if (text == null) {
@@ -757,8 +795,14 @@ public final class SecureScreen {
         game.pause(false);
     }
 
+    /** The installed tab shows only Java mods with an update ready (N). */
+    private boolean updatesOnly;
+
     private void reload() {
         mods = actions.installedMods();
+        if (updatesOnly) {
+            mods = mods.stream().filter(m -> m.java() != null && actions.updateReady(m.java())).toList();
+        }
         refreshStates();
         if (selected >= mods.size()) {
             selected = Math.max(0, mods.size() - 1);
@@ -906,6 +950,10 @@ public final class SecureScreen {
     // --- installed tab ---------------------------------------------------------------------------
 
     private void onInstalled(Set<Integer> pressed, long now) {
+        if (pick != null) {
+            onChoice(pressed);
+            return;
+        }
         if (pressed.contains(KEY_UP) && selected > 0) {
             selected--;
         }
@@ -923,6 +971,23 @@ public final class SecureScreen {
                 say(actions.refreshIndex(), true);
                 checks.clear();
             });
+            return;
+        }
+        if (pressed.contains(KEY_N)) {
+            updatesOnly = !updatesOnly;
+            selected = 0;
+            reload();
+            say(texts.get(updatesOnly ? (mods.isEmpty() ? "updates.none" : "updates.only") : "updates.all"), true);
+            return;
+        }
+        if (pressed.contains(KEY_H)) {
+            versionsOf(selectedMod());
+            return;
+        }
+        if (pressed.contains(KEY_V)) {
+            boolean on = !actions.verifiedUpdatesOnly();
+            actions.setVerifiedUpdatesOnly(on);
+            say(texts.get(on ? "updates.verifiedOn" : "updates.verifiedOff"), true);
             return;
         }
         Actions.InstalledMod mod = selectedMod();
@@ -959,6 +1024,13 @@ public final class SecureScreen {
                 busy(String.format(Locale.ROOT, texts.get("busy.on"), mod.name()), () -> toggleWithDeps(mod, frameTime));
             }
             return;
+        }
+        if (enter && actions.verifiedUpdatesOnly() && actions.updateReady(mod.java())) {
+            BiteCheckGate.Check c = checkQuietly(mod.java().jar());
+            if (c == null || c.status() != io.github.bitecheckpz.core.Verifier.Status.VERIFIED) {
+                say(String.format(Locale.ROOT, texts.get("updates.notVerified"), mod.name()), false);
+                return;
+            }
         }
         if (enter) {
             busy(String.format(Locale.ROOT, texts.get("busy.check"), mod.name()), () -> start(mod.java(), frameTime, false));
@@ -1352,7 +1424,7 @@ public final class SecureScreen {
         y += 8;
         game.text(GameScreen.Font.LARGE, x, y, texts.get(second ? "uninstall2.title" : "uninstall1.title"), c[0], c[1], c[2], 1f);
         y += game.fontHeight(GameScreen.Font.LARGE) + 10;
-        game.text(GameScreen.Font.MEDIUM, x, y, mod.name() + "  [" + mod.id() + "]  " + (mod.java() != null ? "Java" : "Lua"), 1f, 1f, 1f, 1f);
+        game.text(GameScreen.Font.MEDIUM, x, y, mod.name() + "  [" + mod.id() + "]  " + kindLabel(mod), 1f, 1f, 1f, 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         String how = mod.workshopId() > 0 ? texts.get("uninstall.workshop") : texts.get("uninstall.local");
         y = wrapped(GameScreen.Font.MEDIUM, x, y, width, texts.get(second ? "uninstall2.text" : "uninstall1.text") + " " + how, 1f, 1f, 1f);
@@ -1546,6 +1618,10 @@ public final class SecureScreen {
     // --- library tabs ----------------------------------------------------------------------------
 
     private void onLibrary(Library lib, Set<Integer> pressed, long now) {
+        if (pick != null) {
+            onChoice(pressed);
+            return;
+        }
         for (int key : pressed) {
             if (key == KEY_BACKSPACE && lib.query.length() > 0) {
                 lib.query.setLength(lib.query.length() - 1);
@@ -1564,6 +1640,11 @@ public final class SecureScreen {
         if (pressed.contains(KEY_PAGE_DOWN) && !lib.next.isEmpty() && !lib.busy) {
             search(lib, true);
         }
+        int turn = (pressed.contains(KEY_RIGHT) ? 1 : 0) - (pressed.contains(KEY_LEFT) ? 1 : 0);
+        if (turn != 0 && !lib.busy) {
+            nextSort(lib, turn);
+            return;
+        }
         if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
             String query = lib.query.toString().strip();
             if (lib.searched == null || !query.equals(lib.searched)) {
@@ -1580,6 +1661,13 @@ public final class SecureScreen {
         }
     }
 
+    /** The next way of sorting (most popular, newest, trending this week), then the list again. */
+    private void nextSort(Library lib, int step) {
+        LibraryClient.Sort[] all = LibraryClient.Sort.values();
+        lib.sort = all[Math.floorMod(lib.sort.ordinal() + step, all.length)];
+        search(lib, false);
+    }
+
     private void search(Library lib, boolean nextPage) {
         if (lib.busy) {
             return;
@@ -1588,7 +1676,8 @@ public final class SecureScreen {
         lib.status = texts.get("searching");
         String query = nextPage ? lib.searched : lib.query.toString().strip();
         String cursor = nextPage ? lib.next : null;
-        inBackground(() -> actions.search(lib.kind, query, cursor), result -> {
+        LibraryClient.Sort sort = lib.sort;
+        inBackground(() -> actions.search(lib.kind, query, sort, cursor), result -> {
             lib.busy = false;
             if (result instanceof LibraryClient.Page page) {
                 if (!nextPage) {
@@ -1714,10 +1803,38 @@ public final class SecureScreen {
 
     /** Steam has the item: its mods join the mod list and load (a Java mod through BiteCheck's check). */
     private void installDownloaded(Download d, long now) {
+        installDownloaded(d, now, null);
+    }
+
+    /** {@code only}: the one mod of the item to install (the player chose it), or null for all / the only one. */
+    private void installDownloaded(Download d, long now, String only) {
         String folder = actions.workshop().installFolder(d.item().id());
         List<Actions.FolderMod> found = folder == null ? List.of() : actions.modsInFolder(folder);
+        if (only != null) {
+            found = found.stream().filter(m -> m.id().equals(only)).toList();
+        }
         if (found.isEmpty()) {
             say(texts.get("noModInItem"), false);
+            return;
+        }
+        if (found.size() > 1) {
+            // variants that must not run together, or a mod with add-ons: the player chooses one
+            List<String[]> mods = new ArrayList<>();
+            for (Actions.FolderMod m : found) {
+                mods.add(new String[] {m.id(), m.name() + (m.java() != null ? " (Java)" : "")});
+            }
+            choiceSelected = 0;
+            pick = new Pick(d.item().title(), mods, "choose.text", "btn.chooseThis", mod -> {
+                pick = null;
+                busy(String.format(Locale.ROOT, texts.get("busy.install"), mod[1]), () -> installDownloaded(d, frameTime, mod[0]));
+            }, () -> {
+                pick = null;
+                say(texts.get("mp.choose.cancelled"), false);
+            });
+            if (mode == Mode.LIST) {
+                tab = d.item().java() ? Tab.JAVA_LIBRARY : Tab.LUA_LIBRARY; // where the choice shows
+            }
+            say(String.format(Locale.ROOT, texts.get("choose.note"), d.item().title()), true);
             return;
         }
         List<String> problems = new ArrayList<>();
@@ -2071,8 +2188,44 @@ public final class SecureScreen {
     }
 
     /** The admin chooses the mod to install from a Workshop item with several; Backspace cancels. */
-    private void onChoice(Set<Integer> pressed) {
+    /**
+     * The mods of a Workshop item with several (variants like 60 / 80 %, or a mod with add-ons): the
+     * player chooses one. {@code mods}: {id, name}. Multiplayer: the server asked the admin; single
+     * player: the item was just downloaded.
+     */
+    private record Pick(String item, List<String[]> mods, String textKey, String buttonKey,
+                        java.util.function.Consumer<String[]> chosen, Runnable cancelled) {
+    }
+
+    /** A pick of the player's own (single player), or the server's question to the admin. */
+    private Pick pick;
+
+    private Pick currentPick() {
+        if (pick != null) {
+            return pick;
+        }
         ClientSession.Choice c = session.choice;
+        if (c == null) {
+            return null;
+        }
+        return new Pick(c.item(), c.mods(), "mp.choose.text", "btn.chooseInstall", mod -> {
+            if (session.update != null) {
+                return; // a change runs: Enter waits
+            }
+            session.choice = null;
+            session.requestInstall(c.item(), mod[0]);
+            say(String.format(Locale.ROOT, texts.get("mp.installRequested"), mod[1]), true);
+        }, () -> {
+            session.choice = null;
+            say(texts.get("mp.choose.cancelled"), false);
+        });
+    }
+
+    private void onChoice(Set<Integer> pressed) {
+        Pick c = currentPick();
+        if (c == null) {
+            return;
+        }
         if (pressed.contains(KEY_UP) && choiceSelected > 0) {
             choiceSelected--;
         }
@@ -2080,23 +2233,22 @@ public final class SecureScreen {
             choiceSelected++;
         }
         if (pressed.contains(KEY_BACKSPACE)) {
-            session.choice = null;
-            say(texts.get("mp.choose.cancelled"), false);
+            c.cancelled().run();
             return;
         }
-        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && session.update == null) {
-            String[] mod = c.mods().get(Math.min(choiceSelected, c.mods().size() - 1));
-            session.choice = null;
-            session.requestInstall(c.item(), mod[0]);
-            say(String.format(Locale.ROOT, texts.get("mp.installRequested"), mod[1]), true);
+        if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
+            c.chosen().accept(c.mods().get(Math.min(choiceSelected, c.mods().size() - 1)));
         }
     }
 
     private void drawChoice(int x, int y, int width, int bottom) {
-        ClientSession.Choice c = session.choice;
+        Pick c = currentPick();
+        if (c == null) {
+            return;
+        }
         game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.choose.title"), c.item()), 1f, 0.9f, 0.5f, 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
-        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("mp.choose.text"), 0.85f, 0.85f, 0.85f) + 6;
+        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get(c.textKey()), 0.85f, 0.85f, 0.85f) + 6;
         int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         int rowsBottom = bottom - buttonHeight() - 10;
         for (int i = 0; i < c.mods().size() && y + line <= rowsBottom; i++) {
@@ -2112,7 +2264,7 @@ public final class SecureScreen {
             y += line;
         }
         int bx = x;
-        bx += button(bx, rowsBottom + 6, texts.get("btn.chooseInstall"), KEY_ENTER, null, true) + 10;
+        bx += button(bx, rowsBottom + 6, texts.get(c.buttonKey()), KEY_ENTER, null, true) + 10;
         button(bx, rowsBottom + 6, texts.get("btn.chooseCancel"), KEY_BACKSPACE, null, true);
     }
 
@@ -2402,6 +2554,10 @@ public final class SecureScreen {
     }
 
     private void drawList(int x, int top, int width, int bottom) {
+        if (pick != null) {
+            drawChoice(x, top, width, bottom);
+            return;
+        }
         if (mods.isEmpty()) {
             game.text(GameScreen.Font.MEDIUM, x, top, texts.get("noMods"), 0.8f, 0.8f, 0.8f, 1f);
             return;
@@ -2425,10 +2581,15 @@ public final class SecureScreen {
                 game.rect(x, y, icon, icon, 0.14f, 0.15f, 0.17f, 1f);
             }
             int tx = x + icon + 10;
-            boolean java = mod.java() != null;
-            game.text(GameScreen.Font.SMALL, tx, y + 4, java ? "Java" : "Lua", java ? 0.95f : 0.55f, java ? 0.75f : 0.8f, java ? 0.35f : 1f, 1f);
+            ModKind kind = actions.kindOf(mod);
+            float[] kc = kind == ModKind.JAVA ? new float[] {0.95f, 0.75f, 0.35f} : kind == ModKind.LUA ? new float[] {0.55f, 0.8f, 1f}
+                    : new float[] {0.75f, 0.75f, 0.75f};
+            game.text(GameScreen.Font.SMALL, tx, y + 4, kindLabel(mod), kc[0], kc[1], kc[2], 1f);
             String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
             String label = stateLabel(mod.id(), state);
+            if (mod.java() != null && !mod.id().equals(SELF) && actions.updateReady(mod.java())) {
+                label = texts.get("updates.mark") + "   " + label;
+            }
             float[] c = stateColor(state);
             int w = game.textWidth(GameScreen.Font.SMALL, label);
             game.text(GameScreen.Font.SMALL, x + listWidth - w, y + 4, label, c[0], c[1], c[2], 1f);
@@ -2453,6 +2614,60 @@ public final class SecureScreen {
     }
 
     /** The selected installed mod: picture, name, state, BiteCheck's verdict, and its description. */
+    /** The game methods this Java mod patches that other Java mods that are on patch too. */
+    private List<io.github.jumpstartpz.core.PatchTargets.Conflict> conflictsOf(Actions.InstalledMod mod) {
+        Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> others = new java.util.LinkedHashMap<>();
+        for (Actions.InstalledMod m : mods) {
+            if (m.java() != null && !m.id().equals(mod.id()) && !m.id().equals(SELF) && stateOf(m.id()).startsWith("on")) {
+                others.put(m.id(), actions.patchTargets(m.java()));
+            }
+        }
+        if (others.isEmpty()) {
+            return List.of();
+        }
+        List<io.github.jumpstartpz.core.PatchTargets.Conflict> all =
+                io.github.jumpstartpz.core.PatchTargets.conflicts(mod.id(), actions.patchTargets(mod.java()), others);
+        return all.size() > 6 ? all.subList(0, 6) : all;
+    }
+
+    /**
+     * H: the versions of a Java mod Jumpstart kept (every version that ran); Enter loads the chosen one
+     * live, through BiteCheck like any load.
+     */
+    private void versionsOf(Actions.InstalledMod mod) {
+        if (mod == null || mod.java() == null || mod.id().equals(SELF)) {
+            say(texts.get("versions.javaOnly"), false);
+            return;
+        }
+        if (session.inMultiplayer()) {
+            say(texts.get("mp.locked"), false);
+            return;
+        }
+        List<String[]> versions = actions.versions(mod.java());
+        if (versions.isEmpty()) {
+            say(texts.get("versions.none"), false);
+            return;
+        }
+        choiceSelected = 0;
+        pick = new Pick(mod.name(), versions, "versions.text", "btn.loadVersion", v -> {
+            pick = null;
+            ModEntry old = actions.version(mod.java(), v[0]);
+            if (old == null) {
+                say(texts.get("versions.gone"), false);
+                return;
+            }
+            busy(String.format(Locale.ROOT, texts.get("busy.check"), mod.name()), () -> start(old, frameTime, false));
+        }, () -> {
+            pick = null;
+            say("", true);
+        });
+    }
+
+    /** "Java", "Lua" or "Data": what the mod brings (BiteCheck checks only Java). */
+    private String kindLabel(Actions.InstalledMod mod) {
+        return texts.get("kind." + actions.kindOf(mod).name());
+    }
+
     private void drawInstalledDetails(Actions.InstalledMod mod, int x, int top, int width, int bottom) {
         if (mod == null) {
             return;
@@ -2468,7 +2683,7 @@ public final class SecureScreen {
         y += game.fontHeight(GameScreen.Font.LARGE) + 6;
         String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
         float[] sc = stateColor(state);
-        game.text(GameScreen.Font.MEDIUM, tx, y, (mod.java() != null ? "Java   " : "Lua   ") + stateLabel(mod.id(), state), sc[0], sc[1], sc[2], 1f);
+        game.text(GameScreen.Font.MEDIUM, tx, y, kindLabel(mod) + "   " + stateLabel(mod.id(), state), sc[0], sc[1], sc[2], 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 6;
         if (mod.java() != null) {
             BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
@@ -2481,8 +2696,20 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("file") + shorten(mod.java().jar().toString(), 90), 0.55f, 0.55f, 0.55f);
+            if (!mod.id().equals(SELF) && actions.updateReady(mod.java())) {
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(actions.verifiedUpdatesOnly() ? "updates.readyVerified" : "updates.ready"),
+                        0.5f, 0.8f, 1f);
+            }
+            for (io.github.jumpstartpz.core.PatchTargets.Conflict c : conflictsOf(mod)) {
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, String.format(Locale.ROOT, texts.get(c.hard() ? "conflict.hard" : "conflict.soft"),
+                        c.otherMod(), c.method()), 1f, c.hard() ? 0.45f : 0.8f, c.hard() ? 0.4f : 0.3f);
+            }
         } else {
-            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("luaMod"), 0.55f, 0.8f, 1f);
+            boolean data = actions.kindOf(mod) == ModKind.DATA;
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(data ? "dataMod" : "luaMod"), 0.55f, 0.8f, 1f);
+            if (!data) {
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("luaUnchecked"), 1f, 0.8f, 0.3f);
+            }
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
         }
@@ -2511,12 +2738,19 @@ public final class SecureScreen {
     }
 
     private void drawLibrary(Library lib, int x, int top, int width, int bottom, long now) {
+        if (pick != null) {
+            drawChoice(x, top, width, bottom);
+            return;
+        }
         int medium = game.fontHeight(GameScreen.Font.MEDIUM);
         int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
         game.rect(x - 6, top - 4, width + 12, medium + 10, 0.03f, 0.03f, 0.04f, 1f);
         game.text(GameScreen.Font.MEDIUM, x, top, texts.get("search") + lib.query + "_", 1f, 1f, 1f, 1f);
         int searchWidth = game.textWidth(GameScreen.Font.MEDIUM, texts.get("btn.search")) + 24;
         button(x + width - searchWidth + 6, top - 4, texts.get("btn.search"), 0, () -> search(lib, false), !lib.busy);
+        String sortLabel = String.format(Locale.ROOT, texts.get("btn.sort"), texts.get("sort." + lib.sort.name()));
+        int sortWidth = game.textWidth(GameScreen.Font.MEDIUM, sortLabel) + 24;
+        button(x + width - searchWidth - sortWidth - 4, top - 4, sortLabel, 0, () -> nextSort(lib, 1), !lib.busy);
         int y = top + medium + 14;
         game.text(GameScreen.Font.SMALL, x, y, lib.status.isEmpty() ? texts.get("searchHint") : lib.status, 0.7f, 0.7f, 0.7f, 1f);
         y += small + 6;
@@ -2584,6 +2818,9 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, x, y, width, ws, 0.6f, 0.9f, 0.6f);
         }
         y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get(item.java() ? "javaNote" : "luaLibraryNote"), 0.55f, 0.55f, 0.55f);
+        if (!item.java()) {
+            y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("luaUnchecked"), 1f, 0.8f, 0.3f);
+        }
         y += 6;
         button(x, y, texts.get("btn.install"), 0, () -> installWithRequirements(item, frameTime), download == null);
         y += buttonHeight() + 8;

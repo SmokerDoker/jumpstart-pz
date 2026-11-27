@@ -56,15 +56,22 @@ in-process restart of the game's start phases) or *restart*.
 
 ## 3. Marketplace and updates
 
-- [ ] BiteCheck badge on every library item (not only for installed mods)
-- [ ] "Lua is not checked" note on Lua mods
-- [ ] Conflicts: two mods that patch the same method
-- [ ] Updates overview and a channel "verified updates only"
-- [ ] Own cache by hash, so Steam cannot swap files under the running game; rollback to earlier versions
-- [ ] Emergency switch-off in single player: a running mod that BiteCheck blocks goes off at once (on servers done, see 4)
-- [ ] Sort by new and trending (the cloud offers it), filter by BiteCheck status
-- [ ] A Workshop item with several mods (variants like 60/70/80 %) shown as one entry with its variants (on servers the admin chooses one, see 4; single player installs all of them today)
-- [ ] Mods without Lua (item scripts, textures) labelled as such, with "only after reloading the save"
+- [ ] BiteCheck badge on every library item, and a filter by BiteCheck status: BiteCheck's signed index knows
+  jar hashes only, not Workshop items; needs the Workshop id in BiteCheck's index (registry entries have it)
+  or the cloud's usage reports per item (today the badge shows once a jar is on disk)
+- [x] "Lua is not checked" note on Lua mods (library and installed)
+- [x] Conflicts: two Java mods that are on patch the same game method (their @Patch annotations, read from
+  the class files); red when one of them replaces the method (a delegation)
+- [x] Updates overview (N: only mods with a newer jar on disk) and a channel "verified updates only" (V; an
+  update BiteCheck has not verified does not load live)
+- [x] Own copies of the jars by hash (`Zomboid/jumpstart/jar-cache`, the last 5 per mod): live loads read the
+  copy, so Steam cannot swap the file under the running game; H lists the kept versions, Enter loads one
+  live through BiteCheck. The game's own start still loads the Workshop file (ZombieBuddy's approvals decide)
+- [x] Emergency switch-off in single player: a running Java mod BiteCheck blocks goes off at once (index fetched
+  every 15 minutes), with a banner
+- [x] Sort the libraries: most popular, newest, trending this week (Left/Right)
+- [x] A Workshop item with several mods: the player chooses one (single player and multiplayer)
+- [x] Mods without Lua (item scripts, textures) labelled "Data"; their items load live (section 2)
 
 ## 4. Multiplayer
 
