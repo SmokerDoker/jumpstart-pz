@@ -83,7 +83,15 @@ $deadline = (Get-Date).AddMinutes(4)
 do { Start-Sleep 5; $ping = Lua "return 'pong'" } until ($ping -eq "pong" -or (Get-Date) -gt $deadline)
 Check "game and Lua server up" $ping ($ping -eq "pong")
 
-Write-Host "Start a NEW single player game in the game window now (any settings). Waiting up to $WaitForSaveMinutes minutes..."
+# a new game without a click: the menu's New Game through Lua (tools\lua\new-game.lua); only if that
+# does not work, a person starts one in the game window
+$menuReady = (Get-Date).AddMinutes(2)
+do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
+$newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+Log "     new game: $newGame"
+if ($newGame -notlike "OK*") {
+    Write-Host "Start a NEW single player game in the game window now (any settings). Waiting up to $WaitForSaveMinutes minutes..."
+}
 $deadline = (Get-Date).AddMinutes($WaitForSaveMinutes)
 do { Start-Sleep 5; $player = Lua "return tostring(getPlayer() ~= nil)" } until ($player -eq "true" -or (Get-Date) -gt $deadline)
 Check "a single player game runs" $player ($player -eq "true")

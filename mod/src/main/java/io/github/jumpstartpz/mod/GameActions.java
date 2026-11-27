@@ -825,7 +825,7 @@ final class GameActions implements Actions {
             off(modId);
         }
         String forgot = zombieBuddy.forget(modId); // the fork drops its record (Lua exposures, callbacks)
-        if (forgot != null && !forgot.startsWith("OK")) {
+        if (forgot != null && !forgot.startsWith("OK") && !forgot.contains("no loaded Java mod")) { // a Lua mod: nothing to forget
             System.out.println("[Jumpstart] ZombieBuddy could not forget " + modId + ": " + forgot);
         }
         List<String> dirs = luaGame.modDirs(modId); // before the folder goes
