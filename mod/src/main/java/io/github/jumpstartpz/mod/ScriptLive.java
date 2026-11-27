@@ -86,7 +86,7 @@ final class ScriptLive {
         Object init = enumValue(modeClass, "Init");
         Object reload = enumValue(modeClass, "Reload");
         Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
-        Method absolute = fs.getClass().getMethod("getAbsolutePath", String.class);
+        Method absolute = open(fs.getClass(), "getAbsolutePath", String.class);
         Method loadFile = sm.getMethod("LoadFile", modeClass, String.class, boolean.class);
         Method fileName = Class.forName("zombie.scripting.FileName").getMethod("getName", String.class);
         List<?> collections = (List<?>) declared(sm, "bucketCollectionList").get(manager);
@@ -147,7 +147,7 @@ final class ScriptLive {
                 }
             });
             for (Object collection : changedCollections) {
-                collection.getClass().getMethod("LoadScripts", modeClass).invoke(collection, reload);
+                open(collection.getClass(), "LoadScripts", modeClass).invoke(collection, reload);
                 ((List<?>) declared(Class.forName("zombie.scripting.ScriptBucketCollection"), "allScripts").get(collection)).clear();
             }
             for (Object script : touched) {
@@ -168,7 +168,7 @@ final class ScriptLive {
         }
         List<String> types = new ArrayList<>();
         for (Object item : newItems) {
-            types.add((String) item.getClass().getMethod("getFullName").invoke(item));
+            types.add((String) open(item.getClass(), "getFullName").invoke(item));
         }
         System.out.println("[Jumpstart] scripts of " + modId + " live: " + touched.size() + " scripts from " + files.size()
                 + " files, new items " + types + (errors.isEmpty() ? "" : "; problems: " + errors));
@@ -199,7 +199,7 @@ final class ScriptLive {
     static boolean reloadAnimations() throws ReflectiveOperationException {
         Object models = Class.forName("zombie.core.skinnedmodel.ModelManager").getField("instance").get(null);
         if (models != null) {
-            models.getClass().getMethod("loadModAnimations").invoke(models);
+            open(models.getClass(), "loadModAnimations").invoke(models);
         }
         Class<?> global = Class.forName("zombie.Lua.LuaManager$GlobalObject");
         global.getMethod("refreshAnimSets", boolean.class).invoke(null, true);
@@ -282,20 +282,45 @@ final class ScriptLive {
             Method parse = declared(dataClass, "parseInfoLoadList", new Class<?>[] {Map.class});
             parse.invoke(data, itemList);
             parse.invoke(data, entityList);
-            declared(dataClass, "parseCurrentInfoSet", new Class<?>[0]).invoke(data);
+            // what DictionaryData.parseCurrentInfoSet does, for the new items only: it gives every loaded
+            // item its id, and an item that has one already throws ("Cannot override existing registry id")
+            linkNewItems(data, newItems, errors);
             itemList.clear();
             entityList.clear();
             declared(dataClass, "save", new Class<?>[0]).invoke(data);
             Map<String, Short> ids = new LinkedHashMap<>();
             Method id = dictionary.getMethod("getItemRegistryID", String.class);
             for (Object item : newItems) {
-                String type = (String) item.getClass().getMethod("getFullName").invoke(item);
+                String type = (String) open(item.getClass(), "getFullName").invoke(item);
                 ids.put(type, (Short) id.invoke(null, type));
             }
             lastIds = ids;
             System.out.println("[Jumpstart] world dictionary: new items " + ids);
         } catch (ReflectiveOperationException | RuntimeException e) {
             errors.add("world dictionary: " + (e instanceof java.lang.reflect.InvocationTargetException t ? t.getCause() : e));
+        }
+    }
+
+    /** Each new item's dictionary entry points at its script, and the script gets the entry's id. */
+    private static void linkNewItems(Object data, List<Object> newItems, List<String> errors) throws ReflectiveOperationException {
+        Class<?> dataClass = Class.forName("zombie.world.DictionaryData");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> byType = (Map<String, Object>) declared(dataClass, "itemTypeToInfoMap").get(data);
+        Class<?> info = Class.forName("zombie.world.ItemInfo");
+        Class<?> base = Class.forName("zombie.world.DictionaryInfo");
+        for (Object item : newItems) {
+            String type = (String) open(item.getClass(), "getFullName").invoke(item);
+            Object entry = byType.get(type);
+            if (entry == null) {
+                errors.add("no dictionary entry for " + type);
+                continue;
+            }
+            declared(info, "scriptItem").set(entry, item);
+            declared(base, "entityScript").set(entry, item);
+            short id = declared(base, "registryId").getShort(entry);
+            if ((Short) open(item.getClass(), "getRegistry_id").invoke(item) == -1) {
+                open(item.getClass(), "setRegistry_id", short.class).invoke(item, id);
+            }
         }
     }
 
@@ -311,25 +336,25 @@ final class ScriptLive {
         Class<?> info = Class.forName("zombie.world.ItemInfo");
         Class<?> base = Class.forName("zombie.world.DictionaryInfo");
         for (Object item : newItems) {
-            String type = (String) item.getClass().getMethod("getFullName").invoke(item);
+            String type = (String) open(item.getClass(), "getFullName").invoke(item);
             Short id = ids.get(type);
             if (id == null) {
                 errors.add("no id from the server for " + type);
                 continue;
             }
             Object entry = info.getConstructor().newInstance();
-            declared(base, "name").set(entry, item.getClass().getMethod("getName").invoke(item));
-            declared(base, "moduleName").set(entry, item.getClass().getMethod("getModuleName").invoke(item));
+            declared(base, "name").set(entry, open(item.getClass(), "getName").invoke(item));
+            declared(base, "moduleName").set(entry, open(item.getClass(), "getModuleName").invoke(item));
             declared(base, "fullType").set(entry, type);
             declared(base, "registryId").setShort(entry, id);
-            declared(base, "modId").set(entry, item.getClass().getMethod("getModID").invoke(item));
+            declared(base, "modId").set(entry, open(item.getClass(), "getModID").invoke(item));
             declared(base, "isModded").setBoolean(entry, true);
             declared(base, "isLoaded").setBoolean(entry, true);
             declared(base, "entityScript").set(entry, item);
             declared(info, "scriptItem").set(entry, item);
             byType.put(type, entry);
             byId.put(id, entry);
-            item.getClass().getMethod("setRegistry_id", short.class).invoke(item, id);
+            open(item.getClass(), "setRegistry_id", short.class).invoke(item, id);
         }
     }
 
@@ -393,7 +418,7 @@ final class ScriptLive {
             @SuppressWarnings("unchecked")
             Map<String, String> fileToMod = (Map<String, String>) declared(sm, "tempFileToModMap").get(manager);
             Object fs = Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
-            Method absolute = fs.getClass().getMethod("getAbsolutePath", String.class);
+            Method absolute = open(fs.getClass(), "getAbsolutePath", String.class);
             List<String> vanilla = new ArrayList<>();
             List<String> mods = new ArrayList<>();
             for (String name : loadFileNames) {
@@ -415,8 +440,8 @@ final class ScriptLive {
             List<Object> savedGroups = new ArrayList<>(groups);
             Field current = declared(groupClass, "currentGroup");
             Object savedCurrent = current.get(null);
-            checksummer.getClass().getMethod("reset").invoke(checksummer);
-            Method add = checksummer.getClass().getMethod("addFile", String.class, String.class);
+            open(checksummer.getClass(), "reset").invoke(checksummer);
+            Method add = open(checksummer.getClass(), "addFile", String.class, String.class);
             Set<String> seen = new java.util.HashSet<>();
             try {
                 current.set(null, null);
@@ -431,7 +456,7 @@ final class ScriptLive {
                 current.set(null, savedCurrent);
             }
             String before = (String) declared(sm, "checksum").get(manager);
-            String after = (String) checksummer.getClass().getMethod("checksumToString").invoke(checksummer);
+            String after = (String) open(checksummer.getClass(), "checksumToString").invoke(checksummer);
             declared(sm, "checksum").set(manager, after);
             if (!after.equals(before)) {
                 System.out.println("[Jumpstart] script checksum: " + before + " -> " + after);
@@ -465,7 +490,7 @@ final class ScriptLive {
     static String currentChecksum() {
         try {
             Object manager = Class.forName("zombie.scripting.ScriptManager").getField("instance").get(null);
-            Object sum = manager.getClass().getMethod("getChecksum").invoke(manager);
+            Object sum = open(manager.getClass(), "getChecksum").invoke(manager);
             return sum == null ? "" : sum.toString();
         } catch (ReflectiveOperationException | RuntimeException e) {
             return "";
@@ -499,7 +524,7 @@ final class ScriptLive {
 
     private static void call(Object script, String method, List<String> errors, Class<?>[] types, Object... args) {
         try {
-            script.getClass().getMethod(method, types).invoke(script, args);
+            open(script.getClass(), method, types).invoke(script, args);
         } catch (java.lang.reflect.InvocationTargetException e) {
             errors.add(method + " " + script + ": " + e.getCause());
         } catch (ReflectiveOperationException | RuntimeException e) {
@@ -527,6 +552,17 @@ final class ScriptLive {
             }
         }
         throw new NoSuchFieldException(owner.getName() + "." + name);
+    }
+
+    /**
+     * A public method of an object's class, callable even when the class itself is not public (the
+     * game's anonymous ScriptManager$3 is a ScriptBucketCollection: its public LoadScripts threw
+     * IllegalAccessException through getClass().getMethod).
+     */
+    static Method open(Class<?> type, String name, Class<?>... types) throws NoSuchMethodException {
+        Method m = type.getMethod(name, types);
+        m.trySetAccessible();
+        return m;
     }
 
     private static Method declared(Class<?> owner, String name, Class<?>[] types) throws NoSuchMethodException {

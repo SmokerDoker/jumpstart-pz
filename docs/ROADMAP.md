@@ -114,7 +114,7 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Join: skip the game's second load of all mods when the menu already has the server's list (research; deep in the game's loading)
 - [ ] Slow PCs lose the connection while the game loads its tiles on join (game side)
 - [ ] A list of mods tested with Jumpstart
-- [ ] An in-game test that gets into a save by itself (today the tests wait for a click)
+- [x] An in-game test that gets into a save by itself: `tools/lua/new-game.lua` starts a new sandbox game from the main menu through the test jar's Lua server (as the menu's New Game and the game's debug scenarios do); `tools/cleanremovaltest.ps1` and `tools/startmodtest.ps1` use it and wait for a person only if it fails. First run 2026-11-28: `cleanremovaltest.ps1` fully by itself, 23 of 23 checks OK in the real game (snapshot, a Lua mod on, off, on, uninstalled; its file parked and back). `tools/savetest.ps1`, fully by itself too: an item mod on live, three of its items in the inventory, off and L (the save loads again by itself, one placeholder "… TestToken x3" carries them), on and L (the three are back), P (the summary shows). It found two bugs in live items, fixed: the game's anonymous script collection could not be called through reflection (IllegalAccessException: no item ever loaded live), and the world dictionary step gave every loaded item its id again (the game throws "Cannot override existing registry id"); only the new items get theirs now
 - [ ] Self-update of the running core; releases checked through the BiteCheck registry
 
 ## Tests in the real game still to do
@@ -126,7 +126,7 @@ in-process restart of the game's start phases) or *restart*.
 - [x] Switching a mod off and on for everybody on a real server (Linux, 0.5.5)
 - [ ] Install, update and remove for everybody on a real server
 - [ ] `tools\startmodtest.ps1` after its last fix; `tools\gametest.ps1` with the current build
-- [ ] Items live (0.5.12): `tools/testmods/JSTItemTest`, steps in kit/TESTPLAN.md; vanilla recipes still work after it
+- [ ] Items live (0.5.12): `tools/testmods/JSTItemTest` loads live in the game now (savetest.ps1, after the two fixes); still to see: its recipe, and that vanilla recipes still work after it
 - [ ] Marketplace keys (0.5.12): sorting, N/V/H, a conflict shown, a version loaded back, "verified updates only"
 - [ ] Multiplayer (0.5.11): emergency switch-off (X twice), a snapshot during a round, choosing a mod of an item,
   a player who joins after a live install is not turned away for a checksum

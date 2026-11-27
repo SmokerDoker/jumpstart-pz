@@ -299,6 +299,7 @@ public final class MissingItems {
                         unplaced.add(k);
                     } else {
                         g.add(e.getKey(), holder);
+                        System.out.println("[Jumpstart] placeholder for " + k.type() + " in " + where(g, e.getKey()));
                     }
                 } catch (Exception ex) {
                     unplaced.add(k);
@@ -317,6 +318,13 @@ public final class MissingItems {
             all.addAll(unplaced);
             g.write(owner, all);
         }
+    }
+
+    /** For the log: the container and who holds it. */
+    private static String where(Game g, Object container) {
+        Object owner = g.ownerOf(container);
+        return "container@" + Integer.toHexString(System.identityHashCode(container)) + " of "
+                + (owner == null ? "nobody" : owner.getClass().getSimpleName() + "@" + Integer.toHexString(System.identityHashCode(owner)));
     }
 
     /** "Missing mod (SwordMod): Katana x3" in the game's language. */
@@ -343,7 +351,7 @@ public final class MissingItems {
                 back += putBack(g, container, owner, kept);
             }
             if (back > 0) {
-                System.out.println("[Jumpstart] " + back + " items of a mod that is back are in their place again");
+                System.out.println("[Jumpstart] " + back + " items of a mod that is back are in their place again (" + where(g, container) + ")");
             }
         }
     }
