@@ -123,6 +123,14 @@ getrennt werden. Server-Log: `script checksum: … -> …`.
    `zu wenig, um es zu sehen`.
 3. Ruckelt das Spiel während der 10 Sekunden spürbar? Bitte melden (die Messung soll kaum etwas kosten).
 
+## Items einer ausgeschalteten Mod auf dem Server (Admin + 1 Spieler, 10 Minuten)
+
+1. Auf dem Server ein Item einer Mod in eine Kiste legen. Server stoppen, die Mod in der Server-Mod-Liste
+   aus, Server starten, beide treten bei: In der Kiste liegt eine rote Spielfigur „Missing mod (…): …“,
+   **beide** sehen sie. Server-Log: `items of a missing mod wait in the save: …`.
+2. Server stoppen, Mod wieder an, starten, beitreten: Das Item ist wieder in der Kiste, die Spielfigur weg,
+   für beide (`… are in their place again`).
+
 ## 5. Was ihr mir schickt
 
 - Was ihr gesehen habt, pro Schritt kurz (gerne Screenshots vom Jumpstart-Bildschirm).
