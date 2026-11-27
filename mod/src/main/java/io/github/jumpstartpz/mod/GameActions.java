@@ -739,7 +739,10 @@ final class GameActions implements Actions {
             List<String> stays = LuaJournal.functionsFrom(luaGame, modFile);
             journal.leftovers = stays.isEmpty() ? "" : "start:" + stays.size() + ":" + LuaJournal.shortList(stays, 5);
         } else {
-            journal.leftovers = "";
+            // the check after switching off: functions from its files the record did not cover (set later,
+            // by a handler, or deeper in a table) are still reachable from the globals
+            List<String> alive = LuaJournal.functionsFrom(luaGame, modFile);
+            journal.leftovers = alive.isEmpty() ? "" : "alive:" + alive.size() + ":" + LuaJournal.shortList(alive, 5);
         }
         int count = taken.values().stream().mapToInt(List::size).sum();
         System.out.println("[Jumpstart] Lua of " + modId + " stopped: " + count + " event handlers " + taken.keySet()

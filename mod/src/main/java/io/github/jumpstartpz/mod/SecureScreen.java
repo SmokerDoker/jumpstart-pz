@@ -627,7 +627,8 @@ public final class SecureScreen {
         } catch (NumberFormatException e) {
             return "";
         }
-        return String.format(Locale.ROOT, texts.get(p[0].equals("kept") ? "lua.kept" : "lua.startLoaded"), name, count, p[2]);
+        return String.format(Locale.ROOT, texts.get(p[0].equals("kept") ? "lua.kept" : p[0].equals("alive") ? "lua.alive" : "lua.startLoaded"),
+                name, count, p[2]);
     }
 
     /** "java.lang.NullPointerException: x" -> "NullPointerException". */

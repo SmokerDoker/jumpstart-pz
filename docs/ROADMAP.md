@@ -45,11 +45,13 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] Classify each mod as live, reload or restart (declaration, bytecode analysis, BiteCheck's scan)
 - [ ] An own class loader per mod (patches are merged into the shared loader today)
 - [ ] A trial run before a mod is switched on
-- [ ] Crash report as a zip
-- [ ] After switching off: check that no code or reference of the mod is still alive
+- [x] Crash report as a zip (C in the installed tab: console log, the mods with state, hash and BiteCheck's word, what the crash protection caught, system, the JVM's crash files; written to `Zomboid/jumpstart/reports/`, sent nowhere)
+- [x] After switching off: Lua functions from the mod's files still reachable from the globals are named (Lua side)
+- [ ] The same check for the Java side (classes of the mod still referenced after it is off: needs the fork)
 - [ ] Move structural class changes out (nestmates, invokedynamic)
-- [ ] Registration journal: key bindings, console commands and non-function values in tables
-- [ ] Files a mod created are archived also when it is only switched off (today only on uninstall)
+- [x] Registration journal: entries a mod adds to the game's tables while it loads live (a key binding in `keyBinding`, list and lookup entries) go when it is switched off; lists close up (`table.remove`), the entry comes back at the end
+- [ ] Registrations a mod made in a save it came with (no record from before it loaded), and values it changed in existing entries
+- [x] Files a mod created wait in `Zomboid/jumpstart/parked/<mod>/` while it is off and come back when it is on (never over a new file); uninstalling archives them
 - [ ] Java writes into instance fields (today static fields only)
 - [ ] ModData on single objects; placeholder items for items of a removed mod
 - [ ] Trip wire in every mod method, not only at the start of each patch
@@ -89,7 +91,7 @@ in-process restart of the game's start phases) or *restart*.
 - [x] Workshop items with several mods: the admin chooses which one to install
 - [x] After a SteamCMD game update: every install writes a start script of Jumpstart's own (repair and update, then the game's script); `--systemd <unit>` writes the unit's drop-in
 - [x] Item scripts and animations of a mod installed live on a server: loaded on server and clients in the round, script checksum worked out again (section 2)
-- [ ] Restore a server snapshot from the setup (today by hand, see kit/SERVER.md)
+- [x] Restore a server snapshot from the setup: `--snapshots`, `--restore-snapshot latest|FILE` (server stopped; the save it replaces is kept)
 
 ## 5. More
 
