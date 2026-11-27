@@ -1582,6 +1582,10 @@ public final class SecureScreen {
     // --- library tabs ----------------------------------------------------------------------------
 
     private void onLibrary(Library lib, Set<Integer> pressed, long now) {
+        if (pick != null) {
+            onChoice(pressed);
+            return;
+        }
         for (int key : pressed) {
             if (key == KEY_BACKSPACE && lib.query.length() > 0) {
                 lib.query.setLength(lib.query.length() - 1);
@@ -1763,10 +1767,38 @@ public final class SecureScreen {
 
     /** Steam has the item: its mods join the mod list and load (a Java mod through BiteCheck's check). */
     private void installDownloaded(Download d, long now) {
+        installDownloaded(d, now, null);
+    }
+
+    /** {@code only}: the one mod of the item to install (the player chose it), or null for all / the only one. */
+    private void installDownloaded(Download d, long now, String only) {
         String folder = actions.workshop().installFolder(d.item().id());
         List<Actions.FolderMod> found = folder == null ? List.of() : actions.modsInFolder(folder);
+        if (only != null) {
+            found = found.stream().filter(m -> m.id().equals(only)).toList();
+        }
         if (found.isEmpty()) {
             say(texts.get("noModInItem"), false);
+            return;
+        }
+        if (found.size() > 1) {
+            // variants that must not run together, or a mod with add-ons: the player chooses one
+            List<String[]> mods = new ArrayList<>();
+            for (Actions.FolderMod m : found) {
+                mods.add(new String[] {m.id(), m.name() + (m.java() != null ? " (Java)" : "")});
+            }
+            choiceSelected = 0;
+            pick = new Pick(d.item().title(), mods, "choose.text", "btn.chooseThis", mod -> {
+                pick = null;
+                busy(String.format(Locale.ROOT, texts.get("busy.install"), mod[1]), () -> installDownloaded(d, frameTime, mod[0]));
+            }, () -> {
+                pick = null;
+                say(texts.get("mp.choose.cancelled"), false);
+            });
+            if (mode == Mode.LIST) {
+                tab = d.item().java() ? Tab.JAVA_LIBRARY : Tab.LUA_LIBRARY; // where the choice shows
+            }
+            say(String.format(Locale.ROOT, texts.get("choose.note"), d.item().title()), true);
             return;
         }
         List<String> problems = new ArrayList<>();
@@ -2120,8 +2152,44 @@ public final class SecureScreen {
     }
 
     /** The admin chooses the mod to install from a Workshop item with several; Backspace cancels. */
-    private void onChoice(Set<Integer> pressed) {
+    /**
+     * The mods of a Workshop item with several (variants like 60 / 80 %, or a mod with add-ons): the
+     * player chooses one. {@code mods}: {id, name}. Multiplayer: the server asked the admin; single
+     * player: the item was just downloaded.
+     */
+    private record Pick(String item, List<String[]> mods, String textKey, String buttonKey,
+                        java.util.function.Consumer<String[]> chosen, Runnable cancelled) {
+    }
+
+    /** A pick of the player's own (single player), or the server's question to the admin. */
+    private Pick pick;
+
+    private Pick currentPick() {
+        if (pick != null) {
+            return pick;
+        }
         ClientSession.Choice c = session.choice;
+        if (c == null) {
+            return null;
+        }
+        return new Pick(c.item(), c.mods(), "mp.choose.text", "btn.chooseInstall", mod -> {
+            if (session.update != null) {
+                return; // a change runs: Enter waits
+            }
+            session.choice = null;
+            session.requestInstall(c.item(), mod[0]);
+            say(String.format(Locale.ROOT, texts.get("mp.installRequested"), mod[1]), true);
+        }, () -> {
+            session.choice = null;
+            say(texts.get("mp.choose.cancelled"), false);
+        });
+    }
+
+    private void onChoice(Set<Integer> pressed) {
+        Pick c = currentPick();
+        if (c == null) {
+            return;
+        }
         if (pressed.contains(KEY_UP) && choiceSelected > 0) {
             choiceSelected--;
         }
@@ -2129,23 +2197,22 @@ public final class SecureScreen {
             choiceSelected++;
         }
         if (pressed.contains(KEY_BACKSPACE)) {
-            session.choice = null;
-            say(texts.get("mp.choose.cancelled"), false);
+            c.cancelled().run();
             return;
         }
-        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && session.update == null) {
-            String[] mod = c.mods().get(Math.min(choiceSelected, c.mods().size() - 1));
-            session.choice = null;
-            session.requestInstall(c.item(), mod[0]);
-            say(String.format(Locale.ROOT, texts.get("mp.installRequested"), mod[1]), true);
+        if (pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) {
+            c.chosen().accept(c.mods().get(Math.min(choiceSelected, c.mods().size() - 1)));
         }
     }
 
     private void drawChoice(int x, int y, int width, int bottom) {
-        ClientSession.Choice c = session.choice;
+        Pick c = currentPick();
+        if (c == null) {
+            return;
+        }
         game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.choose.title"), c.item()), 1f, 0.9f, 0.5f, 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
-        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("mp.choose.text"), 0.85f, 0.85f, 0.85f) + 6;
+        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get(c.textKey()), 0.85f, 0.85f, 0.85f) + 6;
         int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
         int rowsBottom = bottom - buttonHeight() - 10;
         for (int i = 0; i < c.mods().size() && y + line <= rowsBottom; i++) {
@@ -2161,7 +2228,7 @@ public final class SecureScreen {
             y += line;
         }
         int bx = x;
-        bx += button(bx, rowsBottom + 6, texts.get("btn.chooseInstall"), KEY_ENTER, null, true) + 10;
+        bx += button(bx, rowsBottom + 6, texts.get(c.buttonKey()), KEY_ENTER, null, true) + 10;
         button(bx, rowsBottom + 6, texts.get("btn.chooseCancel"), KEY_BACKSPACE, null, true);
     }
 
@@ -2571,6 +2638,10 @@ public final class SecureScreen {
     }
 
     private void drawLibrary(Library lib, int x, int top, int width, int bottom, long now) {
+        if (pick != null) {
+            drawChoice(x, top, width, bottom);
+            return;
+        }
         int medium = game.fontHeight(GameScreen.Font.MEDIUM);
         int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
         game.rect(x - 6, top - 4, width + 12, medium + 10, 0.03f, 0.03f, 0.04f, 1f);

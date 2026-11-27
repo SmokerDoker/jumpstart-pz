@@ -337,6 +337,26 @@ class SecureScreenTest {
     }
 
     @Test
+    void anItemWithSeveralModsAsksWhichOneInSinglePlayer() {
+        actions.folders.put("/workshop/201", List.of(new Actions.FolderMod("Car60", "Car 60 %", null),
+                new Actions.FolderMod("Car80", "Car 80 %", null)));
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER); // install "Lua Mod" (201)
+        actions.workshop.states.put(201L, Workshop.SUBSCRIBED | Workshop.INSTALLED);
+        frame(); settle();
+        assertTrue(actions.activated.isEmpty(), "variants are not all switched on");
+        assertTrue(game.drew("Car 80 %"));
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertEquals(List.of("Car80"), actions.activated);
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
