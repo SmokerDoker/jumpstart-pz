@@ -869,6 +869,107 @@ final class GameActions implements Actions {
         worker.start();
     }
 
+    /**
+     * Server: saves the world now (the game's own save, ServerMap.QueuedSaveAll; we are in its server
+     * loop), then zips the save in the background once the chunk saver is done, while the game goes
+     * on. Like the game's own backups, which also copy while it runs.
+     */
+    void beginServerSnapshot() {
+        if (!luaGame.isServer() || "running".equals(snapshotState)) {
+            return;
+        }
+        Path save = ModDataJournal.saveDir();
+        if (save == null) {
+            snapshotState = "failed: no save folder";
+            return;
+        }
+        try {
+            if (!saveSnapshots.wanted(save)) {
+                snapshotState = "skipped";
+                System.out.println("[Jumpstart] multiplayer: no snapshot (snapshots=" + saveSnapshots.mode().name().toLowerCase(Locale.ROOT)
+                        + ", save " + SaveSnapshots.size(save) / (1024 * 1024) + " MB)");
+                return;
+            }
+            snapshotState = "running";
+            Class<?> map = Class.forName("zombie.network.ServerMap");
+            map.getMethod("QueuedSaveAll", boolean.class).invoke(map.getField("instance").get(null), false);
+        } catch (IOException | ReflectiveOperationException | RuntimeException e) {
+            snapshotState = "failed " + e;
+            System.out.println("[Jumpstart] multiplayer: no snapshot: " + e);
+            return;
+        }
+        Thread worker = new Thread(() -> {
+            try {
+                waitForServerChunkSaver();
+                Path zip = saveSnapshots.take(save, Path.of((String) fileSystemCall("getSaveDir")));
+                snapshotState = "done";
+                System.out.println("[Jumpstart] multiplayer: snapshot of the save: " + zip);
+            } catch (Exception e) {
+                snapshotState = "failed " + e;
+                System.out.println("[Jumpstart] multiplayer: no snapshot of the save: " + e);
+            }
+        }, "Jumpstart snapshot");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    boolean serverSnapshotRunning() {
+        return "running".equals(snapshotState);
+    }
+
+    /**
+     * The server writes chunks on ServerChunkLoader's save thread (ServerMap$ServerCell.chunkLoader,
+     * its threadSave with the queue toThread and currentTask): wait until both are empty. Fields of
+     * the game's own, so a short fixed wait when they are not found.
+     */
+    private static void waitForServerChunkSaver() throws InterruptedException {
+        long until = System.currentTimeMillis() + 120_000;
+        try {
+            java.lang.reflect.Field loaderField = Class.forName("zombie.network.ServerMap$ServerCell").getDeclaredField("chunkLoader");
+            loaderField.setAccessible(true);
+            Object loader = loaderField.get(null);
+            java.lang.reflect.Field threadField = loader.getClass().getDeclaredField("threadSave");
+            threadField.setAccessible(true);
+            Object thread = threadField.get(loader);
+            java.lang.reflect.Field queueField = thread.getClass().getDeclaredField("toThread");
+            java.lang.reflect.Field taskField = thread.getClass().getDeclaredField("currentTask");
+            queueField.setAccessible(true);
+            taskField.setAccessible(true);
+            java.util.Collection<?> queue = (java.util.Collection<?>) queueField.get(thread);
+            Thread.sleep(200);
+            while ((!queue.isEmpty() || taskField.get(thread) != null) && System.currentTimeMillis() < until) {
+                Thread.sleep(100);
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] multiplayer: cannot follow the chunk saver (" + e + "), waiting 5 s");
+            Thread.sleep(5000);
+        }
+    }
+
+    /** BiteCheck's word on a hash from the current index (no download): its status, or null without an index. */
+    Verifier.Status indexStatus(String sha256) {
+        return installer.gate().indexSource().index().map(i -> i.lookup(sha256).status()).orElse(null);
+    }
+
+    /** Fetches BiteCheck's index again (network; not on the game's thread). */
+    void refreshIndexQuietly() {
+        try {
+            installer.gate().indexSource().refresh();
+        } catch (RuntimeException e) {
+            System.out.println("[Jumpstart] cannot refresh BiteCheck's index: " + e);
+        }
+    }
+
+    @Override
+    public boolean dropFromModList(String modId) {
+        return luaGame.dropFromModList(modId);
+    }
+
+    @Override
+    public String recomputeLuaChecksum(String why) {
+        return LuaChecksum.recomputeQuietly(why);
+    }
+
     /** The game writes changed map chunks on its own thread: the copy waits until that queue is empty. */
     private static void waitForChunkSaver() throws ReflectiveOperationException, InterruptedException {
         Class<?> worker = Class.forName("zombie.iso.ChunkSaveWorker");

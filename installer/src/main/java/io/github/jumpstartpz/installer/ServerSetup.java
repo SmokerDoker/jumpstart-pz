@@ -63,6 +63,119 @@ final class ServerSetup {
         this.log = log;
     }
 
+    // --- after a game update through SteamCMD ---------------------------------------------------
+
+    static final String WRAPPER_WINDOWS = "StartServer64-Jumpstart.bat";
+    static final String WRAPPER_UNIX = "start-server-jumpstart.sh";
+
+    /**
+     * A start script of Jumpstart's own next to the game's (SteamCMD replaces the game's with every
+     * update, never this one): it runs this setup with {@code --update} (a newer signed release, and the
+     * agent back into the start configuration), then the game's start script with all arguments.
+     * Written again by every install and update, so it names the current options.
+     */
+    Path startWrapper() {
+        return o.serverDir().resolve(os == Platform.Os.WINDOWS ? WRAPPER_WINDOWS : WRAPPER_UNIX);
+    }
+
+    /** The command that updates and repairs this server's Jumpstart, as program and arguments. */
+    List<String> updateCommand(Path setupJar) {
+        Path dir = o.serverDir().toAbsolutePath().normalize();
+        List<String> cmd = new ArrayList<>(List.of(
+                dir.resolve(os == Platform.Os.WINDOWS ? "jre64/bin/java.exe" : "jre64/bin/java").toString(),
+                "-jar", setupJar.toAbsolutePath().normalize().toString(), "--server", dir.toString()));
+        o.name().ifPresent(n -> cmd.addAll(List.of("--name", n)));
+        cmd.addAll(List.of("--zomboid-dir", o.zomboidDir().toAbsolutePath().normalize().toString()));
+        o.agentArgs().ifPresent(a -> cmd.addAll(List.of("--agent-args", a)));
+        if (o.headless()) {
+            cmd.add("--headless");
+        }
+        cmd.add("--update");
+        return cmd;
+    }
+
+    void writeStartWrapper(Path setupJar) throws IOException {
+        List<String> cmd = updateCommand(setupJar);
+        String text;
+        if (os == Platform.Os.WINDOWS) {
+            text = String.join("\r\n",
+                    "@echo off",
+                    "rem Written by JumpstartSetup. Start the server with this file instead of StartServer64.bat:",
+                    "rem it puts Jumpstart back after a game update (SteamCMD replaces StartServer64.bat) and installs",
+                    "rem a newer signed Jumpstart release, then starts the server. Every install writes it again.",
+                    "cd /d \"%~dp0\"",
+                    String.join(" ", cmd.stream().map(ServerSetup::batQuote).toList()),
+                    "call StartServer64.bat %*",
+                    "");
+        } else {
+            text = String.join("\n",
+                    "#!/bin/sh",
+                    "# Written by JumpstartSetup. Start the server with this file instead of start-server.sh:",
+                    "# it puts Jumpstart back after a game update (SteamCMD replaces ProjectZomboid64.json) and installs",
+                    "# a newer signed Jumpstart release, then starts the server. Every install writes it again.",
+                    "cd \"$(dirname \"$0\")\" || exit 1",
+                    String.join(" ", cmd.stream().map(ServerSetup::shQuote).toList()) + " || true",
+                    "exec ./start-server.sh \"$@\"",
+                    "");
+        }
+        Path wrapper = startWrapper();
+        Files.writeString(wrapper, text, StandardCharsets.UTF_8);
+        if (os != Platform.Os.WINDOWS) {
+            try {
+                Files.setPosixFilePermissions(wrapper, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+            } catch (UnsupportedOperationException e) {
+                // not a POSIX file system
+            }
+        }
+        log.accept(t.get("server.wrapper", wrapper));
+    }
+
+    /**
+     * For a server run by systemd: a drop-in for its unit with the update as {@code ExecStartPre}
+     * ("-": the server starts also when it fails, for example without network). systemd runs drop-in
+     * lines after the unit's own, so after a SteamCMD update there. Needs root, then
+     * {@code systemctl daemon-reload}.
+     */
+    Path writeSystemdDropIn(String unit, Path setupJar, Path systemdDir) throws IOException {
+        if (!unit.matches("[A-Za-z0-9@._:-]+")) {
+            throw new IOException(t.get("server.badUnit", unit));
+        }
+        String name = unit.contains(".") ? unit : unit + ".service";
+        Path dropIn = systemdDir.resolve(name + ".d").resolve("jumpstart.conf");
+        Files.createDirectories(dropIn.getParent());
+        String line = String.join(" ", updateCommand(setupJar).stream().map(ServerSetup::systemdQuote).toList());
+        Files.writeString(dropIn, "# Written by JumpstartSetup: Jumpstart back after a game update, newer signed releases.\n"
+                + "[Service]\nExecStartPre=-" + line + "\n", StandardCharsets.UTF_8);
+        log.accept(t.get("server.dropIn", dropIn));
+        return dropIn;
+    }
+
+    /** Removes what {@link #writeStartWrapper} and {@link #writeSystemdDropIn} wrote. */
+    void removeStartHooks(Optional<String> unit, Path systemdDir) throws IOException {
+        if (Files.deleteIfExists(startWrapper())) {
+            log.accept(t.get("log.modRemoved", startWrapper()));
+        }
+        if (unit.isPresent() && unit.get().matches("[A-Za-z0-9@._:-]+")) {
+            String name = unit.get().contains(".") ? unit.get() : unit.get() + ".service";
+            Path dropIn = systemdDir.resolve(name + ".d").resolve("jumpstart.conf");
+            if (Files.deleteIfExists(dropIn)) {
+                log.accept(t.get("log.modRemoved", dropIn));
+            }
+        }
+    }
+
+    static String batQuote(String s) {
+        return "\"" + s.replace("\"", "").replace("%", "%%") + "\"";
+    }
+
+    static String shQuote(String s) {
+        return "'" + s.replace("'", "'\\''") + "'";
+    }
+
+    static String systemdQuote(String s) {
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("%", "%%") + "\"";
+    }
+
     private Path mods() {
         return o.zomboidDir().resolve("mods");
     }

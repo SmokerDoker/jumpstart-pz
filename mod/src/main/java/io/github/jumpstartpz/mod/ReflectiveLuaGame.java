@@ -427,6 +427,19 @@ final class ReflectiveLuaGame implements LuaLive.Game {
         return Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
     }
 
+    /**
+     * Takes a removed mod out of the running game's mod list, as if the game had started without it
+     * (the Lua checksum and the next load go by this list). True if it was in it.
+     */
+    boolean dropFromModList(String modId) {
+        try {
+            return modIds(fileSystem()).remove(modId);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            System.out.println("[Jumpstart] cannot take " + modId + " out of the game's mod list: " + e);
+            return false;
+        }
+    }
+
     private static List<?> modIds(Object fs) throws ReflectiveOperationException {
         Field field = fs.getClass().getDeclaredField("mods");
         field.setAccessible(true);

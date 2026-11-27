@@ -45,6 +45,7 @@ public final class InstallerMain {
         Optional<String> name = Optional.empty();
         Optional<Path> zomboidDir = Optional.empty();
         Optional<String> agentArgs = Optional.empty();
+        Optional<String> systemd = Optional.empty();
         boolean closeSteam = false;
         boolean autoUpdate = true;
         boolean force = false;
@@ -60,6 +61,7 @@ public final class InstallerMain {
                 case "--name" -> name = Optional.of(value(args, ++i));
                 case "--zomboid-dir" -> zomboidDir = Optional.of(Path.of(value(args, ++i)));
                 case "--agent-args" -> agentArgs = Optional.of(value(args, ++i));
+                case "--systemd" -> systemd = Optional.of(value(args, ++i));
                 case "--headless" -> headless = true;
                 case "--close-steam" -> closeSteam = true;
                 case "--no-auto-update" -> autoUpdate = false;
@@ -83,7 +85,7 @@ public final class InstallerMain {
         if (serverDir.isPresent()) {
             Path data = zomboidDir.orElse(Path.of(System.getProperty("user.home"), "Zomboid"));
             ServerSetup.Options o = new ServerSetup.Options(serverDir.get(), name, data, agentArgs, headless);
-            System.exit(server(o, "uninstall".equals(action), update, payloadDir, t));
+            System.exit(server(o, "uninstall".equals(action), update, payloadDir, systemd, t));
             return;
         }
         if (action == null && update) {
@@ -122,7 +124,11 @@ public final class InstallerMain {
                   --agent-args ARGS  the agent's (ZombieBuddy's) options; default hotswap=true
                   --headless         no console: policy=deny-new (new Java mods stay off)
                   --update           only if a newer signed release exists (else just repair); for ExecStartPre
-                  --uninstall        remove it from the server""");
+                  --systemd UNIT     also a drop-in for this systemd unit that runs --update before every start (root)
+                  --uninstall        remove it from the server
+                Every install and update also writes StartServer64-Jumpstart.bat / start-server-jumpstart.sh next
+                to the game's start script: start the server with it and a game update through SteamCMD
+                does not switch Jumpstart off.""");
     }
 
     /** The bundled payload, or the newest signed release if that is newer; {@code --payload} wins. */
@@ -249,16 +255,64 @@ public final class InstallerMain {
      * A dedicated server: install, or with {@code --update} only a newer signed release (and always
      * the repair after a game update). Never fails the server start over a missing network.
      */
-    private static int server(ServerSetup.Options o, boolean uninstall, boolean update, Optional<Path> payloadDir, Texts t) {
+    private static int server(ServerSetup.Options o, boolean uninstall, boolean update, Optional<Path> payloadDir,
+                              Optional<String> systemd, Texts t) {
         Consumer<String> log = line -> System.out.println("[Jumpstart] " + line);
         ServerSetup s = new ServerSetup(Platform.detectOs(), o, t, log);
         runningServer(o).ifPresent(pid -> log.accept(t.get("server.running", pid)));
         try {
             if (uninstall) {
                 s.uninstall();
+                s.removeStartHooks(systemd, SYSTEMD_DIR);
                 log.accept(t.get("done.uninstall"));
                 return 0;
             }
+            int result = installOrUpdate(s, o, update, payloadDir, log, t);
+            if (result == 0) {
+                startHooks(s, systemd, log, t);
+            }
+            return result;
+        } catch (IOException | RuntimeException e) {
+            log.accept(t.get("error", describe(e, t)));
+            return 1;
+        }
+    }
+
+    static final Path SYSTEMD_DIR = Path.of("/etc/systemd/system");
+
+    /**
+     * After an install or update: Jumpstart's start script next to the game's, and with {@code --systemd}
+     * the unit's drop-in (then systemctl daemon-reload). What fails here is only reported: the server
+     * runs with Jumpstart all the same, until the next game update.
+     */
+    private static void startHooks(ServerSetup s, Optional<String> systemd, Consumer<String> log, Texts t) {
+        Optional<Path> jar = Bootstrap.launchJar();
+        if (jar.isEmpty()) {
+            return; // run from a build folder: nothing a start script could name
+        }
+        try {
+            s.writeStartWrapper(jar.get());
+        } catch (IOException | RuntimeException e) {
+            log.accept(t.get("server.wrapperFailed", describe(e, t)));
+        }
+        if (systemd.isPresent()) {
+            try {
+                s.writeSystemdDropIn(systemd.get(), jar.get(), SYSTEMD_DIR);
+                Process p = new ProcessBuilder("systemctl", "daemon-reload").inheritIO().start();
+                if (p.waitFor() != 0) {
+                    log.accept(t.get("server.reload"));
+                }
+            } catch (IOException | RuntimeException e) {
+                log.accept(t.get("server.dropInFailed", describe(e, t)));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static int installOrUpdate(ServerSetup s, ServerSetup.Options o, boolean update, Optional<Path> payloadDir,
+                                       Consumer<String> log, Texts t) {
+        try {
             if (update && s.isInstalled()) {
                 try {
                     Updater updater = Updater.forJumpstart();

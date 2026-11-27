@@ -365,6 +365,114 @@ class ServerCoordinatorTest {
         assertNull(port.last("cleo", "check"), "cleo got done and says hello again anyway");
     }
 
+    @Test
+    void anAdminsEmergencySwitchOffAsksNobodyAndTakesNoSnapshot() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "off", "mod", "Mod", "urgent", "1"), 0);
+        for (String c : List.of("admin", "anna", "ben")) {
+            Map<String, String> p = port.last(c, "prepare");
+            assertEquals("1", p.get("yours"), "nobody is asked");
+            assertEquals("1", p.get("urgent"));
+            assertEquals("20", p.get("seconds"));
+            assertEquals("emergency switch-off by admin", p.get("reason"));
+        }
+        server.tick(1);
+        assertEquals(0, port.snapshots);
+        server.onCommand("admin", "ready", Map.of("token", token("admin"), "mod", "Mod", "sha", "a".repeat(64)), 2);
+        server.tick(19_999);
+        assertTrue(port.applied.isEmpty());
+        server.tick(20_000);
+        assertEquals(Set.of("anna", "ben"), port.kicked.keySet(), "not off in time: out");
+        assertEquals(List.of("OFF Mod " + "a".repeat(64) + " admin=true"), port.applied);
+    }
+
+    @Test
+    void theServersEmergencySwitchOffWaitsForTheRunningRound() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        server.emergencyOff("Mod", "BiteCheck blocks it", 1);
+        server.emergencyOff("Mod", "BiteCheck blocks it", 2);
+        assertEquals("update", port.last("anna", "prepare").get("action"));
+        for (String c : List.of("admin", "anna", "ben")) {
+            ready(c);
+        }
+        server.tick(10);
+        applied("Mod", "admin", "anna", "ben");
+        server.tick(11); // the update is over; the switch-off starts
+        Map<String, String> p = port.last("anna", "prepare");
+        assertEquals("off", p.get("action"));
+        assertEquals("server", p.get("by"));
+        assertEquals("BiteCheck blocks it", p.get("reason"));
+        assertEquals("1", p.get("yours"));
+        long offs = port.sent.get("anna").stream().filter(e -> e.getKey().equals("prepare") && e.getValue().get("action").equals("off")).count();
+        assertEquals(1, offs, "asked twice, switched off once");
+    }
+
+    @Test
+    void phaseTwoWaitsForTheSnapshotWhileTheGameGoesOn() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        server.tick(1);
+        assertEquals(1, port.snapshots, "the snapshot starts from the game's own loop");
+        port.snapshotRunning = true;
+        for (String c : List.of("admin", "anna", "ben")) {
+            ready(c);
+        }
+        server.tick(2);
+        assertTrue(port.pauses.isEmpty(), "everybody is ready, the copy is not");
+        port.snapshotRunning = false;
+        server.tick(3);
+        assertEquals(List.of(true), port.pauses);
+        assertEquals(1, port.applied.size());
+    }
+
+    @Test
+    void aSnapshotThatNeverEndsDoesNotHoldTheRoundForever() {
+        server.onCommand("admin", "change", Map.of("token", token("admin"), "action", "update", "mod", "Mod"), 0);
+        port.snapshotRunning = true;
+        for (String c : List.of("admin", "anna", "ben")) {
+            ready(c);
+        }
+        server.tick(60_000 + ServerCoordinator.SNAPSHOT_WAIT_MS - 1);
+        assertTrue(port.applied.isEmpty());
+        server.tick(60_000 + ServerCoordinator.SNAPSHOT_WAIT_MS);
+        assertEquals(1, port.applied.size());
+    }
+
+    @Test
+    void afterAnInstallWhoseLuaChecksumDiffersIsKicked() {
+        port.fetched = new ServerCoordinator.Fetched(null, "Minimap", "", "", false);
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "456"), 0);
+        server.tick(1);
+        for (String c : List.of("admin", "anna", "ben")) {
+            server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Minimap", "sha", ""), 2);
+        }
+        server.tick(3);
+        applied("Minimap", "admin", "anna", "ben");
+        server.tick(4);
+        port.lua = "server-sum";
+        server.onCommand("anna", "hello", Map.of("lua", "server-sum"), 5);
+        server.onCommand("ben", "hello", Map.of("lua", "other-sum"), 5);
+        server.onCommand("admin", "hello", Map.of(), 5);
+        assertEquals(Set.of("ben"), port.kicked.keySet());
+        assertTrue(port.kicked.get("ben").contains("Lua files differ"));
+        server.onCommand("anna", "hello", Map.of("lua", "changed-later"), 6);
+        assertEquals(Set.of("ben"), port.kicked.keySet(), "compared once after the change, the game does the rest");
+    }
+
+    @Test
+    void anItemWithSeveralModsLetsTheAdminChoose() {
+        port.fetched = ServerCoordinator.Fetched.choose(List.of("Car60\tCar (60 %)", "Car80\tCar (80 %)"));
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "789"), 0);
+        server.tick(1);
+        Map<String, String> c = port.last("admin", "choose");
+        assertEquals("789", c.get("item"));
+        assertEquals("Car60\tCar (60 %)\nCar80\tCar (80 %)", c.get("mods"));
+        assertFalse(server.updateRunning());
+        port.fetched = new ServerCoordinator.Fetched(null, "Car80", "", "", false);
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "789", "mod", "Car80"), 2);
+        server.tick(3);
+        assertEquals(List.of("", "Car80"), port.fetchedMods);
+        assertEquals("Car80", port.last("anna", "prepare").get("mod"));
+    }
+
     private void applied(String mod, String... clients) {
         for (String c : clients) {
             server.onCommand(c, "applied", Map.of("token", token(c), "mod", mod), 2);
@@ -430,8 +538,25 @@ class ServerCoordinatorTest {
             fetching.add(workshopId);
             return null;
         }
-        @Override public ServerCoordinator.Fetched fetched(String workshopId) {
+        final List<String> fetchedMods = new ArrayList<>();
+
+        @Override public ServerCoordinator.Fetched fetched(String workshopId, String modId) {
+            fetchedMods.add(modId);
             return fetched;
+        }
+
+        int snapshots;
+        boolean snapshotRunning;
+        String lua = "";
+
+        @Override public void beginSnapshot() {
+            snapshots++;
+        }
+        @Override public boolean snapshotRunning() {
+            return snapshotRunning;
+        }
+        @Override public String luaChecksum() {
+            return lua;
         }
     }
 }

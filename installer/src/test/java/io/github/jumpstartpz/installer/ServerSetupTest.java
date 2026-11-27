@@ -156,6 +156,41 @@ class ServerSetupTest {
     }
 
     @Test
+    void aStartScriptOfItsOwnRunsTheUpdateThenTheGamesScript() throws IOException {
+        Path server = tmp.resolve("pz server");
+        Files.createDirectories(server);
+        ServerSetup.Options o = new ServerSetup.Options(server, Optional.of("it's mine"), tmp.resolve("data"),
+                Optional.of("hotswap=true,policy=deny-new"), true);
+        ServerSetup linux = new ServerSetup(Platform.Os.LINUX, o, new Texts(false), log::add);
+        linux.writeStartWrapper(tmp.resolve("opt/JumpstartSetup.jar"));
+        String sh = Files.readString(server.resolve("start-server-jumpstart.sh"));
+        assertTrue(sh.startsWith("#!/bin/sh\n"), sh);
+        assertTrue(sh.contains("'--name' 'it'\\''s mine'"), sh);
+        assertTrue(sh.contains("'--agent-args' 'hotswap=true,policy=deny-new' '--headless' '--update' || true\n"), sh);
+        assertTrue(sh.contains("'" + server.toAbsolutePath().normalize().resolve("jre64/bin/java") + "' '-jar'"), sh);
+        assertTrue(sh.endsWith("exec ./start-server.sh \"$@\"\n"), sh);
+
+        ServerSetup windows = new ServerSetup(Platform.Os.WINDOWS, o, new Texts(false), log::add);
+        windows.writeStartWrapper(tmp.resolve("JumpstartSetup.jar"));
+        String bat = Files.readString(server.resolve("StartServer64-Jumpstart.bat"));
+        assertTrue(bat.contains("\r\ncd /d \"%~dp0\"\r\n"), bat);
+        assertTrue(bat.contains("\"--update\"\r\ncall StartServer64.bat %*\r\n"), bat);
+
+        Path systemd = tmp.resolve("systemd");
+        Path dropIn = linux.writeSystemdDropIn("pz", tmp.resolve("opt/JumpstartSetup.jar"), systemd);
+        assertEquals(systemd.resolve("pz.service.d/jumpstart.conf"), dropIn);
+        String conf = Files.readString(dropIn);
+        assertTrue(conf.contains("[Service]\nExecStartPre=-\""), conf);
+        assertTrue(conf.contains("\"--update\"\n"), conf);
+        org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+                () -> linux.writeSystemdDropIn("../evil", tmp.resolve("x.jar"), systemd));
+
+        linux.removeStartHooks(Optional.of("pz"), systemd);
+        assertFalse(Files.exists(server.resolve("start-server-jumpstart.sh")));
+        assertFalse(Files.exists(dropIn));
+    }
+
+    @Test
     void noRunningServerForAFolderNobodyUses(@TempDir Path dir) {
         assertTrue(InstallerMain.runningServer(new ServerSetup.Options(dir, Optional.of("no-such-server-" + System.nanoTime()),
                 dir, Optional.empty(), false)).isEmpty());

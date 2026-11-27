@@ -59,9 +59,9 @@ Next after the current multiplayer block, before the marketplace:
 - [ ] Conflicts: two mods that patch the same method
 - [ ] Updates overview and a channel "verified updates only"
 - [ ] Own cache by hash, so Steam cannot swap files under the running game; rollback to earlier versions
-- [ ] Emergency switch-off: a running mod that BiteCheck flags goes off at once (today R only refreshes the index)
+- [ ] Emergency switch-off in single player: a running mod that BiteCheck blocks goes off at once (on servers done, see 4)
 - [ ] Sort by new and trending (the cloud offers it), filter by BiteCheck status
-- [ ] A Workshop item with several mods (variants like 60/70/80 %) shown as one entry with its variants
+- [ ] A Workshop item with several mods (variants like 60/70/80 %) shown as one entry with its variants (on servers the admin chooses one, see 4; single player installs all of them today)
 - [ ] Mods without Lua (item scripts, textures) labelled as such, with "only after reloading the save"
 
 ## 4. Multiplayer
@@ -70,15 +70,17 @@ Next after the current multiplayer block, before the marketplace:
 - [x] A real server pause (the world stops like on an empty server with PauseEmpty; the network runs on)
 - [x] Two-phase switch with rollback (the server switches first; if it cannot, nobody changes anything)
 - [x] Players who join during a switch: in phase 1 they take part, in phase 2 they are compared after it
-- [ ] Checksums compared after a switch, including the game's Lua checksum for live-installed files
+- [x] Checksums compared after a switch, including the game's Lua checksum: server and players work it out again after an install or remove, the server compares (self test against the game's own at server start)
 - [x] Check the Java mods on every join (and after every change) and bring the player in line: the server's version, on or off, off for Java the server does not run
 - [x] The server compares its players' Java mod hashes (they report them: this keeps honest clients in line)
 - [ ] Against manipulated clients that lie about their hashes: a check the client cannot answer from a list (BiteCheck's point 5, research)
 - [x] Countdown configurable (`server_countdown_seconds`, see kit/SERVER.md)
-- [ ] Emergency switch-off from the server
-- [ ] Save snapshots on servers
-- [ ] Workshop items with several mods (the server takes only the first today)
-- [ ] After a SteamCMD game update: repair from the server's start script (documented in kit/SERVER.md, not yet wired into existing scripts)
+- [x] Emergency switch-off from the server: an admin (X twice, nobody asked, 20 s), or the server itself when BiteCheck blocks a running mod (index fetched every 15 minutes)
+- [x] Save snapshots on servers: at the start of every change, while the game goes on; phase 2 waits for it
+- [x] Workshop items with several mods: the admin chooses which one to install
+- [x] After a SteamCMD game update: every install writes a start script of Jumpstart's own (repair and update, then the game's script); `--systemd <unit>` writes the unit's drop-in
+- [ ] Item scripts and animations of a mod installed live on a server: the game compares their checksums at join too; until they load live (section 2) the server needs a restart for such a mod
+- [ ] Restore a server snapshot from the setup (today by hand, see kit/SERVER.md)
 
 ## 5. More
 

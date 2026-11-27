@@ -64,6 +64,21 @@ final class Bootstrap {
         }
     }
 
+    /**
+     * The jar the process was started with ({@code java -jar X}): also when a newer installer from
+     * {@code versions/} runs now, the path a start script should name stays this one.
+     */
+    static Optional<Path> launchJar() {
+        String cp = System.getProperty("java.class.path", "");
+        if (!cp.isBlank() && !cp.contains(java.io.File.pathSeparator) && cp.endsWith(".jar")) {
+            Path jar = Path.of(cp).toAbsolutePath();
+            if (Files.isRegularFile(jar)) {
+                return Optional.of(jar);
+            }
+        }
+        return ownJar();
+    }
+
     /** A newer installer from a signed release, still matching its recorded SHA-256. */
     record Newer(String version, LocalDate built, Path jar) {
     }

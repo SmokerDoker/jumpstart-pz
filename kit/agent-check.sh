@@ -20,6 +20,31 @@ public class LoadGameClasses {
             Class.forName(name);
         }
         System.out.println("game classes loaded");
+        // game members Jumpstart reaches by reflection in multiplayer (LuaChecksum, server snapshots):
+        // a game update that renames one breaks only that feature, so it is caught here, before a release
+        ClassLoader cl = LoadGameClasses.class.getClassLoader();
+        Class<?> lua = Class.forName("zombie.Lua.LuaManager", false, cl);
+        Class<?> groups = Class.forName("zombie.network.NetChecksum$GroupOfFiles", false, cl);
+        Class<?> saver = Class.forName("zombie.network.ServerChunkLoader$SaveChunkThread", false, cl);
+        lua.getField("checksumDone");
+        lua.getMethod("initChecksum");
+        lua.getMethod("finishChecksum");
+        lua.getMethod("LoadDirBase", String.class, boolean.class);
+        groups.getField("groups");
+        groups.getMethod("initChecksum");
+        groups.getField("fileCount");
+        groups.getField("relPaths");
+        Class.forName("zombie.network.GameServer", false, cl).getField("checksum");
+        Class.forName("zombie.network.GameServer", false, cl).getField("server");
+        Class.forName("zombie.network.GameClient", false, cl).getField("checksum");
+        Class.forName("zombie.network.ServerMap", false, cl).getField("instance");
+        Class.forName("zombie.network.ServerMap", false, cl).getMethod("QueuedSaveAll", boolean.class);
+        Class.forName("zombie.network.ServerMap$ServerCell", false, cl).getDeclaredField("chunkLoader");
+        Class.forName("zombie.network.ServerChunkLoader", false, cl).getDeclaredField("threadSave");
+        saver.getDeclaredField("toThread");
+        saver.getDeclaredField("currentTask");
+        Class.forName("zombie.ZomboidFileSystem", false, cl).getDeclaredField("mods");
+        System.out.println("game members found");
     }
 }
 EOF
@@ -34,12 +59,12 @@ case "$(uname -s)" in
         ;;
 esac
 out="$("$java" "-javaagent:$agent=hotswap=true,config_dir=$dir/config" -cp "$dir$sep$game" LoadGameClasses 2>&1 || true)"
-echo "$out" | grep -E '^\[ZB\] (patching|Transformed)|ERROR|game classes loaded' || true
+echo "$out" | grep -E '^\[ZB\] (patching|Transformed)|ERROR|Exception|game classes loaded|game members found' || true
 if echo "$out" | grep -q 'ERROR transforming\|could not be patched'; then
     echo "agent check: a ZombieBuddy patch does not apply to the game's classes" >&2
     exit 1
 fi
-for expected in 'patching zombie.ZomboidFileSystem.loadMods' 'game classes loaded'; do
+for expected in 'patching zombie.ZomboidFileSystem.loadMods' 'game classes loaded' 'game members found'; do
     if ! echo "$out" | grep -q "$expected"; then
         echo "agent check: missing \"$expected\"" >&2
         exit 1
