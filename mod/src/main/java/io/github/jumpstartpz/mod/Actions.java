@@ -184,6 +184,21 @@ interface Actions {
         return 0;
     }
 
+    /**
+     * Library classes the mod's jar brought that another mod's jar had loaded already in another
+     * version. Empty when there are none or it is unknown.
+     */
+    default List<ClassClash> classClashes(String modId) {
+        return List.of();
+    }
+
+    /**
+     * One clash with another mod: OWN_COPY (this mod got its own copy of the library), REQUIRED (the
+     * other mod is a requirement, its copy is used), OWN_PACKAGE (in the mod's own package, the other
+     * copy is used).
+     */
+    record ClassClash(String kind, String otherMod, int count, String example) {}
+
     /** Single player in a save: it can be loaded again in place ({@link #reloadSave}). */
     default boolean canReloadSave() {
         return false;

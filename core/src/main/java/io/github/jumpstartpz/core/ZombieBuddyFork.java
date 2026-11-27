@@ -114,6 +114,15 @@ public final class ZombieBuddyFork implements HotswapBackend {
         return callStrings("callsWhileOff", modId);
     }
 
+    /**
+     * Classes a mod's jars brought that another mod jar had loaded already, with other contents: one
+     * line per other mod, tab separated (what happened, other mod, count, a class, own copy's prefix).
+     * "" when there are none, null when this ZombieBuddy cannot tell.
+     */
+    public String classClashes(String modId) {
+        return callStrings("classClashes", modId);
+    }
+
     /** After uninstalling: the fork drops what it recorded for the mod (its journal). */
     public String forget(String modId) {
         return callStrings("forget", modId);
