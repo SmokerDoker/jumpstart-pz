@@ -75,6 +75,7 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
         if (!luaChecked) {
             luaChecked = true;
             LuaChecksum.selfTest();
+            ScriptLive.checksumSelfTest();
         }
         for (String[] b; (b = blocked.poll()) != null; ) {
             if (actions.stateOf(b[0]).equals("on")) {
@@ -128,6 +129,20 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
     @Override
     public String luaChecksum() {
         return luaChecked && LuaChecksum.trusted() ? LuaChecksum.current() : "";
+    }
+
+    @Override
+    public String scriptChecksum() {
+        return luaChecked && ScriptLive.checksumTrusted() ? ScriptLive.currentChecksum() : "";
+    }
+
+    /** An install: the ids the server's world dictionary gave the mod's new items, for the clients. */
+    @Override
+    public Map<String, String> commitData(ServerCoordinator.Action action, String mod) {
+        if (action != ServerCoordinator.Action.INSTALL || ScriptLive.lastIds().isEmpty()) {
+            return Map.of();
+        }
+        return Map.of("items", ScriptLive.encode(ScriptLive.lastIds()));
     }
 
     /** The Lua checksum self test ran (on the first tick: the game has worked out its own by then). */

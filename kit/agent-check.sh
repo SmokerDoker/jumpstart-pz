@@ -20,31 +20,119 @@ public class LoadGameClasses {
             Class.forName(name);
         }
         System.out.println("game classes loaded");
-        // game members Jumpstart reaches by reflection in multiplayer (LuaChecksum, server snapshots):
-        // a game update that renames one breaks only that feature, so it is caught here, before a release
+        // game members Jumpstart reaches by reflection (LuaChecksum, server snapshots, ScriptLive):
+        // a game update that renames one breaks only that feature, so it is caught here, before a release.
+        // "Class#field" (any visibility, also in superclasses), "Class.method(param types)" (any visibility).
+        String[] members = {
+            "zombie.Lua.LuaManager#checksumDone", "zombie.Lua.LuaManager.initChecksum()", "zombie.Lua.LuaManager.finishChecksum()",
+            "zombie.Lua.LuaManager.LoadDirBase(java.lang.String,boolean)",
+            "zombie.network.NetChecksum$GroupOfFiles#groups", "zombie.network.NetChecksum$GroupOfFiles#currentGroup",
+            "zombie.network.NetChecksum$GroupOfFiles.initChecksum()",
+            "zombie.network.NetChecksum$GroupOfFiles#fileCount", "zombie.network.NetChecksum$GroupOfFiles#relPaths",
+            "zombie.network.NetChecksum#checksummer", "zombie.network.NetChecksum$Checksummer.reset()",
+            "zombie.network.NetChecksum$Checksummer.addFile(java.lang.String,java.lang.String)",
+            "zombie.network.NetChecksum$Checksummer.checksumToString()",
+            "zombie.network.GameServer#checksum", "zombie.network.GameServer#server", "zombie.network.GameClient#checksum",
+            "zombie.network.GameClient#client",
+            "zombie.network.ServerMap#instance", "zombie.network.ServerMap.QueuedSaveAll(boolean)",
+            "zombie.network.ServerMap$ServerCell#chunkLoader", "zombie.network.ServerChunkLoader#threadSave",
+            "zombie.network.ServerChunkLoader$SaveChunkThread#toThread", "zombie.network.ServerChunkLoader$SaveChunkThread#currentTask",
+            "zombie.ZomboidFileSystem#mods", "zombie.ZomboidFileSystem.getAbsolutePath(java.lang.String)",
+            // ScriptLive: the mod's scripts live
+            "zombie.scripting.ScriptManager#instance", "zombie.scripting.ScriptManager#bucketCollectionList",
+            "zombie.scripting.ScriptManager#tempFileToModMap", "zombie.scripting.ScriptManager#loadFileNames",
+            "zombie.scripting.ScriptManager#currentLoadFileAbsPath", "zombie.scripting.ScriptManager#currentLoadFileName",
+            "zombie.scripting.ScriptManager#currentLoadFileMod", "zombie.scripting.ScriptManager#checksum",
+            "zombie.scripting.ScriptManager#tagToItemMap", "zombie.scripting.ScriptManager#typeToItemMap",
+            "zombie.scripting.ScriptManager.LoadFile(zombie.scripting.ScriptLoadMode,java.lang.String,boolean)",
+            "zombie.scripting.ScriptManager.resolveItemTypes()", "zombie.scripting.ScriptManager.createClothingItemMap()",
+            "zombie.scripting.ScriptManager.createZedDmgMap()", "zombie.scripting.ScriptManager.getChecksum()",
+            "zombie.scripting.ScriptBucketCollection#scriptBuckets", "zombie.scripting.ScriptBucketCollection#allScripts",
+            "zombie.scripting.ScriptBucketCollection.LoadScripts(zombie.scripting.ScriptLoadMode)",
+            "zombie.scripting.ScriptBucket#loadData", "zombie.scripting.ScriptBucket$LoadData#scriptBodies",
+            "zombie.scripting.ScriptBucket$LoadData#reloaded", "zombie.scripting.ScriptBucket$LoadData#addedOnReload",
+            "zombie.scripting.ScriptBucket$LoadData#script", "zombie.scripting.FileName.getName(java.lang.String)",
+            "zombie.scripting.objects.BaseScriptObject.OnScriptsLoaded(zombie.scripting.ScriptLoadMode)",
+            "zombie.scripting.objects.BaseScriptObject.OnLoadedAfterLua()",
+            "zombie.scripting.objects.BaseScriptObject.OnPostWorldDictionaryInit()",
+            "zombie.scripting.objects.Item.getFullName()", "zombie.scripting.objects.Item.getName()",
+            "zombie.scripting.objects.Item.getModuleName()", "zombie.scripting.objects.Item.getModID()",
+            "zombie.scripting.entity.GameEntityScript.setRegistry_id(short)",
+            "zombie.world.WorldDictionary#allowScriptItemLoading", "zombie.world.WorldDictionary#data",
+            "zombie.world.WorldDictionary.getItemLoadList()", "zombie.world.WorldDictionary.getEntityLoadList()",
+            "zombie.world.WorldDictionary.getItemRegistryID(java.lang.String)",
+            "zombie.world.DictionaryData.parseInfoLoadList(java.util.Map)", "zombie.world.DictionaryData.parseCurrentInfoSet()",
+            "zombie.world.DictionaryData.save()", "zombie.world.DictionaryData#itemTypeToInfoMap",
+            "zombie.world.DictionaryData#itemIdToInfoMap", "zombie.world.ItemInfo#scriptItem",
+            "zombie.world.DictionaryInfo#name", "zombie.world.DictionaryInfo#moduleName", "zombie.world.DictionaryInfo#fullType",
+            "zombie.world.DictionaryInfo#registryId", "zombie.world.DictionaryInfo#modId", "zombie.world.DictionaryInfo#isModded",
+            "zombie.world.DictionaryInfo#isLoaded", "zombie.world.DictionaryInfo#entityScript",
+            "zombie.inventory.RecipeManager.ScriptsLoaded()", "zombie.scripting.objects.ModelScript.ScriptsLoaded()",
+            "zombie.iso.IsoWorld.parseDistributions()",
+            "zombie.core.skinnedmodel.ModelManager#instance", "zombie.core.skinnedmodel.ModelManager.loadModAnimations()",
+            "zombie.Lua.LuaManager$GlobalObject.refreshAnimSets(boolean)", "zombie.Lua.LuaManager$GlobalObject.reloadActionGroups()",
+            "zombie.core.skinnedmodel.advancedanimation.AdvancedAnimator.load()", "zombie.core.skinnedmodel.advancedanimation.AdvancedAnimator.getChecksum()",
+        };
         ClassLoader cl = LoadGameClasses.class.getClassLoader();
-        Class<?> lua = Class.forName("zombie.Lua.LuaManager", false, cl);
-        Class<?> groups = Class.forName("zombie.network.NetChecksum$GroupOfFiles", false, cl);
-        Class<?> saver = Class.forName("zombie.network.ServerChunkLoader$SaveChunkThread", false, cl);
-        lua.getField("checksumDone");
-        lua.getMethod("initChecksum");
-        lua.getMethod("finishChecksum");
-        lua.getMethod("LoadDirBase", String.class, boolean.class);
-        groups.getField("groups");
-        groups.getMethod("initChecksum");
-        groups.getField("fileCount");
-        groups.getField("relPaths");
-        Class.forName("zombie.network.GameServer", false, cl).getField("checksum");
-        Class.forName("zombie.network.GameServer", false, cl).getField("server");
-        Class.forName("zombie.network.GameClient", false, cl).getField("checksum");
-        Class.forName("zombie.network.ServerMap", false, cl).getField("instance");
-        Class.forName("zombie.network.ServerMap", false, cl).getMethod("QueuedSaveAll", boolean.class);
-        Class.forName("zombie.network.ServerMap$ServerCell", false, cl).getDeclaredField("chunkLoader");
-        Class.forName("zombie.network.ServerChunkLoader", false, cl).getDeclaredField("threadSave");
-        saver.getDeclaredField("toThread");
-        saver.getDeclaredField("currentTask");
-        Class.forName("zombie.ZomboidFileSystem", false, cl).getDeclaredField("mods");
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String m : members) {
+            try {
+                if (m.contains("#")) {
+                    field(Class.forName(m.substring(0, m.indexOf('#')), false, cl), m.substring(m.indexOf('#') + 1));
+                } else {
+                    int open = m.indexOf('(');
+                    int dot = m.lastIndexOf('.', open);
+                    String[] names = m.substring(open + 1, m.length() - 1).split(",");
+                    java.util.List<Class<?>> types = new java.util.ArrayList<>();
+                    for (String n : names) {
+                        if (!n.isEmpty()) {
+                            types.add(switch (n) {
+                                case "boolean" -> boolean.class;
+                                case "short" -> short.class;
+                                case "int" -> int.class;
+                                default -> Class.forName(n, false, cl);
+                            });
+                        }
+                    }
+                    method(Class.forName(m.substring(0, dot), false, cl), m.substring(dot + 1, open), types.toArray(new Class<?>[0]));
+                }
+            } catch (ReflectiveOperationException | LinkageError e) {
+                missing.add(m + " (" + e + ")");
+            }
+        }
+        // the order ScriptManager.Load sorts mod script files in (ScriptLive falls back to by file name)
+        if (!java.util.Comparator.class.isAssignableFrom(Class.forName("zombie.scripting.ScriptManager$38", false, cl))) {
+            missing.add("zombie.scripting.ScriptManager$38 is no Comparator");
+        }
+        if (!missing.isEmpty()) {
+            System.out.println("ERROR game members missing: " + missing);
+            return;
+        }
         System.out.println("game members found");
+    }
+
+    static void field(Class<?> c, String name) throws NoSuchFieldException {
+        for (Class<?> k = c; k != null; k = k.getSuperclass()) {
+            try {
+                k.getDeclaredField(name);
+                return;
+            } catch (NoSuchFieldException e) {
+                // superclass
+            }
+        }
+        throw new NoSuchFieldException(c.getName() + "#" + name);
+    }
+
+    static void method(Class<?> c, String name, Class<?>[] types) throws NoSuchMethodException {
+        for (Class<?> k = c; k != null; k = k.getSuperclass()) {
+            try {
+                k.getDeclaredMethod(name, types);
+                return;
+            } catch (NoSuchMethodException e) {
+                // superclass
+            }
+        }
+        throw new NoSuchMethodException(c.getName() + "." + name);
     }
 }
 EOF
@@ -60,7 +148,7 @@ case "$(uname -s)" in
 esac
 out="$("$java" "-javaagent:$agent=hotswap=true,config_dir=$dir/config" -cp "$dir$sep$game" LoadGameClasses 2>&1 || true)"
 echo "$out" | grep -E '^\[ZB\] (patching|Transformed)|ERROR|Exception|game classes loaded|game members found' || true
-if echo "$out" | grep -q 'ERROR transforming\|could not be patched'; then
+if echo "$out" | grep -q 'ERROR transforming\|could not be patched\|ERROR game members'; then
     echo "agent check: a ZombieBuddy patch does not apply to the game's classes" >&2
     exit 1
 fi

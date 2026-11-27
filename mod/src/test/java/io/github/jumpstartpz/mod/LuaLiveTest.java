@@ -103,6 +103,66 @@ class LuaLiveTest {
         assertEquals(1, game.registered);
     }
 
+    @Test
+    void itemScriptsLoadBeforeTheLuaThenTheLootTablesAndAnimations() {
+        FakeGame game = new FakeGame();
+        game.files.put("media/scripts/z_items.txt", "/m/z_items.txt");
+        game.files.put("media/scripts/recipes/a_recipes.txt", "/m/recipes/a_recipes.txt");
+        game.files.put("media/scripts/readme.md", "/m/readme.md");
+        game.files.put("media/lua/server/Items/MyDistributions.lua", "/m/server/Items/MyDistributions.lua");
+        game.files.put("media/animsets/player/actions/eat.xml", "/m/eat.xml");
+        game.files.put("media/sandbox-options.txt", "/m/sandbox-options.txt");
+        game.scriptResult = new LuaLive.Scripts(7, List.of("MyMod.Thing"), List.of());
+        game.animations = true;
+
+        LuaLive.Result r = LuaLive.load(game, "M", "/m");
+
+        assertEquals(LuaLive.Status.LOADED, r.status());
+        assertEquals(List.of(
+                "scripts [media/scripts/recipes/a_recipes.txt, media/scripts/z_items.txt] (Lua run so far: 0)",
+                "afterLua distributions=true",
+                "animations"), game.steps, "scripts first (its Lua may use its items), sorted by file name like the game");
+        assertEquals(List.of("scripts:7:1", "animations"), r.live());
+        assertEquals(List.of("sandbox"), r.needsRestart(), "only what cannot load live waits");
+    }
+
+    @Test
+    void whatTheGameCannotLoadLiveWaitsForTheNextLoad() {
+        FakeGame game = new FakeGame();
+        game.files.put("media/scripts/items.txt", "/m/items.txt");
+        game.files.put("media/anims_x/Bob/eat.fbx", "/m/eat.fbx");
+        LuaLive.Result r = LuaLive.load(game, "M", "/m");
+        assertEquals(LuaLive.Status.NO_LUA, r.status());
+        assertEquals(List.of("scripts", "animations"), r.needsRestart());
+        assertEquals(List.of(), r.live());
+    }
+
+    @Test
+    void aMultiplayerClientLoadsItemsButTheServerMakesTheLoot() {
+        FakeGame client = new FakeGame();
+        client.multiplayer = true;
+        client.files.put("media/scripts/items.txt", "/m/items.txt");
+        client.scriptResult = new LuaLive.Scripts(1, List.of("M.X"), List.of());
+        LuaLive.Result r = LuaLive.load(client, "M", "/m", true);
+        assertEquals(LuaLive.Status.NO_LUA, r.status());
+        assertEquals(List.of("scripts [media/scripts/items.txt] (Lua run so far: 0)", "afterLua distributions=false"), client.steps);
+        assertEquals(List.of(), r.needsRestart());
+    }
+
+    @Test
+    void aLuaOnlyModWithoutServerLuaLeavesTheLootTablesAlone() {
+        FakeGame game = new FakeGame();
+        game.files.put("media/lua/client/ui.lua", "/m/client/ui.lua");
+        LuaLive.load(game, "M", "/m");
+        assertEquals(List.of(), game.steps);
+    }
+
+    @Test
+    void theMissedDistributionEventsComeBetweenBootAndWorld() {
+        assertEquals(List.of("OnGameBoot", "OnPreDistributionMerge", "OnDistributionMerge", "OnPostDistributionMerge", "OnInitWorld"),
+                LuaLive.START_EVENTS.subList(0, 5));
+    }
+
     // --- a mod that came with the save (LuaStartJournal) ---
 
     private static final String A_FILE = "c:/zomboid/mods/a/42/media/lua/client/a.lua";
@@ -298,6 +358,28 @@ class LuaLiveTest {
         }
 
         @Override public String sourceOf(Object v) { return v instanceof Fn f ? f.file : null; }
+
+        /** Data parts: null = this game cannot load scripts live (like the default). */
+        LuaLive.Scripts scriptResult;
+        boolean animations;
+        final List<String> steps = new ArrayList<>();
+
+        @Override
+        public LuaLive.Scripts loadScripts(String modId, List<String> scriptFiles) {
+            steps.add("scripts " + scriptFiles + " (Lua run so far: " + ran.size() + ")");
+            return scriptResult;
+        }
+
+        @Override
+        public void afterLua(boolean distributions) {
+            steps.add("afterLua distributions=" + distributions);
+        }
+
+        @Override
+        public boolean reloadAnimations() {
+            steps.add("animations");
+            return animations;
+        }
 
         @Override public boolean inGame() { return inGame; }
         @Override public boolean multiplayer() { return multiplayer; }

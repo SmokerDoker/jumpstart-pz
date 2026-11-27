@@ -162,6 +162,19 @@ public final class ServerCoordinator<C> {
             return false;
         }
 
+        /**
+         * What the clients need from the server's change besides the mod, sent with {@code commit}
+         * (an install: the world dictionary ids the server gave the mod's new items).
+         */
+        default Map<String, String> commitData(Action action, String mod) {
+            return Map.of();
+        }
+
+        /** The game's script checksum on the server ("" when unknown). */
+        default String scriptChecksum() {
+            return "";
+        }
+
         /** The game's Lua checksum on the server ("" when unknown). */
         default String luaChecksum() {
             return "";
@@ -324,7 +337,7 @@ public final class ServerCoordinator<C> {
     public void onCommand(C c, String command, Map<String, String> args, long now) {
         if (command.equals("hello")) {
             welcome(c);
-            if (luaDiffers(c, args.get("lua"))) {
+            if (luaDiffers(c, args.get("lua"), args.get("scripts"))) {
                 return;
             }
             List<ClientMod> mods = parseClientMods(args.get("mods"));
@@ -395,16 +408,21 @@ public final class ServerCoordinator<C> {
      * After an install or remove: a client whose Lua checksum differs from the server's is kicked.
      * Only once, for the clients that did the change (the game compares everybody else at join).
      */
-    private boolean luaDiffers(C c, String lua) {
-        if (pending != null || !compareLua.remove(c) || lua == null || lua.isEmpty()) {
+    private boolean luaDiffers(C c, String lua, String scripts) {
+        if (pending != null || !compareLua.remove(c)) {
             return false;
         }
-        String mine = nz(port.luaChecksum());
-        if (mine.isEmpty() || mine.equals(lua)) {
+        String what = differs(lua, port.luaChecksum()) ? "Lua files" : differs(scripts, port.scriptChecksum()) ? "item and recipe scripts" : null;
+        if (what == null) {
             return false;
         }
-        port.kick(c, "Jumpstart: the Lua files differ from the server's after the change; please join again");
+        port.kick(c, "Jumpstart: the " + what + " differ from the server's after the change; please join again");
         return true;
+    }
+
+    /** Both known and not the same. */
+    private static boolean differs(String theirs, String mine) {
+        return theirs != null && !theirs.isEmpty() && mine != null && !mine.isEmpty() && !mine.equals(theirs);
     }
 
     /**
@@ -712,7 +730,7 @@ public final class ServerCoordinator<C> {
             return;
         }
         pending = u.commit(now + COMMIT_DEADLINE_MS);
-        Map<String, String> args = new LinkedHashMap<>();
+        Map<String, String> args = new LinkedHashMap<>(port.commitData(u.action(), u.mod()));
         args.put("action", u.action().wire());
         args.put("mod", u.mod());
         args.put("sha", u.sha256());

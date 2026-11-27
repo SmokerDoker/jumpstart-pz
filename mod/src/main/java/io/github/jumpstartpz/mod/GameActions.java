@@ -970,6 +970,16 @@ final class GameActions implements Actions {
         return LuaChecksum.recomputeQuietly(why);
     }
 
+    @Override
+    public String scriptChecksum() {
+        return ScriptLive.checksumTrusted() ? ScriptLive.currentChecksum() : "";
+    }
+
+    @Override
+    public void expectServerItemIds(String lines) {
+        ScriptLive.expectServerIds(ScriptLive.decode(lines));
+    }
+
     /** The game writes changed map chunks on its own thread: the copy waits until that queue is empty. */
     private static void waitForChunkSaver() throws ReflectiveOperationException, InterruptedException {
         Class<?> worker = Class.forName("zombie.iso.ChunkSaveWorker");

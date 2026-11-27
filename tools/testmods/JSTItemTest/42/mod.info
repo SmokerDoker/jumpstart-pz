@@ -1,0 +1,4 @@
+name=Jumpstart live data test
+id=JSTItemTest
+description=Test mod for loading item scripts live: a new item (Jumpstart Test Token), a recipe that makes it from an apple, and the item in random junk crates. Switch it on in Jumpstart (A) while a save runs. Harmless.
+modversion=1
