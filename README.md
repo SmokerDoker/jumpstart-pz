@@ -39,7 +39,8 @@ Press **Ctrl+Shift+J** in the game (main menu or a running save) to open Jumpsta
   the screen says when something still calls it. Files it created wait aside while it is off. A function
   another mod changed again since stays and is named. Switching it on puts it all back. Items, recipes, loot tables and animations of a mod
   load live too; parts the game reads only while a save loads (maps, sandbox options, sounds, 3D models,
-  ...) follow with the next load of the save, and the screen says so.
+  ...) follow with the next load of the save, and the screen says so; in single player L loads the save
+  again by itself (it saves, goes to the main menu and continues the save).
 - **Crash protection.** If a mod's Java patch throws, the game keeps running; after repeated errors
   (or at once right after a live load) the mod is switched off and a banner names it.
   **C** writes a report zip (logs, mods, what the crash protection caught) to `Zomboid/jumpstart/reports/`.

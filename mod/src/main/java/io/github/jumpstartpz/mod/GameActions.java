@@ -1115,6 +1115,77 @@ final class GameActions implements Actions {
     }
 
     @Override
+    public boolean canReloadSave() {
+        return luaGame.inGame() && !luaGame.multiplayer() && !luaGame.isServer();
+    }
+
+    @Override
+    public String reloadSave() {
+        if (!canReloadSave()) {
+            return "not in a single player game";
+        }
+        try {
+            Object world = Class.forName("zombie.iso.IsoWorld").getField("instance").get(null);
+            String name = (String) world.getClass().getMethod("getWorld").invoke(world);
+            if (name == null || name.isBlank()) {
+                return "no save name";
+            }
+            SaveReload.request(name, new SaveReloadGame(luaGame), System.currentTimeMillis());
+            // what the pause menu's Quit does (MainScreen.lua, "EXIT" in a game)
+            Object env = luaGame.globalTable();
+            luaGame.call(luaGame.get(env, "setGameSpeed"), new Object[] {1.0});
+            luaGame.call(luaGame.get(env, "pauseSoundAndMusic"), new Object[0]);
+            luaGame.call(luaGame.get(env, "setShowPausedMessage"), new Object[] {Boolean.TRUE});
+            Object core = Class.forName("zombie.core.Core").getMethod("getInstance").invoke(null);
+            core.getClass().getMethod("quit").invoke(core);
+            System.out.println("[Jumpstart] load the save again: saving " + name + " and going to the main menu");
+            return null;
+        } catch (Exception e) {
+            SaveReload.reset();
+            return "cannot load the save again: " + e;
+        }
+    }
+
+    /** The main menu as {@link SaveReload} reads it, through Lua's globals (Lua is reset on the way). */
+    private record SaveReloadGame(ReflectiveLuaGame lua) implements SaveReload.Game {
+        @Override
+        public String state() {
+            try {
+                Object states = Class.forName("zombie.GameWindow").getField("states").get(null);
+                Object current = states.getClass().getField("current").get(states);
+                return current == null ? "" : current.getClass().getSimpleName();
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return "";
+            }
+        }
+
+        private Object mainScreen() {
+            Object env = lua.globalTable();
+            return env == null ? null : lua.get(env, "MainScreen");
+        }
+
+        @Override
+        public boolean menuReady() {
+            Object screen = mainScreen();
+            return screen != null && lua.get(screen, "instance") != null;
+        }
+
+        @Override
+        public String[] latestSave() {
+            Object screen = mainScreen();
+            Object world = screen == null ? null : lua.get(screen, "latestSaveWorld");
+            Object mode = screen == null ? null : lua.get(screen, "latestSaveGameMode");
+            return world == null || mode == null ? null : new String[] {world.toString(), mode.toString()};
+        }
+
+        @Override
+        public void continueSave(String world, String gameMode) throws Exception {
+            Object screen = mainScreen();
+            lua.call(lua.get(screen, "continueLatestSave"), new Object[] {gameMode, world});
+        }
+    }
+
+    @Override
     public String crashReport() {
         StringBuilder mods = new StringBuilder("id\tkind\tstate\tworkshop\tjar sha256 (running)\tBiteCheck\tcrash protection\tjar\n");
         for (InstalledMod m : installedMods()) {

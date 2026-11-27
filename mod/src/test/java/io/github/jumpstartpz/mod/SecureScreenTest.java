@@ -423,6 +423,38 @@ class SecureScreenTest {
     }
 
     @Test
+    void lTwiceLoadsTheSaveAgainAndClosesTheScreen() {
+        actions.states.put("Verified", "on, next load");
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertFalse(game.drew("L: load the save again now"), "not outside a single player game");
+        tap(SecureScreen.KEY_L);
+        assertTrue(game.drew("works in a single player game only"));
+        assertEquals(0, actions.reloads);
+
+        actions.singlePlayer = true;
+        game.drawn.clear();
+        frame();
+        assertTrue(game.drew("L: load the save again now"), "a mod waits for the next load");
+        tap(SecureScreen.KEY_L);
+        assertTrue(game.drew("Press L again"));
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_UP);
+        tap(SecureScreen.KEY_L);
+        assertEquals(0, actions.reloads, "another key in between: L asks again");
+        frame();
+        frame();
+        tap(SecureScreen.KEY_L);
+        assertEquals(1, actions.reloads);
+        for (int i = 0; i < 5; i++) {
+            frame();
+        }
+        assertFalse(SecureScreen.blocksInput(), "the screen is closed: the game saves and goes to the menu");
+    }
+
+    @Test
     void anOffModWhoseCodeIsStillCalledSaysSo() {
         actions.states.put("Verified", "off");
         actions.held.put("Verified", 7L);
@@ -1601,6 +1633,10 @@ class SecureScreenTest {
         boolean verifiedOnly;
 
         @Override public boolean updateReady(ModEntry mod) { return updates.contains(mod.id()); }
+        boolean singlePlayer;
+        int reloads;
+        @Override public boolean canReloadSave() { return singlePlayer; }
+        @Override public String reloadSave() { reloads++; return null; }
         final Map<String, Long> held = new HashMap<>();
         @Override public long callsWhileOff(String modId) { return held.getOrDefault(modId, 0L); }
 

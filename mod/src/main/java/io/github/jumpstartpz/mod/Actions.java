@@ -184,6 +184,19 @@ interface Actions {
         return 0;
     }
 
+    /** Single player in a save: it can be loaded again in place ({@link #reloadSave}). */
+    default boolean canReloadSave() {
+        return false;
+    }
+
+    /**
+     * Saves, goes back to the main menu and continues the same save from there at once, so what
+     * waits for the next load comes in ({@link SaveReload}). Null when it started, else why not.
+     */
+    default String reloadSave() {
+        return "not in a single player game";
+    }
+
     /** Writes a report zip (logs, mods, crash protection, system); "OK path" or what went wrong. */
     default String crashReport() {
         return "not in the game";

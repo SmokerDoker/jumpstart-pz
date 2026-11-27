@@ -78,6 +78,9 @@ public class LoadGameClasses {
             "se.krka.kahlua.vm.LuaClosure#prototype", "se.krka.kahlua.vm.Prototype#filename",
             "se.krka.kahlua.vm.KahluaThread#currentCoroutine", "se.krka.kahlua.vm.Coroutine.getCallframeTop()",
             "se.krka.kahlua.vm.Coroutine.getCallFrame(int)", "se.krka.kahlua.vm.LuaCallFrame#closure",
+            // loading the save again (GameActions.reloadSave, SaveReload)
+            "zombie.iso.IsoWorld#instance", "zombie.iso.IsoWorld.getWorld()", "zombie.core.Core.getInstance()", "zombie.core.Core.quit()",
+            "zombie.GameWindow#states", "zombie.gameStates.GameStateMachine#current",
         };
         ClassLoader cl = LoadGameClasses.class.getClassLoader();
         java.util.List<String> missing = new java.util.ArrayList<>();

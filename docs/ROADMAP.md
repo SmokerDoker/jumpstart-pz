@@ -47,7 +47,8 @@ in-process restart of the game's start phases) or *restart*.
   files stay in the game's file list until the next load today); items stay until placeholder items exist
 - [ ] Texture packs, sounds, 3D models, tiles, clothing, maps and sandbox options of a live-loaded mod (still with the next load)
 
-- [ ] In-process restart for mods that cannot go live (items, scripts, animations), instead of "with the next load"
+- [x] Load the save again in place (single player, L twice in the installed tab): the game saves and goes to the main menu, Jumpstart continues the same save by itself (the menu's Continue, with the save's mod list), so what waits for the next load comes in without clicks. Untested in the game
+- [ ] The same without the trip through the main menu (keep the loaded game, load only the parts again); on servers a restart stays the server's
 - [ ] Classify each mod as live, reload or restart (declaration, bytecode analysis, BiteCheck's scan)
 - [ ] An own class loader per mod (patches are merged into the shared loader today)
 - [ ] A trial run before a mod is switched on
@@ -59,7 +60,8 @@ in-process restart of the game's start phases) or *restart*.
 - [x] Registrations a mod made in a save it came with, and values it changed in existing entries (live and with the save): the start record keeps what a mod's running code writes into a global table; lists count by value, so an entry inserted at the front goes and the entries it moved stay; a value the game changed again since stays without a word. Not covered: a registration a game function makes for the mod (the innermost Lua function counts), entries two tables down
 - [x] Files a mod created wait in `Zomboid/jumpstart/parked/<mod>/` while it is off and come back when it is on (never over a new file); uninstalling archives them
 - [x] Java writes into instance fields of game objects go back when the mod is switched off (per object, only where the field still holds the mod's value; not in the mod's constructors)
-- [ ] ModData on single objects; placeholder items for items of a removed mod
+- [ ] Placeholder items for items of a removed mod (section 5)
+- Decided: ModData a mod put on single objects (items, players) stays in the save; the game ignores keys nobody reads, and taking them out would mean going through every chunk of the save
 - [x] Trip wire in every method of a mod's own classes, not only at the start of each patch; switching off trips it (not in constructors, equals/hashCode/toString, delegation patches, libraries a mod ships under their own name)
 
 ## 3. Marketplace and updates
