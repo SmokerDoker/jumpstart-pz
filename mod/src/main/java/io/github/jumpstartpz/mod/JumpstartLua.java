@@ -33,6 +33,7 @@ public final class JumpstartLua {
             Map.entry("esc", SecureScreen.KEY_ESCAPE), Map.entry("j", SecureScreen.KEY_J),
             Map.entry("n", SecureScreen.KEY_N), Map.entry("a", SecureScreen.KEY_A), Map.entry("r", SecureScreen.KEY_R),
             Map.entry("u", SecureScreen.KEY_U), Map.entry("y", SecureScreen.KEY_Y),
+            Map.entry("l", SecureScreen.KEY_L), Map.entry("p", SecureScreen.KEY_P),
             Map.entry("tab", SecureScreen.KEY_TAB), Map.entry("backspace", SecureScreen.KEY_BACKSPACE));
 
     private JumpstartLua() {

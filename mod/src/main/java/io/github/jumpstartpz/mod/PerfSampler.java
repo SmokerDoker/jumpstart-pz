@@ -102,6 +102,7 @@ final class PerfSampler {
         }, "Jumpstart performance sampler");
         t.setDaemon(true);
         t.start();
+        System.out.println("[Jumpstart] measuring the main thread for " + durationMs / 1000 + " s");
         return null;
     }
 
@@ -125,6 +126,7 @@ final class PerfSampler {
         r.counts.forEach((mod, c) -> mods.put(mod, new Share(c[0], c[1])));
         last = new Result(millis, r.frames, r.samples, mods);
         run = null;
+        System.out.println("[Jumpstart] measured " + millis + " ms, " + r.frames + " frames, " + r.samples + " samples: " + r.counts.keySet());
     }
 
     static void sample(Run r, Probe probe) {
