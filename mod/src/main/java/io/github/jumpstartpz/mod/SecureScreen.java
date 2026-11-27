@@ -62,6 +62,7 @@ public final class SecureScreen {
     static final int KEY_J = 74;
     static final int KEY_L = 76;
     static final int KEY_N = 78;
+    static final int KEY_P = 80;
     static final int KEY_R = 82;
     static final int KEY_U = 85;
     static final int KEY_V = 86;
@@ -271,6 +272,7 @@ public final class SecureScreen {
 
     /** Called by the game at the end of every UI render pass. */
     public static void onRender() {
+        PerfSampler.onFrame(); // knows the main thread; counts frames while it measures
         LuaStartJournal.onFrame(); // the first frame after the game loaded its Lua ends that record
         SaveReload.onFrame(System.currentTimeMillis()); // back in the main menu: continue the save
         MissingItems.onFrame(System.currentTimeMillis()); // items of missing mods: kept, or back in place
@@ -781,6 +783,7 @@ public final class SecureScreen {
         if (game.inGame()) {
             actions.beginSnapshot(); // a copy of the save before anything is switched
         }
+        sayMeasurement();
         ClientSession.Update u = session.update;
         if (u != null && pending != null && pending.server()) {
             tab = Tab.SERVER; // BiteCheck's question about the server's jar waited for the player
@@ -813,6 +816,50 @@ public final class SecureScreen {
             return;
         }
         close();
+    }
+
+    /** P: measures while the player plays (the game is paused while the screen is open). */
+    private void measureKey() {
+        if (actions.measuring()) {
+            say(texts.get("measure.running"), false);
+            return;
+        }
+        String r = actions.startMeasure();
+        if (r != null) {
+            say(String.format(Locale.ROOT, texts.get("measure.not"), r), false);
+            return;
+        }
+        shownMeasurement = null;
+        close();
+    }
+
+    /** The measurement whose summary was shown already. */
+    private PerfSampler.Result shownMeasurement;
+
+    /** After a measurement: the summary once, when the screen opens next. */
+    private void sayMeasurement() {
+        if (actions.measuring()) {
+            say(texts.get("measure.running"), false);
+            return;
+        }
+        PerfSampler.Result m = actions.measurement();
+        if (m == null || m == shownMeasurement) {
+            return;
+        }
+        shownMeasurement = m;
+        double mods = 0;
+        String top = null;
+        for (String id : m.mods().keySet()) {
+            mods += m.msPerFrame(id);
+            if (top == null || m.msPerFrame(id) > m.msPerFrame(top)) {
+                top = id;
+            }
+        }
+        String text = String.format(Locale.ROOT, texts.get("measure.done"), m.millis() / 1000, m.frames(), m.frameMs(), mods);
+        if (top != null) {
+            text += String.format(Locale.ROOT, texts.get("measure.top"), top, m.msPerFrame(top));
+        }
+        say(text, true);
     }
 
     private void close() {
@@ -1009,6 +1056,10 @@ public final class SecureScreen {
         }
         if (pressed.contains(KEY_L)) {
             reloadSaveKey();
+            return;
+        }
+        if (pressed.contains(KEY_P)) {
+            measureKey();
             return;
         }
         if (!pressed.isEmpty()) {
@@ -2728,6 +2779,14 @@ public final class SecureScreen {
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 6;
         if (state.contains("next load") && actions.canReloadSave()) {
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("reload.hint"), 0.5f, 0.8f, 1f);
+        }
+        PerfSampler.Result measured = actions.measurement();
+        if (measured != null && !actions.measuring()) {
+            PerfSampler.Share share = measured.mods().get(mod.id());
+            String perf = share == null || share.total() == 0 ? texts.get("perf.below")
+                    : String.format(Locale.ROOT, texts.get("perf.mod"), measured.msPerFrame(mod.id()), measured.percent(mod.id()),
+                            100.0 * share.java() / measured.samples(), 100.0 * share.lua() / measured.samples());
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, perf, 0.65f, 0.65f, 0.65f);
         }
         if (mod.java() != null) {
             BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
