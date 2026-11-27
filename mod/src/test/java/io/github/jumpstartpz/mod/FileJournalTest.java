@@ -119,4 +119,50 @@ class FileJournalTest {
     void anOldLogLineWithoutAKindIsNeverOwnership() throws Exception {
         assertEquals(List.of(), stashable("Old\t" + A + "\n", "/mods/a/", new java.util.ArrayList<>()));
     }
+
+    @Test
+    void switchedOffTheFilesItCreatedWaitAndComeBackWhenItIsOn() throws Exception {
+        Path root = zomboid.resolve("jumpstart");
+        FileJournal.setRoot(root);
+        Path lua = Files.createDirectories(zomboid.resolve("Lua"));
+        Path created = Files.writeString(lua.resolve("jst_settings.txt"), "mine");
+        Path existed = Files.writeString(lua.resolve("shared.txt"), "was here before");
+        String modSource = "/mods/jst/42/media/lua/client/jst.lua";
+        Files.createDirectories(root.resolve("files"));
+        Files.writeString(root.resolve("files").resolve("written.txt"), String.join("\n",
+                created + "\tfalse\t" + modSource, existed + "\ttrue\t" + modSource) + "\n", StandardCharsets.UTF_8);
+        List<String> dirs = List.of("/mods/jst/");
+
+        assertEquals(1, FileJournal.park("JST", dirs));
+        assertFalse(Files.exists(created));
+        assertTrue(Files.exists(existed));
+        assertEquals(1, FileJournal.unpark("JST"));
+        assertEquals("mine", Files.readString(created), "back where it was");
+        assertEquals(0, FileJournal.unpark("JST"), "only once");
+
+        assertEquals(1, FileJournal.park("JST", dirs));
+        Files.writeString(created, "new while it was off");
+        assertEquals(0, FileJournal.unpark("JST"), "a new file there is not overwritten");
+        assertEquals("new while it was off", Files.readString(created));
+
+        Files.delete(created);
+        assertEquals(1, FileJournal.archive("JST", dirs), "uninstalling archives what was parked");
+        assertFalse(Files.exists(created));
+        try (var walk = Files.walk(root.resolve("archive"))) {
+            assertEquals(1, walk.filter(Files::isRegularFile).count());
+        }
+    }
+
+    @Test
+    void aParkedListPointingOutsideTheDataFolderMovesNothing() throws Exception {
+        Path root = zomboid.resolve("jumpstart");
+        FileJournal.setRoot(root);
+        Path outside = Files.createTempFile("jst-outside", ".txt");
+        Files.delete(outside);
+        Path parked = Files.createDirectories(root.resolve("parked").resolve("JST")).resolve("x.txt");
+        Files.writeString(parked, "planted");
+        Files.writeString(root.resolve("parked").resolve("JST.txt"), outside + "\t" + parked + "\n");
+        assertEquals(0, FileJournal.unpark("JST"));
+        assertFalse(Files.exists(outside));
+    }
 }

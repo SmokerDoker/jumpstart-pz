@@ -318,6 +318,39 @@ class LuaLiveTest {
     }
 
     @Test
+    void registrationsInTheGamesTablesGoWithTheModAndListsKeepNoHole() {
+        FakeGame game = new FakeGame();
+        String file = "/mods/keys/42/media/lua/client/keys.lua";
+        game.files.put("media/lua/client/keys.lua", file);
+        Table keyBinding = new Table();
+        Table jump = new Table();
+        keyBinding.map.put(1.0, jump);
+        game.env.map.put("keyBinding", keyBinding);
+        Table lookup = new Table();
+        game.env.map.put("ItemTweaks", lookup);
+        Table myKey = new Table();
+        game.scripts.put(file, () -> {
+            keyBinding.map.put(2.0, myKey); // table.insert(keyBinding, {value = "MyKey", key = 44})
+            lookup.map.put("Base.Axe", "sharp"); // a registration by name
+        });
+        LuaLive.Result r = LuaLive.load(game, "keys", "/mods/keys");
+        assertEquals(List.of("ItemTweaks.Base.Axe", "keyBinding.2.0"), r.changes().stream().map(LuaJournal.Change::path).toList());
+
+        Table later = new Table(); // another mod adds its key after this one
+        keyBinding.map.put(3.0, later);
+        LuaJournal.Outcome undo = LuaJournal.undo(game, r.changes());
+        assertEquals(2, undo.done());
+        assertEquals(Map.of(1.0, jump, 2.0, later), keyBinding.map, "the list closes up: ipairs still finds the other mod's key");
+        assertTrue(lookup.map.isEmpty());
+
+        LuaJournal.redo(game, r.changes());
+        assertEquals(Map.of(1.0, jump, 2.0, later, 3.0, myKey), keyBinding.map, "back at the end of the list");
+        assertEquals("sharp", lookup.map.get("Base.Axe"));
+        LuaJournal.undo(game, r.changes());
+        assertEquals(Map.of(1.0, jump, 2.0, later), keyBinding.map);
+    }
+
+    @Test
     void namesTheFunctionsOfAModThatCameWithTheSave() {
         FakeGame game = new FakeGame();
         Table luautils = new Table();

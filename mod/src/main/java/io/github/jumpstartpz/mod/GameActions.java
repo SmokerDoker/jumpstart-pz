@@ -658,6 +658,12 @@ final class GameActions implements Actions {
     }
 
     private LuaLive.Result loadLua(String modId, boolean forServer) {
+        if (!forServer) {
+            int back = FileJournal.unpark(modId); // files it created wait while it is off
+            if (back > 0) {
+                System.out.println("[Jumpstart] " + modId + ": " + back + " files it created are back");
+            }
+        }
         ModJournal journal = journals.get(modId);
         if (journal != null && journal.parked()) {
             luaGame.giveBack(journal.parkedHandlers);
@@ -714,6 +720,12 @@ final class GameActions implements Actions {
         }
         Map<String, List<Object>> taken = luaGame.takeHandlers(dirs);
         journal.parkedHandlers = taken;
+        if (!forServer) {
+            int parked = FileJournal.park(modId, dirs); // back when it is switched on
+            if (parked > 0) {
+                System.out.println("[Jumpstart] " + modId + ": " + parked + " files it created are parked");
+            }
+        }
         int windows = luaGame.closeWindows(journal.addedTables(luaGame));
         LuaJournal.Outcome undo = LuaJournal.undo(luaGame, journal.changes);
         if (touchesHotbar(journal.changes, luaTexts(luaGame.modFolders(modId)))) {

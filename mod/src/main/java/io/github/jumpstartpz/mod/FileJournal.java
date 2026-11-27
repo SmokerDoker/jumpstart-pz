@@ -19,7 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Zomboid/jumpstart/files/written.txt}, one line per file: path, whether it existed before, the Lua
  * file) lasts across sessions, so uninstalling a mod later still finds what it created. On uninstall
  * the files the mod created move to {@code Zomboid/jumpstart/archive/<mod>-<date>/}; files that
- * existed before it wrote them are never touched.
+ * existed before it wrote them are never touched. Switched off, the files it created wait in
+ * {@code Zomboid/jumpstart/parked/<mod>/} and come back when it is switched on.
  */
 public final class FileJournal {
     /** Paths logged in this session (the log keeps the first write: "existed before" must not flip). */
@@ -139,18 +140,11 @@ public final class FileJournal {
         if (r == null) {
             return 0;
         }
+        unpark(modId); // what waited while it was off goes to the archive too
         Path archive = r.resolve("archive").resolve(safe(modId) + "-" + LocalDate.now());
-        // the game's Lua writers write only below its data folder; the log is a file anyone can edit,
-        // so nothing outside that folder is ever moved
         Path dataDir = r.toAbsolutePath().normalize().getParent();
         List<String> moved = new ArrayList<>();
-        for (Write w : writesOf(modDirs)) {
-            String normalized = w.file().toString().replace('\\', '/').toLowerCase(java.util.Locale.ROOT);
-            if (w.existedBefore() || w.shared() || !Files.isRegularFile(w.file()) || modDirs.stream().anyMatch(normalized::startsWith)
-                    || dataDir == null || !w.file().toAbsolutePath().normalize().startsWith(dataDir)
-                    || w.file().toAbsolutePath().normalize().startsWith(r.toAbsolutePath().normalize())) {
-                continue;
-            }
+        for (Write w : created(r, modDirs)) {
             Path target = archive.resolve(archiveName(dataDir, w.file()));
             try {
                 Files.createDirectories(target.getParent());
@@ -170,6 +164,112 @@ public final class FileJournal {
             }
         }
         return moved.size();
+    }
+
+    /**
+     * The files the mod created that are still there and may be moved: below the game's data folder
+     * (the game's Lua writers write only there; the log is a file anyone can edit, so nothing outside
+     * it is ever moved), not in the mod's own folders, not Jumpstart's, not written by another mod too.
+     */
+    private static List<Write> created(Path r, List<String> modDirs) {
+        Path dataDir = r.toAbsolutePath().normalize().getParent();
+        List<Write> files = new ArrayList<>();
+        for (Write w : writesOf(modDirs)) {
+            String normalized = w.file().toString().replace('\\', '/').toLowerCase(java.util.Locale.ROOT);
+            if (w.existedBefore() || w.shared() || !Files.isRegularFile(w.file()) || modDirs.stream().anyMatch(normalized::startsWith)
+                    || dataDir == null || !w.file().toAbsolutePath().normalize().startsWith(dataDir)
+                    || w.file().toAbsolutePath().normalize().startsWith(r.toAbsolutePath().normalize())) {
+                continue;
+            }
+            files.add(w);
+        }
+        return files;
+    }
+
+    /**
+     * Switched off: the files the mod created wait in parked/<mod>/ (the list: parked/<mod>.txt,
+     * "original TAB parked"), so a mod that is off leaves nothing behind. Returns how many moved.
+     */
+    static int park(String modId, List<String> modDirs) {
+        Path r = root;
+        if (r == null) {
+            return 0;
+        }
+        Path dataDir = r.toAbsolutePath().normalize().getParent();
+        Path dir = r.resolve("parked").resolve(safe(modId));
+        List<String> lines = new ArrayList<>();
+        for (Write w : created(r, modDirs)) {
+            Path target = dir.resolve(archiveName(dataDir, w.file()));
+            try {
+                Files.createDirectories(target.getParent());
+                Files.move(w.file(), target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                lines.add(w.file().toAbsolutePath().normalize() + "\t" + target.toAbsolutePath().normalize());
+            } catch (IOException e) {
+                System.out.println("[Jumpstart] cannot park " + w.file() + ": " + e);
+            }
+        }
+        if (!lines.isEmpty()) {
+            try {
+                Files.writeString(r.resolve("parked").resolve(safe(modId) + ".txt"), String.join("\n", lines) + "\n",
+                        StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            } catch (IOException e) {
+                System.out.println("[Jumpstart] cannot write the parked list: " + e);
+            }
+        }
+        return lines.size();
+    }
+
+    /**
+     * Switched on again: the parked files go back where they were, unless something new is there now
+     * (then the parked one stays parked). Only paths inside the game's data folder and the parked
+     * folder are used: the list is a file anyone can edit. Returns how many came back.
+     */
+    static int unpark(String modId) {
+        Path r = root;
+        if (r == null) {
+            return 0;
+        }
+        Path list = r.resolve("parked").resolve(safe(modId) + ".txt");
+        if (!Files.isRegularFile(list)) {
+            return 0;
+        }
+        Path dataDir = r.toAbsolutePath().normalize().getParent();
+        Path parkedDir = r.resolve("parked").resolve(safe(modId)).toAbsolutePath().normalize();
+        int back = 0;
+        List<String> left = new ArrayList<>();
+        try {
+            for (String line : Files.readAllLines(list, StandardCharsets.UTF_8)) {
+                String[] f = line.split("\t", 2);
+                if (f.length < 2) {
+                    continue;
+                }
+                Path original = Path.of(f[0]).toAbsolutePath().normalize();
+                Path parked = Path.of(f[1]).toAbsolutePath().normalize();
+                if (dataDir == null || !original.startsWith(dataDir) || original.startsWith(r.toAbsolutePath().normalize())
+                        || !parked.startsWith(parkedDir) || !Files.isRegularFile(parked)) {
+                    continue;
+                }
+                if (Files.exists(original)) {
+                    left.add(line);
+                    continue;
+                }
+                try {
+                    Files.createDirectories(original.getParent());
+                    Files.move(parked, original);
+                    back++;
+                } catch (IOException e) {
+                    left.add(line);
+                }
+            }
+            if (left.isEmpty()) {
+                Files.delete(list);
+            } else {
+                Files.writeString(list, String.join("\n", left) + "\n", StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            System.out.println("[Jumpstart] cannot read the parked list: " + e);
+        }
+        return back;
     }
 
     /**
