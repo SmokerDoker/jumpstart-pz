@@ -176,6 +176,16 @@ interface Actions {
         return List.of();
     }
 
+    /** The kept versions of a Java mod, newest first: {hash, label}; "*" marks the one that runs. */
+    default List<String[]> versions(ModEntry mod) {
+        return List.of();
+    }
+
+    /** A kept version of a Java mod as a mod entry (its jar is the kept copy), or null. */
+    default ModEntry version(ModEntry mod, String sha256) {
+        return null;
+    }
+
     /** A newer jar of a running Java mod is on disk (Steam updated it): Enter loads it. */
     default boolean updateReady(ModEntry mod) {
         return false;

@@ -405,6 +405,24 @@ class SecureScreenTest {
     }
 
     @Test
+    void hListsTheKeptVersionsAndEnterGoesBackToOne() {
+        actions.states.put("Verified", "on");
+        openScreen();
+        settle();
+        selectInstalled("Unknown");
+        tap(SecureScreen.KEY_H);
+        assertTrue(screen.describe().contains("No kept versions of this mod yet"), screen.describe());
+        selectInstalled("Verified");
+        tap(SecureScreen.KEY_H);
+        frame();
+        assertTrue(game.drew("2026-11-20 09:00   old   verified"));
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertEquals(List.of("update Verified NONE"), actions.calls, "the kept version loads like an update, through BiteCheck");
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -1564,6 +1582,18 @@ class SecureScreenTest {
         boolean verifiedOnly;
 
         @Override public boolean updateReady(ModEntry mod) { return updates.contains(mod.id()); }
+
+        @Override
+        public List<String[]> versions(ModEntry mod) {
+            return mod.id().equals("Verified")
+                    ? List.of(new String[] {"new", "2026-11-27 12:00   new   verified   *"}, new String[] {"old", "2026-11-20 09:00   old   verified"})
+                    : List.of();
+        }
+
+        @Override
+        public ModEntry version(ModEntry mod, String sha256) {
+            return new ModEntry(mod.id(), mod.name(), mod.jar(), "kept-" + sha256);
+        }
         @Override public boolean verifiedUpdatesOnly() { return verifiedOnly; }
         @Override public void setVerifiedUpdatesOnly(boolean on) { verifiedOnly = on; }
 

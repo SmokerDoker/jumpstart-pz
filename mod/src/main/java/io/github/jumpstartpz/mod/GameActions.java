@@ -378,12 +378,69 @@ final class GameActions implements Actions {
 
     @Override
     public LiveInstaller.Outcome install(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return loaded(mod, installer.install(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player));
+        ModEntry copy = cached(mod);
+        return loaded(copy, installer.install(copy.jar(), mod.javaPackage(), mod.id(), workshopIdFor(mod), player));
     }
 
     @Override
     public LiveInstaller.Outcome update(ModEntry mod, LiveInstaller.ConsentSource player) {
-        return loaded(mod, installer.update(mod.jar(), mod.javaPackage(), mod.id(), UsageSharing.Jar.workshopIdOf(mod.jar()), player));
+        ModEntry copy = cached(mod);
+        return loaded(copy, installer.update(copy.jar(), mod.javaPackage(), mod.id(), workshopIdFor(mod), player));
+    }
+
+    // --- own copies of the jars, by hash (JarCache) ----------------------------------------------------
+
+    private final io.github.jumpstartpz.core.JarCache jarCache =
+            new io.github.jumpstartpz.core.JarCache(Main.cacheDir().resolve("jumpstart").resolve("jar-cache"));
+    private final java.util.concurrent.ExecutorService copier = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "Jumpstart jar cache");
+        t.setDaemon(true);
+        return t;
+    });
+
+    /**
+     * The mod with its jar copied into Jumpstart's cache: a live load reads the copy, so Steam
+     * updating the Workshop file under the running game changes nothing. The jar itself if the copy
+     * cannot be made.
+     */
+    private ModEntry cached(ModEntry mod) {
+        if (jarCache.contains(mod.jar())) {
+            return mod; // a kept version (going back to it)
+        }
+        try {
+            return new ModEntry(mod.id(), mod.name(), jarCache.store(mod.id(), mod.jar(), null), mod.javaPackage());
+        } catch (IOException | RuntimeException e) {
+            System.out.println("[Jumpstart] no copy of " + mod.jar() + " in the jar cache: " + e);
+            return mod;
+        }
+    }
+
+    /** The Workshop item of a mod's jar, also for a copy in the cache (from where the copy came). */
+    private String workshopIdFor(ModEntry mod) {
+        if (jarCache.contains(mod.jar())) {
+            String sha = mod.jar().getFileName().toString().replaceFirst("\\.jar$", "");
+            return jarCache.sourceOf(mod.id(), sha).map(s -> UsageSharing.Jar.workshopIdOf(Path.of(s))).orElse("");
+        }
+        return UsageSharing.Jar.workshopIdOf(mod.jar());
+    }
+
+    @Override
+    public List<String[]> versions(ModEntry mod) {
+        String running = loadedHash(mod);
+        List<String[]> out = new ArrayList<>();
+        java.time.format.DateTimeFormatter time = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+                .withZone(java.time.ZoneId.systemDefault());
+        for (io.github.jumpstartpz.core.JarCache.Version v : jarCache.versions(mod.id())) {
+            Verifier.Status status = indexStatus(v.sha256());
+            out.add(new String[] {v.sha256(), time.format(v.seen()) + "   " + v.sha256().substring(0, 12) + "   "
+                    + (status == null ? "?" : status.name().toLowerCase(Locale.ROOT)) + (v.sha256().equals(running) ? "   *" : "")});
+        }
+        return out;
+    }
+
+    @Override
+    public ModEntry version(ModEntry mod, String sha256) {
+        return jarCache.copy(mod.id(), sha256).map(p -> new ModEntry(mod.id(), mod.name(), p, mod.javaPackage())).orElse(null);
     }
 
     /** The hash of each Java mod's running version (see {@link Actions#loadedHash}). */
@@ -391,7 +448,20 @@ final class GameActions implements Actions {
 
     @Override
     public String loadedHash(ModEntry mod) {
-        return loadedHashes.computeIfAbsent(mod.id(), id -> Actions.super.loadedHash(mod));
+        return loadedHashes.computeIfAbsent(mod.id(), id -> {
+            String sha = Actions.super.loadedHash(mod);
+            if (!sha.isEmpty()) {
+                // the version that runs since the start: kept, so the player can come back to it
+                copier.execute(() -> {
+                    try {
+                        jarCache.store(id, mod.jar(), sha);
+                    } catch (IOException | RuntimeException e) {
+                        System.out.println("[Jumpstart] no copy of " + mod.jar() + " in the jar cache: " + e);
+                    }
+                });
+            }
+            return sha;
+        });
     }
 
     private LiveInstaller.Outcome loaded(ModEntry mod, LiveInstaller.Outcome outcome) {

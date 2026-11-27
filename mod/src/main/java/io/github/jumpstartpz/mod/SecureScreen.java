@@ -57,6 +57,7 @@ public final class SecureScreen {
     static final int KEY_PAGE_UP = 266;
     static final int KEY_PAGE_DOWN = 267;
     static final int KEY_A = 65;
+    static final int KEY_H = 72;
     static final int KEY_J = 74;
     static final int KEY_N = 78;
     static final int KEY_R = 82;
@@ -949,6 +950,10 @@ public final class SecureScreen {
     // --- installed tab ---------------------------------------------------------------------------
 
     private void onInstalled(Set<Integer> pressed, long now) {
+        if (pick != null) {
+            onChoice(pressed);
+            return;
+        }
         if (pressed.contains(KEY_UP) && selected > 0) {
             selected--;
         }
@@ -973,6 +978,10 @@ public final class SecureScreen {
             selected = 0;
             reload();
             say(texts.get(updatesOnly ? (mods.isEmpty() ? "updates.none" : "updates.only") : "updates.all"), true);
+            return;
+        }
+        if (pressed.contains(KEY_H)) {
+            versionsOf(selectedMod());
             return;
         }
         if (pressed.contains(KEY_V)) {
@@ -2545,6 +2554,10 @@ public final class SecureScreen {
     }
 
     private void drawList(int x, int top, int width, int bottom) {
+        if (pick != null) {
+            drawChoice(x, top, width, bottom);
+            return;
+        }
         if (mods.isEmpty()) {
             game.text(GameScreen.Font.MEDIUM, x, top, texts.get("noMods"), 0.8f, 0.8f, 0.8f, 1f);
             return;
@@ -2615,6 +2628,39 @@ public final class SecureScreen {
         List<io.github.jumpstartpz.core.PatchTargets.Conflict> all =
                 io.github.jumpstartpz.core.PatchTargets.conflicts(mod.id(), actions.patchTargets(mod.java()), others);
         return all.size() > 6 ? all.subList(0, 6) : all;
+    }
+
+    /**
+     * H: the versions of a Java mod Jumpstart kept (every version that ran); Enter loads the chosen one
+     * live, through BiteCheck like any load.
+     */
+    private void versionsOf(Actions.InstalledMod mod) {
+        if (mod == null || mod.java() == null || mod.id().equals(SELF)) {
+            say(texts.get("versions.javaOnly"), false);
+            return;
+        }
+        if (session.inMultiplayer()) {
+            say(texts.get("mp.locked"), false);
+            return;
+        }
+        List<String[]> versions = actions.versions(mod.java());
+        if (versions.isEmpty()) {
+            say(texts.get("versions.none"), false);
+            return;
+        }
+        choiceSelected = 0;
+        pick = new Pick(mod.name(), versions, "versions.text", "btn.loadVersion", v -> {
+            pick = null;
+            ModEntry old = actions.version(mod.java(), v[0]);
+            if (old == null) {
+                say(texts.get("versions.gone"), false);
+                return;
+            }
+            busy(String.format(Locale.ROOT, texts.get("busy.check"), mod.name()), () -> start(old, frameTime, false));
+        }, () -> {
+            pick = null;
+            say("", true);
+        });
     }
 
     /** "Java", "Lua" or "Data": what the mod brings (BiteCheck checks only Java). */
