@@ -382,6 +382,29 @@ class SecureScreenTest {
     }
 
     @Test
+    void updatesAreMarkedFilteredAndTheVerifiedChannelHoldsUnverifiedOnesBack() {
+        actions.states.put("Verified", "on");
+        actions.states.put("Unknown", "on");
+        actions.updates.addAll(List.of("Verified", "Unknown"));
+        openScreen();
+        settle();
+        assertTrue(game.drew("update ready"));
+        tap(SecureScreen.KEY_N);
+        assertTrue(screen.describe().contains("Only mods with an update ready"), screen.describe());
+        tap(SecureScreen.KEY_V);
+        assertTrue(actions.verifiedOnly);
+        selectInstalled("Unknown");
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertTrue(screen.describe().contains("unknown mod: this update is not verified by BiteCheck"), screen.describe());
+        assertTrue(actions.calls.isEmpty(), "held back");
+        selectInstalled("Verified");
+        tap(SecureScreen.KEY_ENTER);
+        settle();
+        assertEquals(List.of("update Verified NONE"), actions.calls, "a verified update loads");
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -1537,6 +1560,12 @@ class SecureScreenTest {
         final List<LibraryClient.Sort> sorts = new ArrayList<>();
         List<String[]> blockedNow = List.of();
         final Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> targets = new HashMap<>();
+        final java.util.Set<String> updates = new java.util.HashSet<>();
+        boolean verifiedOnly;
+
+        @Override public boolean updateReady(ModEntry mod) { return updates.contains(mod.id()); }
+        @Override public boolean verifiedUpdatesOnly() { return verifiedOnly; }
+        @Override public void setVerifiedUpdatesOnly(boolean on) { verifiedOnly = on; }
 
         @Override
         public java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {

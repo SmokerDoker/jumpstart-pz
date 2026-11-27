@@ -176,6 +176,19 @@ interface Actions {
         return List.of();
     }
 
+    /** A newer jar of a running Java mod is on disk (Steam updated it): Enter loads it. */
+    default boolean updateReady(ModEntry mod) {
+        return false;
+    }
+
+    /** The "verified updates only" channel: an update BiteCheck has not verified does not load live. */
+    default boolean verifiedUpdatesOnly() {
+        return false;
+    }
+
+    default void setVerifiedUpdatesOnly(boolean on) {
+    }
+
     /** The game methods a Java mod's jar patches (its @Patch annotations); empty when unknown. */
     default java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
         return java.util.Set.of();

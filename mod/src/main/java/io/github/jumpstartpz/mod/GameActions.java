@@ -1019,6 +1019,70 @@ final class GameActions implements Actions {
         return blocked;
     }
 
+    /** Per jar and its last change: its hash (an update check hashes each jar once). */
+    private final Map<String, String> diskHashes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public boolean updateReady(ModEntry mod) {
+        if (stateOf(mod.id()).equals("not loaded")) {
+            return false;
+        }
+        String loaded = loadedHash(mod);
+        String disk;
+        try {
+            long changed = Files.getLastModifiedTime(mod.jar()).toMillis();
+            disk = diskHashes.computeIfAbsent(mod.jar() + "@" + changed, k -> Actions.super.loadedHash(mod));
+        } catch (IOException e) {
+            return false;
+        }
+        return !loaded.isEmpty() && !disk.isEmpty() && !loaded.equals(disk);
+    }
+
+    private Path settingsFile() {
+        return Main.cacheDir().resolve("jumpstart").resolve("settings.properties");
+    }
+
+    /** The channel setting, read from the file once. */
+    private volatile Boolean verifiedOnly;
+
+    @Override
+    public boolean verifiedUpdatesOnly() {
+        Boolean cached = verifiedOnly;
+        if (cached != null) {
+            return cached;
+        }
+        java.util.Properties p = new java.util.Properties();
+        try (java.io.InputStream in = Files.newInputStream(settingsFile())) {
+            p.load(in);
+        } catch (IOException e) {
+            // no settings yet: every update
+        }
+        boolean on = "verified".equals(p.getProperty("updates", "all").strip());
+        verifiedOnly = on;
+        return on;
+    }
+
+    @Override
+    public void setVerifiedUpdatesOnly(boolean on) {
+        java.util.Properties p = new java.util.Properties();
+        Path file = settingsFile();
+        try {
+            if (Files.isRegularFile(file)) {
+                try (java.io.InputStream in = Files.newInputStream(file)) {
+                    p.load(in);
+                }
+            }
+            p.setProperty("updates", on ? "verified" : "all");
+            verifiedOnly = on;
+            Files.createDirectories(file.getParent());
+            try (java.io.OutputStream out = Files.newOutputStream(file)) {
+                p.store(out, "Jumpstart settings: snapshots=auto|on|off, updates=all|verified");
+            }
+        } catch (IOException e) {
+            System.out.println("[Jumpstart] cannot save the settings: " + e);
+        }
+    }
+
     /** Per jar and its last change: what it patches (read once). */
     private final Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> patchTargets = new java.util.concurrent.ConcurrentHashMap<>();
 

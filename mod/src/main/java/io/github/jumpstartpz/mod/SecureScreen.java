@@ -61,6 +61,7 @@ public final class SecureScreen {
     static final int KEY_N = 78;
     static final int KEY_R = 82;
     static final int KEY_U = 85;
+    static final int KEY_V = 86;
     static final int KEY_X = 88;
     static final int KEY_Y = 89;
     static final int KEY_LEFT_SHIFT = 340;
@@ -793,8 +794,14 @@ public final class SecureScreen {
         game.pause(false);
     }
 
+    /** The installed tab shows only Java mods with an update ready (N). */
+    private boolean updatesOnly;
+
     private void reload() {
         mods = actions.installedMods();
+        if (updatesOnly) {
+            mods = mods.stream().filter(m -> m.java() != null && actions.updateReady(m.java())).toList();
+        }
         refreshStates();
         if (selected >= mods.size()) {
             selected = Math.max(0, mods.size() - 1);
@@ -961,6 +968,19 @@ public final class SecureScreen {
             });
             return;
         }
+        if (pressed.contains(KEY_N)) {
+            updatesOnly = !updatesOnly;
+            selected = 0;
+            reload();
+            say(texts.get(updatesOnly ? (mods.isEmpty() ? "updates.none" : "updates.only") : "updates.all"), true);
+            return;
+        }
+        if (pressed.contains(KEY_V)) {
+            boolean on = !actions.verifiedUpdatesOnly();
+            actions.setVerifiedUpdatesOnly(on);
+            say(texts.get(on ? "updates.verifiedOn" : "updates.verifiedOff"), true);
+            return;
+        }
         Actions.InstalledMod mod = selectedMod();
         if (mod == null) {
             return;
@@ -995,6 +1015,13 @@ public final class SecureScreen {
                 busy(String.format(Locale.ROOT, texts.get("busy.on"), mod.name()), () -> toggleWithDeps(mod, frameTime));
             }
             return;
+        }
+        if (enter && actions.verifiedUpdatesOnly() && actions.updateReady(mod.java())) {
+            BiteCheckGate.Check c = checkQuietly(mod.java().jar());
+            if (c == null || c.status() != io.github.bitecheckpz.core.Verifier.Status.VERIFIED) {
+                say(String.format(Locale.ROOT, texts.get("updates.notVerified"), mod.name()), false);
+                return;
+            }
         }
         if (enter) {
             busy(String.format(Locale.ROOT, texts.get("busy.check"), mod.name()), () -> start(mod.java(), frameTime, false));
@@ -2547,6 +2574,9 @@ public final class SecureScreen {
             game.text(GameScreen.Font.SMALL, tx, y + 4, kindLabel(mod), kc[0], kc[1], kc[2], 1f);
             String state = mod.id().equals(SELF) ? "self" : stateOf(mod.id());
             String label = stateLabel(mod.id(), state);
+            if (mod.java() != null && !mod.id().equals(SELF) && actions.updateReady(mod.java())) {
+                label = texts.get("updates.mark") + "   " + label;
+            }
             float[] c = stateColor(state);
             int w = game.textWidth(GameScreen.Font.SMALL, label);
             game.text(GameScreen.Font.SMALL, x + listWidth - w, y + 4, label, c[0], c[1], c[2], 1f);
@@ -2620,6 +2650,10 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("file") + shorten(mod.java().jar().toString(), 90), 0.55f, 0.55f, 0.55f);
+            if (!mod.id().equals(SELF) && actions.updateReady(mod.java())) {
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(actions.verifiedUpdatesOnly() ? "updates.readyVerified" : "updates.ready"),
+                        0.5f, 0.8f, 1f);
+            }
             for (io.github.jumpstartpz.core.PatchTargets.Conflict c : conflictsOf(mod)) {
                 y = wrapped(GameScreen.Font.SMALL, tx, y, tw, String.format(Locale.ROOT, texts.get(c.hard() ? "conflict.hard" : "conflict.soft"),
                         c.otherMod(), c.method()), 1f, c.hard() ? 0.45f : 0.8f, c.hard() ? 0.4f : 0.3f);
