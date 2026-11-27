@@ -113,6 +113,15 @@ Im Multiplayer dasselbe über **Lua-Bibliothek → für alle installieren** mit 
 Items bringt: alle müssen das Item danach haben; wer danach beitritt, darf nicht mit „checksum“
 getrennt werden. Server-Log: `script checksum: … -> …`.
 
+## Leistung pro Mod messen mit P (allein, 2 Minuten)
+
+1. In einem Spielstand mit ein paar Mods Jumpstart öffnen, Reiter **Installiert**, **P**: Das Fenster
+   schließt sich, 10 Sekunden normal weiterspielen (herumlaufen, Inventar öffnen).
+2. Jumpstart wieder öffnen: Oben steht `Gemessen: 10 s beim Spielen, … Frames …`. Eine Mod auswählen:
+   In den Details steht `Letzte Messung: … ms pro Frame, … % des Hauptthreads (Java …, Lua …)` oder
+   `zu wenig, um es zu sehen`.
+3. Ruckelt das Spiel während der 10 Sekunden spürbar? Bitte melden (die Messung soll kaum etwas kosten).
+
 ## 5. Was ihr mir schickt
 
 - Was ihr gesehen habt, pro Schritt kurz (gerne Screenshots vom Jumpstart-Bildschirm).

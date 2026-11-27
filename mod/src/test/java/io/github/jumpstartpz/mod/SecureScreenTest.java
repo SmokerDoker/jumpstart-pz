@@ -494,6 +494,45 @@ class SecureScreenTest {
     }
 
     @Test
+    void pMeasuresWhileThePlayerPlaysAndTheResultsShowWhenTheScreenOpensAgain() {
+        openScreen();
+        settle();
+        tap(SecureScreen.KEY_P);
+        assertEquals(1, actions.measures);
+        frame();
+        assertFalse(SecureScreen.blocksInput(), "closed: the game runs while it measures");
+
+        actions.measuringNow = true;
+        openScreen();
+        settle();
+        frame();
+        assertTrue(game.drew("Measuring: play on"));
+        tap(SecureScreen.KEY_P);
+        assertEquals(1, actions.measures, "one at a time");
+        tap(SecureScreen.KEY_ESCAPE);
+
+        actions.measuringNow = false;
+        actions.measured = new PerfSampler.Result(10_000, 500, 1000, java.util.Map.of("Verified", new PerfSampler.Share(30, 20)));
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Measured 10 s while you played, 500 frames (20.0 ms each). All mods together: 1.0 ms per frame. Most: Verified, 1.00 ms."));
+        assertTrue(game.drew("Last measurement: 1.00 ms per frame, 5.0 % of the main thread (Java 3.0 %, Lua 2.0 %)."));
+    }
+
+    @Test
+    void pOutsideAGameSaysWhy() {
+        actions.measureRefusal = "not in a game";
+        openScreen();
+        settle();
+        tap(SecureScreen.KEY_P);
+        frame();
+        assertTrue(game.drew("Cannot measure: not in a game."));
+        assertTrue(SecureScreen.blocksInput(), "the screen stays open");
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -1658,6 +1697,13 @@ class SecureScreenTest {
         @Override public boolean canReloadSave() { return singlePlayer; }
         @Override public String reloadSave() { reloads++; return null; }
         final Map<String, Long> held = new HashMap<>();
+        int measures;
+        String measureRefusal;
+        boolean measuringNow;
+        PerfSampler.Result measured;
+        @Override public String startMeasure() { if (measureRefusal != null) { return measureRefusal; } measures++; return null; }
+        @Override public PerfSampler.Result measurement() { return measured; }
+        @Override public boolean measuring() { return measuringNow; }
         final Map<String, java.util.List<Actions.ClassClash>> clashes = new HashMap<>();
         @Override public java.util.List<Actions.ClassClash> classClashes(String modId) { return clashes.getOrDefault(modId, java.util.List.of()); }
         @Override public long callsWhileOff(String modId) { return held.getOrDefault(modId, 0L); }

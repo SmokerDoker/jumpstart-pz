@@ -199,6 +199,24 @@ interface Actions {
      */
     record ClassClash(String kind, String otherMod, int count, String example) {}
 
+    /**
+     * Starts measuring how much of the main thread each mod takes ({@link PerfSampler}), for a few
+     * seconds of play. Returns null, or why not.
+     */
+    default String startMeasure() {
+        return "not available";
+    }
+
+    /** The last finished measurement, or null. */
+    default PerfSampler.Result measurement() {
+        return null;
+    }
+
+    /** A measurement runs right now. */
+    default boolean measuring() {
+        return false;
+    }
+
     /** Single player in a save: it can be loaded again in place ({@link #reloadSave}). */
     default boolean canReloadSave() {
         return false;

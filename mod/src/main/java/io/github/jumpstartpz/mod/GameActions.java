@@ -1151,6 +1151,50 @@ final class GameActions implements Actions {
     }
 
     @Override
+    public String startMeasure() {
+        if (!luaGame.inGame() || luaGame.isServer()) {
+            return "not in a game";
+        }
+        Thread main = PerfSampler.mainThread();
+        if (main == null) {
+            return "the game's main thread is not known yet";
+        }
+        Map<String, String> packages = new LinkedHashMap<>();
+        for (ModEntry m : javaMods()) {
+            if (m.javaPackage() != null && !m.javaPackage().isBlank()) {
+                packages.put(m.javaPackage() + ".", m.id());
+            }
+        }
+        Map<String, String> dirs = new LinkedHashMap<>();
+        for (InstalledMod m : installedMods()) {
+            for (String dir : luaGame.modDirs(m.id())) {
+                dirs.put(dir, m.id());
+            }
+        }
+        return PerfSampler.start(new PerfSampler.Owners(packages, dirs), new PerfSampler.Probe() {
+            @Override
+            public StackTraceElement[] mainStack() {
+                return main.getStackTrace();
+            }
+
+            @Override
+            public String luaFile() {
+                return LuaSource.currentFile();
+            }
+        }, PerfSampler.DURATION_MS, PerfSampler.INTERVAL_MS);
+    }
+
+    @Override
+    public PerfSampler.Result measurement() {
+        return PerfSampler.last();
+    }
+
+    @Override
+    public boolean measuring() {
+        return PerfSampler.running();
+    }
+
+    @Override
     public boolean canReloadSave() {
         return luaGame.inGame() && !luaGame.multiplayer() && !luaGame.isServer();
     }
