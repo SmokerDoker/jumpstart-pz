@@ -52,7 +52,7 @@ in-process restart of the game's start phases) or *restart*.
 - [x] Registration journal: entries a mod adds to the game's tables while it loads live (a key binding in `keyBinding`, list and lookup entries) go when it is switched off; lists close up (`table.remove`), the entry comes back at the end
 - [ ] Registrations a mod made in a save it came with (no record from before it loaded), and values it changed in existing entries
 - [x] Files a mod created wait in `Zomboid/jumpstart/parked/<mod>/` while it is off and come back when it is on (never over a new file); uninstalling archives them
-- [ ] Java writes into instance fields (today static fields only)
+- [x] Java writes into instance fields of game objects go back when the mod is switched off (per object, only where the field still holds the mod's value; not in the mod's constructors)
 - [ ] ModData on single objects; placeholder items for items of a removed mod
 - [x] Trip wire in every method of a mod's own classes, not only at the start of each patch; switching off trips it (not in constructors, equals/hashCode/toString, delegation patches, libraries a mod ships under their own name)
 
