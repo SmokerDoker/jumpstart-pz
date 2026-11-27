@@ -3,7 +3,7 @@
 Everything Jumpstart still wants to deliver, in one place. The [README](../README.md) describes what
 Jumpstart does today. Items are checked off here when they are released.
 
-Last audit of the plans against the code: 2026-11-26.
+Last audit of the plans against the code: 2026-11-28 (release 0.5.14).
 
 ## The idea
 
@@ -18,14 +18,20 @@ in-process restart of the game's start phases) or *restart*.
 
 - **1. Core, single player:** live on/off, load and update of Java mods through the ZombieBuddy fork,
   BiteCheck for every load, the secure screen, the read-only Lua API, one `Jumpstart.jar`, installers
-  with automatic signed updates, the Windows loader `jsNative.dll`
-- **2. Clean removal (mostly):** crash protection, Lua globals, event handlers and windows taken back
-  (also for mods that came with the save), static Java values restored, file archive and ModData stash on
-  uninstall, save snapshots
-- **3. Marketplace (partly):** Workshop search for Java and Lua mods, mod pages, dependencies and
-  required items, download progress
-- **4. Multiplayer (first version):** server-side Jumpstart, a channel Lua cannot touch, install, update,
-  switch and remove for everybody at once, Server tab
+  with automatic signed updates, the Windows loader `jsNative.dll`, lean main menu
+- **2. Clean removal (mostly):** crash protection; Lua globals, event handlers, windows and registrations in
+  the game's tables taken back (also for mods that came with the save); static and instance Java fields of
+  the game restored; a trip wire in every method of a switched-off mod, with a count of calls that still
+  reach it; files parked while off, archived on uninstall; ModData stash; save snapshots; crash report zip;
+  items, recipes, loot tables and animations load live (0.5.12)
+- **3. Marketplace:** Workshop search for Java and Lua mods with sorting, mod pages, dependencies and
+  required items, download progress, Lua/Data labels, conflicts between Java mods, updates overview and
+  the channel "verified updates only", own jar copies by hash with going back to a kept version, emergency
+  switch-off when BiteCheck blocks a running mod, choosing one mod of an item with several (0.5.12)
+- **4. Multiplayer:** server-side Jumpstart, a channel Lua cannot touch, install, update, switch and
+  remove for everybody in two phases with a real server pause, join sync, Lua and script checksums,
+  emergency switch-off, server snapshots (restore from the setup), start scripts that survive SteamCMD
+  updates (0.5.11 to 0.5.13)
 
 ## 2. Clean removal: what is left
 
@@ -115,3 +121,9 @@ in-process restart of the game's start phases) or *restart*.
 - [x] Switching a mod off and on for everybody on a real server (Linux, 0.5.5)
 - [ ] Install, update and remove for everybody on a real server
 - [ ] `tools\startmodtest.ps1` after its last fix; `tools\gametest.ps1` with the current build
+- [ ] Items live (0.5.12): `tools/testmods/JSTItemTest`, steps in kit/TESTPLAN.md; vanilla recipes still work after it
+- [ ] Marketplace keys (0.5.12): sorting, N/V/H, a conflict shown, a version loaded back, "verified updates only"
+- [ ] Multiplayer (0.5.11): emergency switch-off (X twice), a snapshot during a round, choosing a mod of an item,
+  a player who joins after a live install is not turned away for a checksum
+- [ ] Clean removal (0.5.13/0.5.14): a key binding taken back, parked files back, crash report (C), a switched-off
+  Java mod no longer runs and "still called" shows when something holds it, instance fields restored

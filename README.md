@@ -33,13 +33,16 @@ Press **Ctrl+Shift+J** in the game (main menu or a running save) to open Jumpsta
   on a mod switches on the libraries it needs first; a library nothing needs any more is offered for
   switching off; a library that comes back on offers the mods that went off with it.
 - **Clean switching.** Switching a mod off takes back what its Lua changed (new globals, replaced
-  game functions, event handlers, windows of its own classes), also for mods that came with the save,
-  and restores static values its Java code changed in the game. A function another mod changed again
-  since stays and is named. Switching it on puts it all back. Items, recipes, loot tables and animations of a mod
+  game functions, event handlers, windows of its own classes, entries it added to the game's tables such
+  as key bindings), also for mods that came with the save, and restores static and instance fields its
+  Java code changed in the game. Every method of a switched-off Java mod returns at once (a trip wire), and
+  the screen says when something still calls it. Files it created wait aside while it is off. A function
+  another mod changed again since stays and is named. Switching it on puts it all back. Items, recipes, loot tables and animations of a mod
   load live too; parts the game reads only while a save loads (maps, sandbox options, sounds, 3D models,
   ...) follow with the next load of the save, and the screen says so.
 - **Crash protection.** If a mod's Java patch throws, the game keeps running; after repeated errors
   (or at once right after a live load) the mod is switched off and a banner names it.
+  **C** writes a report zip (logs, mods, what the crash protection caught) to `Zomboid/jumpstart/reports/`.
 - **Clean uninstall.** Files the mod created move to `Zomboid/jumpstart/archive/`, ModData tables it
   created and nobody else used leave the save (they come back if you reinstall it).
 - **Save snapshots** (single player). Before a switch Jumpstart saves the game and keeps a zip of
