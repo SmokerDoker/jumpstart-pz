@@ -176,6 +176,11 @@ interface Actions {
         return List.of();
     }
 
+    /** The game methods a Java mod's jar patches (its @Patch annotations); empty when unknown. */
+    default java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
+        return java.util.Set.of();
+    }
+
     /** Java, Lua or only data (items, textures, ...): for the label. */
     default ModKind kindOf(InstalledMod mod) {
         return mod.java() != null ? ModKind.JAVA : ModKind.LUA;

@@ -2571,6 +2571,22 @@ public final class SecureScreen {
     }
 
     /** The selected installed mod: picture, name, state, BiteCheck's verdict, and its description. */
+    /** The game methods this Java mod patches that other Java mods that are on patch too. */
+    private List<io.github.jumpstartpz.core.PatchTargets.Conflict> conflictsOf(Actions.InstalledMod mod) {
+        Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> others = new java.util.LinkedHashMap<>();
+        for (Actions.InstalledMod m : mods) {
+            if (m.java() != null && !m.id().equals(mod.id()) && !m.id().equals(SELF) && stateOf(m.id()).startsWith("on")) {
+                others.put(m.id(), actions.patchTargets(m.java()));
+            }
+        }
+        if (others.isEmpty()) {
+            return List.of();
+        }
+        List<io.github.jumpstartpz.core.PatchTargets.Conflict> all =
+                io.github.jumpstartpz.core.PatchTargets.conflicts(mod.id(), actions.patchTargets(mod.java()), others);
+        return all.size() > 6 ? all.subList(0, 6) : all;
+    }
+
     /** "Java", "Lua" or "Data": what the mod brings (BiteCheck checks only Java). */
     private String kindLabel(Actions.InstalledMod mod) {
         return texts.get("kind." + actions.kindOf(mod).name());
@@ -2604,6 +2620,10 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("file") + shorten(mod.java().jar().toString(), 90), 0.55f, 0.55f, 0.55f);
+            for (io.github.jumpstartpz.core.PatchTargets.Conflict c : conflictsOf(mod)) {
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, String.format(Locale.ROOT, texts.get(c.hard() ? "conflict.hard" : "conflict.soft"),
+                        c.otherMod(), c.method()), 1f, c.hard() ? 0.45f : 0.8f, c.hard() ? 0.4f : 0.3f);
+            }
         } else {
             boolean data = actions.kindOf(mod) == ModKind.DATA;
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(data ? "dataMod" : "luaMod"), 0.55f, 0.8f, 1f);

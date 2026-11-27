@@ -357,6 +357,31 @@ class SecureScreenTest {
     }
 
     @Test
+    void twoModsPatchingTheSameMethodAreShownInTheDetails() {
+        actions.states.put("Verified", "on");
+        actions.states.put("Unknown", "on");
+        actions.states.put("Shady", "off");
+        var update = new io.github.jumpstartpz.core.PatchTargets.Target("zombie.iso.IsoWorld", "update", true);
+        var render = new io.github.jumpstartpz.core.PatchTargets.Target("zombie.core.Core", "EndFrame", false);
+        actions.targets.put("Verified", java.util.Set.of(update, render));
+        actions.targets.put("Unknown", java.util.Set.of(update));
+        actions.targets.put("Shady", java.util.Set.of(render));
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Unknown patches zombie.iso.IsoWorld.update too: both run, their order can matter."));
+        assertFalse(game.drew("Conflict: Shady"), "a mod that is off clashes with nothing");
+        actions.states.put("Shady", "on");
+        tap(SecureScreen.KEY_ESCAPE);
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Conflict: Shady patches zombie.core.Core.EndFrame too and one of them replaces the method; only one can work."));
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -1511,6 +1536,12 @@ class SecureScreenTest {
 
         final List<LibraryClient.Sort> sorts = new ArrayList<>();
         List<String[]> blockedNow = List.of();
+        final Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> targets = new HashMap<>();
+
+        @Override
+        public java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
+            return targets.getOrDefault(mod.id(), java.util.Set.of());
+        }
 
         @Override
         public List<String[]> newlyBlocked() {

@@ -1019,6 +1019,27 @@ final class GameActions implements Actions {
         return blocked;
     }
 
+    /** Per jar and its last change: what it patches (read once). */
+    private final Map<String, java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target>> patchTargets = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public java.util.Set<io.github.jumpstartpz.core.PatchTargets.Target> patchTargets(ModEntry mod) {
+        Path jar = mod.jar();
+        long changed;
+        try {
+            changed = Files.getLastModifiedTime(jar).toMillis();
+        } catch (IOException e) {
+            return java.util.Set.of();
+        }
+        return patchTargets.computeIfAbsent(jar + "@" + changed, k -> {
+            try {
+                return io.github.jumpstartpz.core.PatchTargets.of(jar);
+            } catch (IOException | RuntimeException e) {
+                return java.util.Set.of();
+            }
+        });
+    }
+
     /** Per mod folder: looking for Lua files walks the folder once. */
     private final Map<String, ModKind> kinds = new java.util.concurrent.ConcurrentHashMap<>();
 
