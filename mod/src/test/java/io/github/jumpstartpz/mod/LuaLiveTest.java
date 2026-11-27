@@ -286,7 +286,7 @@ class LuaLiveTest {
         panel.map.put("prerender", new Fn(file, "JSTPanel.prerender"));
         game.scripts.put(file, () -> {
             luautils.map.put("stringStarts", modStringStarts); // replaces a game function
-            luautils.map.put("counter", 2.0); // a value the game changes all the time: not the mod's
+            luautils.map.put("counter", 2.0); // a setting in a game table
             game.env.map.put("JST_Marker", true);
             game.env.map.put("JSTPanel", panel);
         });
@@ -294,27 +294,116 @@ class LuaLiveTest {
         LuaLive.Result r = LuaLive.load(game, "jst", "/mods/jst");
 
         assertEquals(LuaLive.Status.LOADED, r.status());
-        assertEquals(List.of("JSTPanel", "JST_Marker", "luautils.stringStarts"),
+        assertEquals(List.of("JSTPanel", "JST_Marker", "luautils.counter", "luautils.stringStarts"),
                 r.changes().stream().map(LuaJournal.Change::path).toList());
 
         LuaJournal.Outcome undo = LuaJournal.undo(game, r.changes());
-        assertEquals(3, undo.done());
+        assertEquals(4, undo.done());
         assertTrue(undo.kept().isEmpty());
         assertEquals(gameStringStarts, luautils.map.get("stringStarts"), "the game's function is back");
         assertTrue(!game.env.map.containsKey("JST_Marker") && !game.env.map.containsKey("JSTPanel"), "new globals are gone");
-        assertEquals(2.0, luautils.map.get("counter"), "the game's own values stay");
+        assertEquals(1.0, luautils.map.get("counter"), "the setting is the game's again");
 
         LuaJournal.Outcome redo = LuaJournal.redo(game, r.changes());
-        assertEquals(3, redo.done());
+        assertEquals(4, redo.done());
         assertEquals(modStringStarts, luautils.map.get("stringStarts"));
         assertEquals(panel, game.env.map.get("JSTPanel"));
+        assertEquals(2.0, luautils.map.get("counter"));
 
-        // another mod wraps the function now: switching off leaves its wrapper and says so
+        // another mod wraps the function now: switching off leaves its wrapper and says so;
+        // the game changed the setting since: that stays too, without a word (it is the game's state)
         Fn wrapper = new Fn("/mods/other/media/lua/client/other.lua", "other wrapper");
         luautils.map.put("stringStarts", wrapper);
+        luautils.map.put("counter", 3.0);
         undo = LuaJournal.undo(game, r.changes());
         assertEquals(List.of("luautils.stringStarts"), undo.kept());
         assertEquals(wrapper, luautils.map.get("stringStarts"));
+        assertEquals(3.0, luautils.map.get("counter"));
+    }
+
+    @Test
+    void numbersStringsAndBooleansCompareByValue() {
+        assertTrue(LuaJournal.same(2.0, Double.valueOf(2.0)));
+        assertTrue(LuaJournal.same(2.0, 2));
+        assertTrue(LuaJournal.same(new String("a"), "a"));
+        assertTrue(LuaJournal.same(true, Boolean.valueOf("true")));
+        assertFalse(LuaJournal.same(new Table(), new Table()), "tables by identity");
+        assertFalse(LuaJournal.same("2", 2.0));
+        assertTrue(LuaJournal.same(null, null));
+        assertFalse(LuaJournal.same(null, 0.0));
+    }
+
+    @Test
+    void anEntryInsertedAtTheFrontOfAListIsTheOnlyOneThatGoes() {
+        FakeGame game = new FakeGame();
+        String file = "/mods/front/42/media/lua/client/front.lua";
+        game.files.put("media/lua/client/front.lua", file);
+        Table list = new Table();
+        Table a = new Table();
+        Table b = new Table();
+        list.map.put(1.0, a);
+        list.map.put(2.0, b);
+        game.env.map.put("Distributions", list);
+        Table mine = new Table();
+        game.scripts.put(file, () -> { // table.insert(Distributions, 1, mine)
+            list.map.put(3.0, b);
+            list.map.put(2.0, a);
+            list.map.put(1.0, mine);
+        });
+        LuaLive.Result r = LuaLive.load(game, "front", "/mods/front");
+        assertEquals(List.of("Distributions.1.0"), r.changes().stream().map(LuaJournal.Change::path).toList(),
+                "the entries that moved up are no changes of their own");
+
+        LuaJournal.Outcome undo = LuaJournal.undo(game, r.changes());
+        assertEquals(1, undo.done());
+        assertEquals(Map.of(1.0, a, 2.0, b), list.map, "the game's entries stay, in their order");
+        LuaJournal.redo(game, r.changes());
+        assertEquals(Map.of(1.0, a, 2.0, b, 3.0, mine), list.map, "back at the end");
+    }
+
+    @Test
+    void addedCountsEachOccurrence() {
+        Object x = new Object();
+        Object y = new Object();
+        assertEquals(List.of(2, 3), LuaJournal.added(List.of(x, y), List.of(y, x, y, x)), "the second y and x are new");
+        assertEquals(List.of(), LuaJournal.added(List.of(x, y), List.of(y)), "removed entries are not added ones");
+    }
+
+    @Test
+    void registrationsAndSettingsOfAModThatCameWithTheSaveGoToo() {
+        FakeGame game = new FakeGame();
+        Table keyBinding = new Table();
+        Table jump = new Table();
+        Table run = new Table();
+        keyBinding.map.put(1.0, jump);
+        keyBinding.map.put(2.0, run);
+        game.env.map.put("keyBinding", keyBinding);
+        Table options = new Table();
+        options.map.put("speed", 1.0);
+        game.env.map.put("ISGameOptions", options);
+        List<LuaStartJournal.Write> log = new ArrayList<>();
+        Table myKey = new Table();
+        Table bKey = new Table();
+        // A: table.insert(keyBinding, 2, myKey), then a setting; B adds a key at the end
+        write(game, log, keyBinding, 3.0, run, A_FILE);
+        write(game, log, keyBinding, 2.0, myKey, A_FILE);
+        write(game, log, options, "speed", 2.0, A_FILE);
+        write(game, log, options, "fast", true, A_FILE);
+        write(game, log, keyBinding, 4.0, bKey, B_FILE);
+        LuaStartJournal.recordForTest(game.env, log);
+
+        List<LuaJournal.Change> changes = LuaStartJournal.changesOf(game, f -> f != null && f.startsWith("c:/zomboid/mods/a/"));
+        assertEquals(List.of("ISGameOptions.fast", "ISGameOptions.speed", "keyBinding.2.0"),
+                changes.stream().map(LuaJournal.Change::path).toList(), "run moved up: no change of A's own");
+
+        LuaJournal.Outcome undo = LuaJournal.undo(game, changes);
+        assertEquals(3, undo.done());
+        assertEquals(Map.of(1.0, jump, 2.0, run, 3.0, bKey), keyBinding.map, "only A's key goes; B's stays");
+        assertEquals(Map.of("speed", 1.0), options.map);
+
+        LuaJournal.redo(game, changes);
+        assertEquals(Map.of(1.0, jump, 2.0, run, 3.0, bKey, 4.0, myKey), keyBinding.map);
+        assertEquals(Map.of("speed", 2.0, "fast", true), options.map);
     }
 
     @Test

@@ -21,11 +21,14 @@ import java.util.function.Predicate;
  * ({@link LuaJournal}). The game hooks call {@link #onLoadDir} when the game runs its Lua folders
  * and {@link #onSet} on every raw table write; while the game loads (until the first frame of the
  * main menu or the game, so the start events are in it too), writes from a mod's file are kept:
- * new globals, and functions the mod's files put into a table. Vanilla files are not kept.
+ * globals, functions the mod's files put into a table, and entries the running code of a mod's file
+ * wrote into a table that is a global (a registration such as a key binding, a changed setting).
+ * Vanilla files are not kept, and neither is a write a game function made for a mod (the innermost
+ * Lua function on the stack counts).
  *
  * <p>{@link #changesOf} turns the writes of one mod into {@link LuaJournal.Change}s with the same
- * rules as a live load: new globals, and functions at the top level or one table down (not inside
- * a table the mod added itself).
+ * rules as a live load: at the top level or one table down (not inside a table the mod added
+ * itself), lists by value.
  */
 public final class LuaStartJournal {
 
@@ -36,6 +39,8 @@ public final class LuaStartJournal {
     private static volatile boolean recording;
     private static Object env;
     private static final List<Write> WRITES = new ArrayList<>();
+    /** Tables that are (or were) globals in this Lua state, by identity: writes into them are kept. */
+    private static final Set<Object> GLOBAL_TABLES = Collections.newSetFromMap(new IdentityHashMap<>());
     private static volatile Lookup lookup;
     /** The game's own Lua (normalized), not kept. */
     private static final String VANILLA = normalize(System.getProperty("user.dir", "")) + "/media/";
@@ -48,11 +53,22 @@ public final class LuaStartJournal {
     /** LuaManager.LoadDirBase: the game runs its Lua folders; a new Lua state starts a new record. */
     public static void onLoadDir() {
         try {
-            Object current = lookup().env.get(null);
+            Lookup l = lookup();
+            Object current = l.env.get(null);
             synchronized (WRITES) {
                 if (current != env) {
                     WRITES.clear();
+                    GLOBAL_TABLES.clear();
                     env = current;
+                    // tables the game made before its Lua folders ran
+                    Object delegate = current == null ? null : l.delegate.get(current);
+                    if (delegate instanceof Map<?, ?> globals) {
+                        for (Object v : globals.values()) {
+                            if (v != null && v.getClass() == l.table) {
+                                GLOBAL_TABLES.add(v);
+                            }
+                        }
+                    }
                 }
             }
             recording = true;
@@ -110,16 +126,32 @@ public final class LuaStartJournal {
         Object globals = env;
         boolean top = table == globals;
         boolean closure = value != null && value.getClass() == l.closure;
-        if (!top && !closure) {
-            return; // data in tables: the game's and the mods' state, not what switching off takes back
+        if (top && value != null && value.getClass() == l.table) {
+            synchronized (WRITES) {
+                GLOBAL_TABLES.add(value);
+            }
         }
-        String file = closure ? fileOf(l, value) : LuaSource.currentFile();
-        if (!isModFile(file)) {
+        if (!top && !closure) {
+            synchronized (WRITES) {
+                if (!GLOBAL_TABLES.contains(table)) {
+                    return; // data deeper down: the game's and the mods' state, not what switching off takes back
+                }
+            }
+        }
+        // a function counts for the file it was defined in; data for the file whose code runs
+        String file = closure ? fileOf(l, value) : null;
+        if (closure && !isModFile(file)) {
             return;
         }
         Object before = l.rawget.invoke(table, key);
-        if (before == value) {
+        if (LuaJournal.same(before, value)) {
             return;
+        }
+        if (!closure) {
+            file = LuaSource.currentFile(); // the stack walk last: only for a real change
+            if (!isModFile(file)) {
+                return;
+            }
         }
         synchronized (WRITES) {
             if (globals == env) {
@@ -146,7 +178,8 @@ public final class LuaStartJournal {
 
     /**
      * The changes a mod's files made while the game loaded, merged per entry (first value before,
-     * last value written), with the rules of a live load. Empty if this Lua state was not recorded.
+     * last value written; lists by value), with the rules of a live load. Empty if this Lua state
+     * was not recorded.
      */
     static List<LuaJournal.Change> changesOf(LuaLive.Game game, Predicate<String> modFile) {
         List<Write> mine = new ArrayList<>();
@@ -182,9 +215,23 @@ public final class LuaStartJournal {
             }
         }
         Map<Ref, LuaJournal.Change> merged = new LinkedHashMap<>();
+        // lists: what the mod's writes brought into a list and did not take out again
+        Map<Object, List<Object>> removed = new IdentityHashMap<>();
+        Map<Object, List<Object>> put = new IdentityHashMap<>();
+        Map<Object, List<Object>> keys = new IdentityHashMap<>();
         for (Write w : writes) {
             boolean top = w.table() == globals;
             if (!top && (!names.containsKey(w.table()) || own.contains(w.table()))) {
+                continue;
+            }
+            if (!top && LuaJournal.index(w.key()) > 0) {
+                if (w.before() != null) {
+                    removed.computeIfAbsent(w.table(), k -> new ArrayList<>()).add(w.before());
+                }
+                if (w.after() != null) {
+                    put.computeIfAbsent(w.table(), k -> new ArrayList<>()).add(w.after());
+                    keys.computeIfAbsent(w.table(), k -> new ArrayList<>()).add(w.key());
+                }
                 continue;
             }
             Ref ref = new Ref(w.table(), w.key());
@@ -198,6 +245,13 @@ public final class LuaStartJournal {
             merged.put(ref, new LuaJournal.Change(w.table(), w.key(), path, before, w.after()));
         }
         List<LuaJournal.Change> changes = new ArrayList<>(merged.values());
+        for (Map.Entry<Object, List<Object>> e : put.entrySet()) {
+            List<Object> values = e.getValue();
+            for (int i : LuaJournal.added(removed.getOrDefault(e.getKey(), List.of()), values)) {
+                Object key = keys.get(e.getKey()).get(i);
+                changes.add(new LuaJournal.Change(e.getKey(), key, names.get(e.getKey()) + "." + key, LuaJournal.ABSENT, values.get(i)));
+            }
+        }
         changes.sort((a, b) -> a.path().compareTo(b.path()));
         return changes;
     }
@@ -238,6 +292,8 @@ public final class LuaStartJournal {
     private static final class Lookup {
         final Field env;
         final Class<?> closure;
+        final Class<?> table;
+        final Field delegate;
         final Field prototype;
         final Field filename;
         final MethodHandle rawget;
@@ -245,6 +301,8 @@ public final class LuaStartJournal {
         Lookup() throws ReflectiveOperationException {
             env = Class.forName("zombie.Lua.LuaManager").getField("env");
             closure = Class.forName("se.krka.kahlua.vm.LuaClosure");
+            table = Class.forName("se.krka.kahlua.j2se.KahluaTableImpl");
+            delegate = table.getField("delegate");
             prototype = closure.getField("prototype");
             filename = Class.forName("se.krka.kahlua.vm.Prototype").getField("filename");
             Class<?> table = Class.forName("se.krka.kahlua.vm.KahluaTable");

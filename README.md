@@ -34,7 +34,7 @@ Press **Ctrl+Shift+J** in the game (main menu or a running save) to open Jumpsta
   switching off; a library that comes back on offers the mods that went off with it.
 - **Clean switching.** Switching a mod off takes back what its Lua changed (new globals, replaced
   game functions, event handlers, windows of its own classes, entries it added to the game's tables such
-  as key bindings), also for mods that came with the save, and restores static and instance fields its
+  as key bindings, settings it changed in them), also for mods that came with the save, and restores static and instance fields its
   Java code changed in the game. Every method of a switched-off Java mod returns at once (a trip wire), and
   the screen says when something still calls it. Files it created wait aside while it is off. A function
   another mod changed again since stays and is named. Switching it on puts it all back. Items, recipes, loot tables and animations of a mod
