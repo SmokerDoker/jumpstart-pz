@@ -83,6 +83,7 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
             }
         }
         coordinator.tick(now);
+        MissingItems.onFrame(now); // the server owns the containers: placeholders and items back here
     }
 
     /**

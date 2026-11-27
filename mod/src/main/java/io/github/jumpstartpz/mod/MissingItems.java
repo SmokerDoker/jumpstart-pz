@@ -33,7 +33,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * <p>When a container loads that holds a placeholder whose item's type exists again (the mod is
  * back), the item is loaded from its bytes, exactly as it was, and takes the placeholder's place.
  * Kept items of older versions (in the ModData of the container's owner) come back the same way.
- * Single player only (in multiplayer the server owns the containers). Not covered: items lying on
+ * In multiplayer the server does it (it owns the containers, its tick drives this) and sends each
+ * placeholder and each item back to the clients; a client changes nothing. Not covered: items lying on
  * the floor and parts of vehicles (they are not in a container; a placeholder dropped on the floor
  * changes back once it is in a container at a load), and an item a mod's script now defines as
  * another kind (its bytes do not fit any more: it keeps waiting).
@@ -79,7 +80,7 @@ public final class MissingItems {
         /** Replaces the owner's kept items; an empty list removes the key. */
         void write(Object owner, List<Kept> kept);
 
-        /** Multiplayer client: nothing is kept or put back here. */
+        /** Multiplayer client: nothing is kept or put back here (the server does it). */
         boolean multiplayerClient();
 
         /** A new placeholder item named {@code name} that carries {@code kept}; null if the game cannot make one. */
@@ -491,6 +492,9 @@ public final class MissingItems {
         private Field containingItem;
         private Field parent;
         private Field client;
+        private Field server;
+        private Method sendAdd;
+        private Method sendRemove;
         private Method newTable;
         private Object platform;
         private Class<?> table;
@@ -512,6 +516,11 @@ public final class MissingItems {
             containingItem = container.getField("containingItem");
             parent = container.getField("parent");
             client = Class.forName("zombie.network.GameClient").getField("client");
+            Class<?> gameServer = Class.forName("zombie.network.GameServer");
+            server = gameServer.getField("server");
+            Class<?> itemType = Class.forName("zombie.inventory.InventoryItem");
+            sendAdd = gameServer.getMethod("sendAddItemToContainer", container, itemType);
+            sendRemove = gameServer.getMethod("sendRemoveItemFromContainer", container, itemType);
             Class<?> lua = Class.forName("zombie.Lua.LuaManager");
             platform = lua.getField("platform").get(null);
             newTable = platform.getClass().getMethod("newTable");
@@ -552,6 +561,19 @@ public final class MissingItems {
         public void add(Object container, Object item) throws Exception {
             lookup();
             addItem.invoke(container, item);
+            tellClients(sendAdd, container, item);
+        }
+
+        /** On a server: the clients near the container get the change. */
+        private void tellClients(Method send, Object container, Object item) {
+            try {
+                if (server.getBoolean(null)) {
+                    send.invoke(null, container, item);
+                }
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                // the server has it; clients see it when they get the chunk again
+                System.out.println("[Jumpstart] items of missing mods: clients not told: " + e);
+            }
         }
 
         @Override
@@ -743,7 +765,9 @@ public final class MissingItems {
 
         @Override
         public void remove(Object container, Object item) throws Exception {
+            lookup();
             container.getClass().getMethod("Remove", Class.forName("zombie.inventory.InventoryItem")).invoke(container, item);
+            tellClients(sendRemove, container, item);
         }
 
         @Override
