@@ -60,6 +60,7 @@ public final class SecureScreen {
     static final int KEY_C = 67;
     static final int KEY_H = 72;
     static final int KEY_J = 74;
+    static final int KEY_L = 76;
     static final int KEY_N = 78;
     static final int KEY_R = 82;
     static final int KEY_U = 85;
@@ -271,6 +272,7 @@ public final class SecureScreen {
     /** Called by the game at the end of every UI render pass. */
     public static void onRender() {
         LuaStartJournal.onFrame(); // the first frame after the game loaded its Lua ends that record
+        SaveReload.onFrame(System.currentTimeMillis()); // back in the main menu: continue the save
         SecureScreen screen = current;
         if (screen == null) {
             return;
@@ -790,6 +792,28 @@ public final class SecureScreen {
         }
     }
 
+    /** L asks first; L again saves, goes to the main menu and continues the save at once. */
+    private boolean reloadConfirm;
+
+    private void reloadSaveKey() {
+        if (!actions.canReloadSave()) {
+            say(texts.get("reload.not"), false);
+            return;
+        }
+        if (!reloadConfirm) {
+            reloadConfirm = true;
+            say(texts.get("reload.confirm"), false);
+            return;
+        }
+        reloadConfirm = false;
+        String r = actions.reloadSave();
+        if (r != null) {
+            say(r, false);
+            return;
+        }
+        close();
+    }
+
     private void close() {
         mode = Mode.CLOSED;
         pending = null;
@@ -981,6 +1005,13 @@ public final class SecureScreen {
             reload();
             say(texts.get(updatesOnly ? (mods.isEmpty() ? "updates.none" : "updates.only") : "updates.all"), true);
             return;
+        }
+        if (pressed.contains(KEY_L)) {
+            reloadSaveKey();
+            return;
+        }
+        if (!pressed.isEmpty()) {
+            reloadConfirm = false; // any other key: L asks again
         }
         if (pressed.contains(KEY_C)) {
             busy(texts.get("busy.report"), () -> {
@@ -2694,6 +2725,9 @@ public final class SecureScreen {
         float[] sc = stateColor(state);
         game.text(GameScreen.Font.MEDIUM, tx, y, kindLabel(mod) + "   " + stateLabel(mod.id(), state), sc[0], sc[1], sc[2], 1f);
         y += game.fontHeight(GameScreen.Font.MEDIUM) + 6;
+        if (state.contains("next load") && actions.canReloadSave()) {
+            y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("reload.hint"), 0.5f, 0.8f, 1f);
+        }
         if (mod.java() != null) {
             BiteCheckGate.Check check = checks.computeIfAbsent(mod.java().jar(), this::checkQuietly);
             if (check != null) {

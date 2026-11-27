@@ -96,6 +96,16 @@ zwar eine Sicherung an, siehe Reiter **Sicherungen** im Hauptmenü). Die Test-Mo
 5. In `console.txt` die Zeilen `[Jumpstart] scripts of JSTItemTest live: …` und
    `[Jumpstart] world dictionary: new items {JSTItemTest.TestToken=…}` mitschicken.
 
+## Spielstand neu laden mit L (allein, Einzelspieler, 5 Minuten)
+
+1. Spielstand laden, eine Mod mit Karten, Sounds oder Kleidung einschalten (oder eine Mod ausschalten,
+   die „aus, beim nächsten Laden“ zeigt). In den Details steht „L: Spielstand jetzt neu laden …“.
+2. **L**: Jumpstart fragt nach. Noch einmal **L**: Das Spiel speichert, geht ins Hauptmenü und lädt den
+   Spielstand nach etwa einer Sekunde von selbst wieder, ohne Klick.
+3. Danach ist die Mod ganz an (bzw. ganz aus). In `console.txt`: `[Jumpstart] load the save again: …`.
+4. Achtung beim Ausschalten: Items einer Mod, die aus ist, entfernt das Spiel beim Laden (wie bei jedem
+   Entfernen einer Mod). Platzhalter-Items gibt es noch nicht.
+
 Im Multiplayer dasselbe über **Lua-Bibliothek → für alle installieren** mit einer Workshop-Mod, die
 Items bringt: alle müssen das Item danach haben; wer danach beitritt, darf nicht mit „checksum“
 getrennt werden. Server-Log: `script checksum: … -> …`.
