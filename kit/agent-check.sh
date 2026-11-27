@@ -90,6 +90,11 @@ public class LoadGameClasses {
             "zombie.inventory.ItemContainer.AddItem(zombie.inventory.InventoryItem)", "zombie.inventory.ItemContainer#containingItem",
             "zombie.inventory.ItemContainer#parent", "zombie.network.GameClient#client", "zombie.Lua.LuaManager#platform",
             "zombie.iso.IsoObject.hasModData()", "zombie.inventory.InventoryItem.hasModData()",
+            // placeholders for items of a missing mod
+            "zombie.inventory.InventoryItemFactory.CreateItem(java.lang.String)", "zombie.inventory.InventoryItem.setName(java.lang.String)",
+            "zombie.inventory.InventoryItem.setCustomName(boolean)", "zombie.inventory.InventoryItem.getModData()",
+            "zombie.inventory.InventoryItem.getFullType()", "zombie.inventory.ItemContainer.getItems()",
+            "zombie.inventory.ItemContainer.Remove(zombie.inventory.InventoryItem)", "zombie.core.Translator.getLanguage()",
         };
         ClassLoader cl = LoadGameClasses.class.getClassLoader();
         java.util.List<String> missing = new java.util.ArrayList<>();

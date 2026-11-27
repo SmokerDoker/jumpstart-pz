@@ -23,20 +23,26 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * kind that way at the next load. Jumpstart keeps those bytes: the game hooks call {@link
  * #itemEnter}/{@link #itemExit} around {@code loadItem} and {@link #containerEnter}/{@link
  * #containerExit} around {@code ItemContainer.load}, so a dropped item is known with the container
- * it was in. A moment later (the owner's own data has loaded by then) its bytes go into the ModData
- * of the container's owner (the crate, the player, the bag) under {@value #KEY}, and the game saves
- * them with it. A container keeps identical items once, with their count and the ids of the
- * copies ({@code CompressIdenticalItems}); those come along, so every copy comes back.
+ * it was in. A moment later a placeholder takes its place in the container: a vanilla item ({@value
+ * #PLACEHOLDER}, so it survives without Jumpstart too) named after the missing item and its mod,
+ * with the item's bytes in its ModData under {@value #KEY}. The player sees it, can move it to
+ * another container, and the game saves the bytes with it. A container keeps identical items once,
+ * with their count and the ids of the copies ({@code CompressIdenticalItems}); those come along in
+ * the same placeholder, so every copy comes back.
  *
- * <p>When a container loads whose owner keeps such items and the item's type exists again (the mod
- * is back), the item is loaded from its bytes, exactly as it was, and put back into the container.
+ * <p>When a container loads that holds a placeholder whose item's type exists again (the mod is
+ * back), the item is loaded from its bytes, exactly as it was, and takes the placeholder's place.
+ * Kept items of older versions (in the ModData of the container's owner) come back the same way.
  * Single player only (in multiplayer the server owns the containers). Not covered: items lying on
- * the floor and parts of vehicles (they are not in a container), and an item a mod's script now
- * defines as another kind (its bytes do not fit any more: it keeps waiting).
+ * the floor and parts of vehicles (they are not in a container; a placeholder dropped on the floor
+ * changes back once it is in a container at a load), and an item a mod's script now defines as
+ * another kind (its bytes do not fit any more: it keeps waiting).
  */
 public final class MissingItems {
 
     static final String KEY = "jumpstartMissing";
+    /** The placeholder's type: small, not used by any recipe, in every game version. */
+    static final String PLACEHOLDER = "Base.GamePieceRed";
     /** Captures and loaded containers are handled this long after their load (on the main thread). */
     static final long SETTLE_MS = 1000;
 
@@ -75,6 +81,21 @@ public final class MissingItems {
 
         /** Multiplayer client: nothing is kept or put back here. */
         boolean multiplayerClient();
+
+        /** A new placeholder item named {@code name} that carries {@code kept}; null if the game cannot make one. */
+        Object placeholder(Kept kept, String name);
+
+        /** What a placeholder carries, or null for any other item. */
+        Kept keptIn(Object item);
+
+        /** The container's items (a copy). */
+        List<Object> items(Object container);
+
+        /** Takes an item out of the container. */
+        void remove(Object container, Object item) throws Exception;
+
+        /** The game's language ("EN", "DE", ...). */
+        String language();
     }
 
     private static volatile Game game = new ReflectiveGame();
@@ -269,15 +290,41 @@ public final class MissingItems {
         }
         Game g = game;
         for (Map.Entry<Object, Pending> e : ready) {
+            List<Kept> unplaced = new ArrayList<>();
+            for (Kept k : e.getValue().kept()) {
+                Object holder = g.placeholder(k, placeholderName(k, g.language()));
+                try {
+                    if (holder == null) {
+                        unplaced.add(k);
+                    } else {
+                        g.add(e.getKey(), holder);
+                    }
+                } catch (Exception ex) {
+                    unplaced.add(k);
+                }
+            }
+            if (unplaced.isEmpty()) {
+                continue;
+            }
+            // no placeholder: the bytes wait invisibly with the container's owner, as before
             Object owner = g.ownerOf(e.getKey());
             if (owner == null) {
-                System.out.println("[Jumpstart] " + e.getValue().kept().size() + " items of missing mods: their container has no owner, the game drops them");
+                System.out.println("[Jumpstart] " + unplaced.size() + " items of missing mods: their container has no owner, the game drops them");
                 continue;
             }
             List<Kept> all = new ArrayList<>(g.read(owner));
-            all.addAll(e.getValue().kept());
+            all.addAll(unplaced);
             g.write(owner, all);
         }
+    }
+
+    /** "Missing mod (SwordMod): Katana x3" in the game's language. */
+    static String placeholderName(Kept k, String language) {
+        boolean german = language != null && language.toUpperCase(java.util.Locale.ROOT).startsWith("DE");
+        String shortType = k.type().substring(k.type().indexOf('.') + 1);
+        String mod = k.mod() == null || k.mod().isBlank() ? "?" : k.mod();
+        int count = 1 + k.copyIds().length;
+        return (german ? "Mod fehlt (" : "Missing mod (") + mod + "): " + shortType + (count > 1 ? " x" + count : "");
     }
 
     private static void restore(long now) {
@@ -288,19 +335,37 @@ public final class MissingItems {
             if (container == null || g.multiplayerClient()) {
                 continue;
             }
+            int back = replacePlaceholders(g, container);
             Object owner = g.ownerOf(container);
-            if (owner == null) {
-                continue;
+            List<Kept> kept = owner == null ? List.of() : g.read(owner);
+            if (!kept.isEmpty()) {
+                back += putBack(g, container, owner, kept);
             }
-            List<Kept> kept = g.read(owner);
-            if (kept.isEmpty()) {
-                continue;
-            }
-            int back = putBack(g, container, owner, kept);
             if (back > 0) {
                 System.out.println("[Jumpstart] " + back + " items of a mod that is back are in their place again");
             }
         }
+    }
+
+    /** Placeholders in the container whose item's type exists again give way to the item. Returns how many came back. */
+    static int replacePlaceholders(Game g, Object container) {
+        int back = 0;
+        for (Object item : g.items(container)) {
+            Kept k = g.keptIn(item);
+            if (k == null) {
+                continue;
+            }
+            int n = load(g, container, k);
+            if (n > 0) {
+                try {
+                    g.remove(container, item);
+                } catch (Exception e) {
+                    System.out.println("[Jumpstart] a placeholder stays next to its item: " + e);
+                }
+                back += n;
+            }
+        }
+        return back;
     }
 
     /** Loads the kept items whose type exists again into the container; the rest stay kept. Returns how many came back. */
@@ -308,47 +373,56 @@ public final class MissingItems {
         List<Kept> still = new ArrayList<>();
         int back = 0;
         for (Kept k : kept) {
-            short id = g.idOf(k.type());
-            Object item = null;
-            if (id >= 0) {
-                RESTORING.set(true);
-                try {
-                    item = g.load(withId(k, id), k.version());
-                } catch (Exception e) {
-                    item = null;
-                } finally {
-                    RESTORING.set(false);
-                }
-            }
-            if (item == null) {
+            int n = load(g, container, k);
+            if (n == 0) {
                 still.add(k);
-                continue;
             }
-            try {
-                g.add(container, item);
-                back++;
-            } catch (Exception e) {
-                still.add(k);
-                continue;
-            }
-            for (int copyId : k.copyIds()) {
-                RESTORING.set(true);
-                try {
-                    Object copy = g.load(withId(k, id), k.version());
-                    if (copy != null) {
-                        g.setId(copy, copyId);
-                        g.add(container, copy);
-                        back++;
-                    }
-                } catch (Exception e) {
-                    // that copy stays lost; the first one is back
-                } finally {
-                    RESTORING.set(false);
-                }
-            }
+            back += n;
         }
         if (back > 0) {
             g.write(owner, still);
+        }
+        return back;
+    }
+
+    /** Loads a kept item and its copies into the container if its type exists. Returns how many; 0 when it keeps waiting. */
+    static int load(Game g, Object container, Kept k) {
+        short id = g.idOf(k.type());
+        if (id < 0) {
+            return 0;
+        }
+        Object item;
+        RESTORING.set(true);
+        try {
+            item = g.load(withId(k, id), k.version());
+        } catch (Exception e) {
+            item = null;
+        } finally {
+            RESTORING.set(false);
+        }
+        if (item == null) {
+            return 0;
+        }
+        try {
+            g.add(container, item);
+        } catch (Exception e) {
+            return 0;
+        }
+        int back = 1;
+        for (int copyId : k.copyIds()) {
+            RESTORING.set(true);
+            try {
+                Object copy = g.load(withId(k, id), k.version());
+                if (copy != null) {
+                    g.setId(copy, copyId);
+                    g.add(container, copy);
+                    back++;
+                }
+            } catch (Exception e) {
+                // that copy stays lost; the first one is back
+            } finally {
+                RESTORING.set(false);
+            }
         }
         return back;
     }
@@ -497,19 +571,37 @@ public final class MissingItems {
             }
         }
 
+        /** hasModData and getModData per class: every loaded container's owner and items pass here. */
+        private final Map<Class<?>, Method[]> modDataMethods = new ConcurrentHashMap<>();
+        private Method fullType;
+        private Method getItems;
+        private Method rawgetMethod;
+        private Method rawsetMethod;
+
         private Object modData(Object owner, boolean create) throws ReflectiveOperationException {
-            if (!create && !(Boolean) owner.getClass().getMethod("hasModData").invoke(owner)) {
+            Method[] m = modDataMethods.get(owner.getClass());
+            if (m == null) {
+                m = new Method[] {owner.getClass().getMethod("hasModData"), owner.getClass().getMethod("getModData")};
+                modDataMethods.put(owner.getClass(), m);
+            }
+            if (!create && !(Boolean) m[0].invoke(owner)) {
                 return null;
             }
-            return owner.getClass().getMethod("getModData").invoke(owner);
+            return m[1].invoke(owner);
         }
 
         private Object rawget(Object t, Object key) throws ReflectiveOperationException {
-            return table.getMethod("rawget", Object.class).invoke(t, key);
+            if (rawgetMethod == null) {
+                rawgetMethod = table.getMethod("rawget", Object.class);
+            }
+            return rawgetMethod.invoke(t, key);
         }
 
         private void rawset(Object t, Object key, Object value) throws ReflectiveOperationException {
-            table.getMethod("rawset", Object.class, Object.class).invoke(t, key, value);
+            if (rawsetMethod == null) {
+                rawsetMethod = table.getMethod("rawset", Object.class, Object.class);
+            }
+            rawsetMethod.invoke(t, key, value);
         }
 
         @Override
@@ -527,15 +619,9 @@ public final class MissingItems {
                     if (e == null || !table.isInstance(e)) {
                         return kept;
                     }
-                    Object type = rawget(e, "type");
-                    Object mod = rawget(e, "mod");
-                    Object version = rawget(e, "version");
-                    Object little = rawget(e, "littleEndian");
-                    Object bytes = rawget(e, "bytes");
-                    Object copies = rawget(e, "copies");
-                    if (type instanceof String t && version instanceof Number v && bytes instanceof String b) {
-                        kept.add(new Kept(t, mod instanceof String m ? m : "", v.intValue(), Boolean.TRUE.equals(little), decode(b),
-                                copies instanceof String c ? ids(c) : new int[0]));
+                    Kept k = fromTable(e);
+                    if (k != null) {
+                        kept.add(k);
                     }
                 }
             } catch (ReflectiveOperationException | RuntimeException e) {
@@ -558,16 +644,7 @@ public final class MissingItems {
                 Object list = newTable.invoke(platform);
                 int i = 1;
                 for (Kept k : kept) {
-                    Object e = newTable.invoke(platform);
-                    rawset(e, "type", k.type());
-                    rawset(e, "mod", k.mod());
-                    rawset(e, "version", (double) k.version());
-                    rawset(e, "littleEndian", k.littleEndian());
-                    rawset(e, "bytes", encode(k.bytes()));
-                    if (k.copyIds().length > 0) {
-                        rawset(e, "copies", ids(k.copyIds()));
-                    }
-                    rawset(list, (double) i++, e);
+                    rawset(list, (double) i++, toTable(k));
                 }
                 rawset(data, KEY, list);
             } catch (ReflectiveOperationException | RuntimeException e) {
@@ -582,6 +659,99 @@ public final class MissingItems {
                 return client.getBoolean(null);
             } catch (ReflectiveOperationException | RuntimeException e) {
                 return true; // unknown: change nothing
+            }
+        }
+
+        private Object toTable(Kept k) throws ReflectiveOperationException {
+            Object e = newTable.invoke(platform);
+            rawset(e, "type", k.type());
+            rawset(e, "mod", k.mod());
+            rawset(e, "version", (double) k.version());
+            rawset(e, "littleEndian", k.littleEndian());
+            rawset(e, "bytes", encode(k.bytes()));
+            if (k.copyIds().length > 0) {
+                rawset(e, "copies", ids(k.copyIds()));
+            }
+            return e;
+        }
+
+        private Kept fromTable(Object e) throws ReflectiveOperationException {
+            Object type = rawget(e, "type");
+            Object mod = rawget(e, "mod");
+            Object version = rawget(e, "version");
+            Object little = rawget(e, "littleEndian");
+            Object bytes = rawget(e, "bytes");
+            Object copies = rawget(e, "copies");
+            if (type instanceof String t && version instanceof Number v && bytes instanceof String b) {
+                return new Kept(t, mod instanceof String m ? m : "", v.intValue(), Boolean.TRUE.equals(little), decode(b),
+                        copies instanceof String c ? ids(c) : new int[0]);
+            }
+            return null;
+        }
+
+        @Override
+        public Object placeholder(Kept kept, String name) {
+            try {
+                lookup();
+                Object item = Class.forName("zombie.inventory.InventoryItemFactory").getMethod("CreateItem", String.class)
+                        .invoke(null, PLACEHOLDER);
+                if (item == null) {
+                    return null;
+                }
+                Class<?> type = Class.forName("zombie.inventory.InventoryItem");
+                type.getMethod("setName", String.class).invoke(item, name);
+                type.getMethod("setCustomName", boolean.class).invoke(item, true);
+                Object data = type.getMethod("getModData").invoke(item);
+                rawset(data, KEY, toTable(kept));
+                return item;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                System.out.println("[Jumpstart] no placeholder for an item of a missing mod: " + e);
+                return null;
+            }
+        }
+
+        @Override
+        public Kept keptIn(Object item) {
+            try {
+                lookup();
+                if (fullType == null) {
+                    fullType = Class.forName("zombie.inventory.InventoryItem").getMethod("getFullType");
+                }
+                if (!PLACEHOLDER.equals(fullType.invoke(item))) {
+                    return null; // almost every item: no ModData touched
+                }
+                Object data = modData(item, false);
+                Object e = data == null ? null : rawget(data, KEY);
+                return e != null && table.isInstance(e) ? fromTable(e) : null;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return null;
+            }
+        }
+
+        @Override
+        public List<Object> items(Object container) {
+            try {
+                if (getItems == null) {
+                    getItems = Class.forName("zombie.inventory.ItemContainer").getMethod("getItems");
+                }
+                Object items = getItems.invoke(container);
+                return items instanceof List<?> l ? new ArrayList<>(l) : List.of();
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return List.of();
+            }
+        }
+
+        @Override
+        public void remove(Object container, Object item) throws Exception {
+            container.getClass().getMethod("Remove", Class.forName("zombie.inventory.InventoryItem")).invoke(container, item);
+        }
+
+        @Override
+        public String language() {
+            try {
+                return String.valueOf(Class.forName("zombie.core.Translator").getMethod("getLanguage").invoke(null));
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                return "EN";
             }
         }
     }
