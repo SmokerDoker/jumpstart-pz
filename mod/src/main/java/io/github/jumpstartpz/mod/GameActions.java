@@ -474,8 +474,13 @@ final class GameActions implements Actions {
 
     @Override
     public LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) throws IOException {
+        return search(kind, query, LibraryClient.Sort.POPULAR, cursor);
+    }
+
+    @Override
+    public LibraryClient.Page search(LibraryClient.Kind kind, String query, LibraryClient.Sort sort, String cursor) throws IOException {
         URI url = cloudUrl().orElseThrow(() -> new IOException("no Jumpstart cloud set up yet (cloud_url)"));
-        return new LibraryClient(url).search(kind, query, LibraryClient.Sort.POPULAR, cursor);
+        return new LibraryClient(url).search(kind, query, sort, cursor);
     }
 
     @Override
@@ -968,6 +973,62 @@ final class GameActions implements Actions {
     @Override
     public String recomputeLuaChecksum(String why) {
         return LuaChecksum.recomputeQuietly(why);
+    }
+
+    /** How often a player's game fetches BiteCheck's index again to find running mods it blocks now. */
+    static final long INDEX_WATCH_MS = 15 * 60_000;
+    private volatile boolean indexFresh;
+    private Thread indexWatch;
+    private final Set<String> blockedSeen = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    @Override
+    public List<String[]> newlyBlocked() {
+        if (luaGame.isServer()) {
+            return List.of(); // the server has its own watch (ServerSide) and switches off for everybody
+        }
+        if (indexWatch == null) {
+            indexWatch = new Thread(() -> {
+                while (true) {
+                    try {
+                        Thread.sleep(INDEX_WATCH_MS);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                    refreshIndexQuietly();
+                    indexFresh = true;
+                }
+            }, "Jumpstart index watch");
+            indexWatch.setDaemon(true);
+            indexWatch.start();
+        }
+        if (!indexFresh) {
+            return List.of();
+        }
+        indexFresh = false;
+        List<String[]> blocked = new ArrayList<>();
+        for (ModEntry mod : javaMods()) {
+            if (!stateOf(mod.id()).startsWith("on")) {
+                continue;
+            }
+            String sha = loadedHash(mod);
+            Verifier.Status status = sha.isEmpty() ? null : indexStatus(sha);
+            if ((status == Verifier.Status.BLOCKED || status == Verifier.Status.INVALID) && blockedSeen.add(mod.id() + " " + sha)) {
+                blocked.add(new String[] {mod.id(), status.name().toLowerCase(Locale.ROOT)});
+            }
+        }
+        return blocked;
+    }
+
+    /** Per mod folder: looking for Lua files walks the folder once. */
+    private final Map<String, ModKind> kinds = new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Override
+    public ModKind kindOf(InstalledMod mod) {
+        if (mod.java() != null) {
+            return ModKind.JAVA;
+        }
+        String dir = modDirOf(mod.id());
+        return dir == null ? ModKind.LUA : kinds.computeIfAbsent(dir, d -> ModKind.of(Path.of(d), false));
     }
 
     @Override

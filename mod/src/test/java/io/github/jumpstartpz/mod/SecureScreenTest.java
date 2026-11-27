@@ -319,6 +319,49 @@ class SecureScreenTest {
     }
 
     @Test
+    void aRunningModBiteCheckBlocksNowGoesOffAtOnce() {
+        actions.states.put("Verified", "on");
+        actions.blockedNow = List.<String[]>of(new String[] {"Verified", "blocked"});
+        frame();
+        assertEquals("off", actions.states.get("Verified"));
+        assertTrue(game.drew("BiteCheck blocks Verified now (blocked): it was switched off. Ctrl+Shift+J: details"));
+    }
+
+    @Test
+    void inMultiplayerTheServerSwitchesABlockedModOffNotThePlayer() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        actions.blockedNow = List.<String[]>of(new String[] {"Verified", "blocked"});
+        frame();
+        assertEquals("on", actions.states.get("Verified"));
+    }
+
+    @Test
+    void leftAndRightSortTheLibrary() {
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_RIGHT);
+        tap(SecureScreen.KEY_RIGHT);
+        tap(SecureScreen.KEY_RIGHT);
+        tap(SecureScreen.KEY_LEFT);
+        assertEquals(List.of(LibraryClient.Sort.POPULAR, LibraryClient.Sort.RECENT, LibraryClient.Sort.TREND,
+                LibraryClient.Sort.POPULAR, LibraryClient.Sort.TREND), actions.sorts);
+        assertTrue(game.drew("Sort: trending this week (Left/Right)"));
+    }
+
+    @Test
+    void aLuaModSaysBiteCheckDoesNotCheckLua() {
+        openScreen();
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_TAB);
+        tap(SecureScreen.KEY_ENTER);
+        tap(SecureScreen.KEY_DOWN);
+        frame();
+        assertTrue(game.drew("BiteCheck checks Java jars only: Lua runs unchecked, as with every Lua mod in the game."));
+    }
+
+    @Test
     void theJavaLibrarySearchesDownloadsAndLoadsThroughBiteCheck() {
         actions.folders.put("/workshop/111", List.of(new Actions.FolderMod("Verified", "A verified mod", VERIFIED)));
         openScreen();
@@ -1445,6 +1488,22 @@ class SecureScreenTest {
         final FakeWorkshop workshop = new FakeWorkshop();
         final Map<String, List<FolderMod>> folders = new HashMap<>();
         final List<String> activated = new ArrayList<>();
+
+        final List<LibraryClient.Sort> sorts = new ArrayList<>();
+        List<String[]> blockedNow = List.of();
+
+        @Override
+        public List<String[]> newlyBlocked() {
+            List<String[]> b = blockedNow;
+            blockedNow = List.of();
+            return b;
+        }
+
+        @Override
+        public LibraryClient.Page search(LibraryClient.Kind kind, String query, LibraryClient.Sort sort, String cursor) {
+            sorts.add(sort);
+            return search(kind, query, cursor);
+        }
 
         @Override
         public LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) {

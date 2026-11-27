@@ -61,6 +61,11 @@ interface Actions {
     /** Searches a library of the Jumpstart cloud; throws when there is none or it cannot be reached. */
     LibraryClient.Page search(LibraryClient.Kind kind, String query, String cursor) throws IOException;
 
+    /** The same, sorted (most popular, newest, trending this week); without words only, Steam sorts a text search itself. */
+    default LibraryClient.Page search(LibraryClient.Kind kind, String query, LibraryClient.Sort sort, String cursor) throws IOException {
+        return search(kind, query, cursor);
+    }
+
     Workshop workshop();
 
     /** The mods in a downloaded Workshop item folder, with their Java part (null for Lua-only mods). */
@@ -161,6 +166,19 @@ interface Actions {
     /** "count TAB state" (ok, off-by-guard, probation), or "" when the mod had no error. */
     default String guardStatus(String modId) {
         return "";
+    }
+
+    /**
+     * Running Java mods BiteCheck blocks now ({mod id, status}), each once: the index is fetched
+     * again every few minutes in the background, the check runs on the caller's (main) thread.
+     */
+    default List<String[]> newlyBlocked() {
+        return List.of();
+    }
+
+    /** Java, Lua or only data (items, textures, ...): for the label. */
+    default ModKind kindOf(InstalledMod mod) {
+        return mod.java() != null ? ModKind.JAVA : ModKind.LUA;
     }
 
     // --- multiplayer: after a mod was installed or removed for everybody ---
