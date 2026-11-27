@@ -77,6 +77,29 @@ laden, **A** = für alle aus- bzw. einschalten. Dann bei allen anderen:
 Danach einmal ohne N/Warten wiederholen: Alle drücken J → niemand wird getrennt. Und einmal **A**
 (ausschalten für alle) und wieder **A** (einschalten).
 
+## Items live laden (allein, Einzelspieler, 10 Minuten)
+
+Vorher: einen Spielstand nehmen, um den es nicht schade ist (Jumpstart legt vor dem ersten Umschalten
+zwar eine Sicherung an, siehe Reiter **Sicherungen** im Hauptmenü). Die Test-Mod
+`tools/testmods/JSTItemTest` nach `Zomboid/mods/JSTItemTest` kopieren (sie bringt ein Item
+„Jumpstart Test Token“, ein Rezept „Apfel → Token“ und das Token in Kisten mit Krimskrams).
+
+1. Spielstand laden, Strg+Umschalt+J, Reiter **Installiert**: JSTItemTest wählen, **A** (einschalten).
+   Erwartet: „… live geladen … Ebenfalls live: 2 Item- und Rezept-Skripte (1 neue Items).“ und
+   **kein** „Erst beim nächsten Laden: Gegenstände und Rezepte“.
+2. Debug-Menü oder Konsole: `getScriptManager():getItem("JSTItemTest.TestToken")` liefert etwas;
+   im Crafting-Menü mit einem Apfel im Inventar gibt es „MakeTestToken“. Herstellen.
+3. Bestehende Rezepte prüfen: ein beliebiges Vanilla-Rezept herstellen (z. B. etwas mit Holz) –
+   es muss wie vorher gehen.
+4. Speichern, Spiel beenden, Spielstand neu laden: Das Token ist noch im Inventar, `console.txt`
+   ohne Fehler zu `WorldDictionary`.
+5. In `console.txt` die Zeilen `[Jumpstart] scripts of JSTItemTest live: …` und
+   `[Jumpstart] world dictionary: new items {JSTItemTest.TestToken=…}` mitschicken.
+
+Im Multiplayer dasselbe über **Lua-Bibliothek → für alle installieren** mit einer Workshop-Mod, die
+Items bringt: alle müssen das Item danach haben; wer danach beitritt, darf nicht mit „checksum“
+getrennt werden. Server-Log: `script checksum: … -> …`.
+
 ## 5. Was ihr mir schickt
 
 - Was ihr gesehen habt, pro Schritt kurz (gerne Screenshots vom Jumpstart-Bildschirm).

@@ -458,6 +458,27 @@ class ServerCoordinatorTest {
     }
 
     @Test
+    void anInstallCommitCarriesTheServersItemIdsAndTheScriptChecksumIsCompared() {
+        port.fetched = new ServerCoordinator.Fetched(null, "Guns", "", "", false);
+        port.commitData = Map.of("items", "Guns.Pistol=4711\n");
+        server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "456"), 0);
+        server.tick(1);
+        for (String c : List.of("admin", "anna", "ben")) {
+            server.onCommand(c, "ready", Map.of("token", token(c), "mod", "Guns", "sha", ""), 2);
+        }
+        server.tick(3);
+        assertEquals("Guns.Pistol=4711\n", port.last("anna", "commit").get("items"));
+        assertEquals("install", port.last("anna", "commit").get("action"));
+        applied("Guns", "admin", "anna", "ben");
+        server.tick(4);
+        port.scripts = "scripts-sum";
+        server.onCommand("anna", "hello", Map.of("lua", "", "scripts", "scripts-sum"), 5);
+        server.onCommand("ben", "hello", Map.of("lua", "", "scripts", "old-sum"), 5);
+        assertEquals(Set.of("ben"), port.kicked.keySet());
+        assertTrue(port.kicked.get("ben").contains("item and recipe scripts"));
+    }
+
+    @Test
     void anItemWithSeveralModsLetsTheAdminChoose() {
         port.fetched = ServerCoordinator.Fetched.choose(List.of("Car60\tCar (60 %)", "Car80\tCar (80 %)"));
         server.onCommand("admin", "install", Map.of("token", token("admin"), "item", "789"), 0);
@@ -557,6 +578,16 @@ class ServerCoordinatorTest {
         }
         @Override public String luaChecksum() {
             return lua;
+        }
+
+        String scripts = "";
+        Map<String, String> commitData = Map.of();
+
+        @Override public String scriptChecksum() {
+            return scripts;
+        }
+        @Override public Map<String, String> commitData(ServerCoordinator.Action action, String mod) {
+            return action == ServerCoordinator.Action.INSTALL ? commitData : Map.of();
         }
     }
 }

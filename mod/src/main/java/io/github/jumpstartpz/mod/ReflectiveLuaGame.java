@@ -427,6 +427,21 @@ final class ReflectiveLuaGame implements LuaLive.Game {
         return Class.forName("zombie.ZomboidFileSystem").getField("instance").get(null);
     }
 
+    @Override
+    public LuaLive.Scripts loadScripts(String modId, List<String> scriptFiles) throws Exception {
+        return ScriptLive.load(modId, scriptFiles);
+    }
+
+    @Override
+    public void afterLua(boolean distributions) throws Exception {
+        ScriptLive.afterLua(distributions);
+    }
+
+    @Override
+    public boolean reloadAnimations() throws Exception {
+        return ScriptLive.reloadAnimations();
+    }
+
     /**
      * Takes a removed mod out of the running game's mod list, as if the game had started without it
      * (the Lua checksum and the next load go by this list). True if it was in it.

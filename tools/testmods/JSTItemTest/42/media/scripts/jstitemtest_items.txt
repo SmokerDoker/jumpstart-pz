@@ -1,0 +1,29 @@
+module JSTItemTest
+{
+    imports
+    {
+        Base
+    }
+
+    item TestToken
+    {
+        DisplayCategory = Junk,
+        ItemType = base:normal,
+        Weight = 0.1,
+        Icon = Apple,
+    }
+
+    craftRecipe MakeTestToken
+    {
+        time = 20,
+        category = Miscellaneous,
+        inputs
+        {
+            item 1 [Base.Apple] mode:destroy,
+        }
+        outputs
+        {
+            item 1 JSTItemTest.TestToken,
+        }
+    }
+}

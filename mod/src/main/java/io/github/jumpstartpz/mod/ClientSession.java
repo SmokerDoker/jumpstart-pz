@@ -72,6 +72,10 @@ final class ClientSession {
     java.util.function.Supplier<String> localMods = () -> null;
     /** Works the game's Lua checksum out again (after an install or remove for everybody). */
     java.util.function.Supplier<String> luaChecksum = () -> "";
+    /** The game's script checksum (worked out again by the install itself). */
+    java.util.function.Supplier<String> scriptChecksum = () -> "";
+    /** An install's commit: the server's world dictionary ids for the mod's new items ("Module.Item=id" lines). */
+    java.util.function.Consumer<String> serverItemIds = ids -> { };
     /** The next hello carries the Lua checksum, for the server to compare. */
     private boolean sendLua;
 
@@ -139,6 +143,7 @@ final class ClientSession {
         if (sendLua && update == null) {
             sendLua = false;
             args.put("lua", luaChecksum.get());
+            args.put("scripts", scriptChecksum.get());
         }
         link.send("hello", args);
     }
@@ -191,6 +196,9 @@ final class ClientSession {
             case "commit" -> {
                 if (update == null || !update.mod.equals(args.get("mod"))) {
                     return null;
+                }
+                if (args.containsKey("items")) {
+                    serverItemIds.accept(args.get("items")); // before the install loads the mod's items here
                 }
                 link.pause(true); // the server stopped its world too
                 return "commit";

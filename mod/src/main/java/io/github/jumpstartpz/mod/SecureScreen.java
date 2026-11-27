@@ -234,6 +234,8 @@ public final class SecureScreen {
         this.session = new ClientSession(link);
         this.session.localMods = this::localModsLine;
         this.session.luaChecksum = () -> actions.recomputeLuaChecksum("the server's change");
+        this.session.scriptChecksum = actions::scriptChecksum;
+        this.session.serverItemIds = actions::expectServerItemIds;
         libraries.put(Tab.JAVA_LIBRARY, new Library(LibraryClient.Kind.JAVA));
         libraries.put(Tab.LUA_LIBRARY, new Library(LibraryClient.Kind.LUA));
     }
@@ -1515,6 +1517,16 @@ public final class SecureScreen {
         };
         if (r.status() == LuaLive.Status.LOADED && !r.errors().isEmpty()) {
             text += " " + String.format(Locale.ROOT, texts.get("lua.errors"), r.errors().size());
+        }
+        if (!r.live().isEmpty()) {
+            List<String> parts = new ArrayList<>();
+            for (String part : r.live()) {
+                String[] f = part.split(":");
+                parts.add(f[0].equals("scripts") && f.length == 3
+                        ? String.format(Locale.ROOT, texts.get("live.scripts"), Integer.parseInt(f[1]), Integer.parseInt(f[2]))
+                        : texts.get("live." + f[0]));
+            }
+            text += " " + String.format(Locale.ROOT, texts.get("lua.live"), String.join(", ", parts));
         }
         if (!r.needsRestart().isEmpty() && r.status() != LuaLive.Status.NOT_IN_GAME && r.status() != LuaLive.Status.FAILED) {
             List<String> names = new ArrayList<>();

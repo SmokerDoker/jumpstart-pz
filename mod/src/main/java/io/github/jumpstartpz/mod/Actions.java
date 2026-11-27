@@ -175,6 +175,15 @@ interface Actions {
         return "";
     }
 
+    /** The game's script checksum now (an install of scripts works it out again itself); "" if unknown. */
+    default String scriptChecksum() {
+        return "";
+    }
+
+    /** The server's world dictionary ids for the items of the mod it installs ("Module.Item=id" lines). */
+    default void expectServerItemIds(String lines) {
+    }
+
     // --- save snapshots (single player) ---
 
     /**
