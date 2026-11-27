@@ -6,6 +6,9 @@ if not ms then return "no main menu" end
 if getPlayer() then return "in a game already" end
 if not ms.desc then ms.desc = SurvivorFactory.CreateSurvivor() end
 
+-- the mods of the new game: the menu's default list, as the menu's Solo button does
+ActiveMods.getById("currentGame"):copyFrom(ActiveMods.getById("default"))
+
 getWorld():setGameMode(GameMode.SANDBOX)
 ms:setDefaultSandboxVars()
 getWorld():setMap("Muldraugh, KY")
@@ -32,4 +35,5 @@ end
 
 GameWindow.doRenderEvent(false)
 forceChangeState(LoadingQueueState.new())
-return "OK " .. name .. (spawned and "" or " (fixed spawn)")
+return "OK " .. name .. (spawned and "" or " (fixed spawn)") .. ", mods "
+    .. ActiveMods.getById("currentGame"):getMods():size() .. " of " .. ActiveMods.getById("default"):getMods():size()

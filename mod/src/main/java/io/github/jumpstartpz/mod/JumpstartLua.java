@@ -33,7 +33,7 @@ public final class JumpstartLua {
             Map.entry("esc", SecureScreen.KEY_ESCAPE), Map.entry("j", SecureScreen.KEY_J),
             Map.entry("n", SecureScreen.KEY_N), Map.entry("a", SecureScreen.KEY_A), Map.entry("r", SecureScreen.KEY_R),
             Map.entry("u", SecureScreen.KEY_U), Map.entry("y", SecureScreen.KEY_Y),
-            Map.entry("l", SecureScreen.KEY_L), Map.entry("p", SecureScreen.KEY_P),
+            Map.entry("l", SecureScreen.KEY_L), Map.entry("p", SecureScreen.KEY_P), Map.entry("c", SecureScreen.KEY_C),
             Map.entry("tab", SecureScreen.KEY_TAB), Map.entry("backspace", SecureScreen.KEY_BACKSPACE));
 
     private JumpstartLua() {
@@ -92,6 +92,29 @@ public final class JumpstartLua {
             }
         }
         return "OK";
+    }
+
+    /**
+     * Tests only: the click on the game's "click to start" screen after a save loaded, so the game
+     * runs (GameLoadingState waits for it; a mouse click sets its forceDone). "OK", "not loading", or why not.
+     */
+    public static String testClickToStart() {
+        if (!Main.TEST_INPUT) {
+            return "FAILED test input is off";
+        }
+        try {
+            Object states = Class.forName("zombie.GameWindow").getField("states").get(null);
+            Object current = states.getClass().getField("current").get(states);
+            if (current == null || !current.getClass().getName().equals("zombie.gameStates.GameLoadingState")) {
+                return "not loading";
+            }
+            java.lang.reflect.Field done = current.getClass().getDeclaredField("forceDone");
+            done.setAccessible(true);
+            done.setBoolean(current, true);
+            return "OK";
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return "FAILED " + e;
+        }
     }
 
     /** Tests only: the secure screen's state in one line. */

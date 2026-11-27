@@ -20,7 +20,9 @@ param(
     [string]$AgentJar = (Join-Path $PSScriptRoot "..\mod\build\agent\Jumpstart.jar"),
     [string]$TestMod = (Join-Path $PSScriptRoot "testmods\JSTCleanTest"),
     [string]$TestDir = "$env:USERPROFILE\Zomboid-jumpstart-start-test",
-    [int]$WaitForSaveMinutes = 10
+    [int]$WaitForSaveMinutes = 10,
+    # the main menu loads all mods of its list (ZombieBuddy's lean menu off)
+    [switch]$FullMenu
 )
 $ErrorActionPreference = "Stop"
 $t = $TestDir
@@ -44,7 +46,11 @@ function SelectMod($id) {
     for ($i = 0; $i -lt 80; $i++) { $s = Screen; if ($s -like "* selected=$id *") { return $s }; Key down }
     return Screen
 }
+# a loaded game waits on "click to start" (GameLoadingState): the test clicks it; then the game runs
 function Unpause() {
+    $deadline = (Get-Date).AddSeconds(90)
+    do { $c = Lua "return Jumpstart.testClickToStart()"; if ($c -ne "not loading") { Start-Sleep 2 } } until ($c -eq "not loading" -or (Get-Date) -gt $deadline)
+    if ($c -ne "not loading") { Log "     click to start: $c" }
     $s = Lua "if getGameSpeed() == 0 then setGameSpeed(1) end return tostring(getGameSpeed())"
     if ($s -ne "1") { Log "     game speed: $s" }
     Start-Sleep 1
@@ -73,7 +79,7 @@ Copy-Item (Resolve-Path $AgentJar) "$t\Jumpstart.jar" -Force
 [IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", '{"formatVersion": 2, "mods": []}')
 
 $agent = "-javaagent:$t\Jumpstart.jar=hotswap=true,hotswap_lua=true,experimental,lua_server_port=4444,policy=deny-new,config_dir=$t\.zombie_buddy"
-$start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true --enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -XX:-CreateCoredumpOnCrash -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
+$start = "@echo off`r`ncd /d `"$GameDir`"`r`n`".\jre64\bin\java.exe`" $agent -Djumpstart.bitecheckDir=$t\.bitecheck -Djumpstart.testInput=true $(if ($FullMenu) { '-Dzombiebuddy.fullMenu=true ' })--enable-native-access=ALL-UNNAMED --add-exports=java.base/jdk.internal.misc=ALL-UNNAMED -Dzomboid.steam=1 -XX:-CreateCoredumpOnCrash -XX:+UseZGC -Xmx6000m -Djava.library.path=./win64/;./ -cp ./;projectzomboid.jar zombie.gameStates.MainScreenState -cachedir=$t > `"$t\game-out.txt`" 2>&1`r`n"
 [IO.File]::WriteAllText("$t\start-test.cmd", $start)
 
 $failures = 0
@@ -96,6 +102,7 @@ $deadline = (Get-Date).AddMinutes($WaitForSaveMinutes)
 do { Start-Sleep 5; $player = Lua "return tostring(getPlayer() ~= nil)" } until ($player -eq "true" -or (Get-Date) -gt $deadline)
 Check "a single player game runs" $player ($player -eq "true")
 Start-Sleep 5
+Unpause # into the game: past "click to start"
 
 # --- on, with the save ------------------------------------------------------------------------------
 $r = Lua "return tostring(JST_Marker) .. ' ' .. type(JSTCleanTest)"
