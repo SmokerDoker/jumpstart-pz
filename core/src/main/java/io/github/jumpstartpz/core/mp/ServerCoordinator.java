@@ -44,6 +44,17 @@ import java.util.Set;
  *       during phase 1 of a round takes part in it; who joins during phase 2 is compared after it.
  *       The client reports its own hashes, so this keeps honest clients in line, it does not catch a
  *       client that lies.</li>
+ *   <li><b>Emergency switch-off:</b> {@code change} with action <i>off</i> and {@code urgent=1} (an
+ *       admin), or {@link #emergencyOff} (the server itself, when BiteCheck blocks a running mod): the
+ *       same two phases, but nobody is asked and phase 1 lasts {@link #URGENT_DEADLINE_MS} at most.
+ *       A running round finishes first; the switch-off comes right after it.</li>
+ *   <li><b>Snapshot:</b> at the start of a round (not an emergency) the server saves its world and
+ *       copies the save ({@link Port#beginSnapshot}) while the game goes on; phase 2 waits for it.</li>
+ *   <li><b>Lua checksum:</b> after an install or remove, everybody who did it says hello with the
+ *       game's Lua checksum; whose differs from the server's is kicked (the game would turn them away
+ *       at their next join anyway).</li>
+ *   <li><b>A Workshop item with several mods:</b> the server sends the admin <b>choose</b> with the
+ *       mods in it; the admin sends install again with the one to install.</li>
  * </ul>
  *
  * Not thread-safe: the game calls it from its server thread only.
@@ -83,9 +94,18 @@ public final class ServerCoordinator<C> {
      * A Workshop item the server downloaded for an install: the mod in it, the hash of its jar and
      * BiteCheck's verdict on the server ("" for a Lua-only mod), or what went wrong.
      */
-    public record Fetched(String error, String modId, String sha256, String verdict, boolean java) {
+    public record Fetched(String error, String modId, String sha256, String verdict, boolean java, List<String> choices) {
+        public Fetched(String error, String modId, String sha256, String verdict, boolean java) {
+            this(error, modId, sha256, verdict, java, List.of());
+        }
+
         public static Fetched failed(String error) {
             return new Fetched(error, "", "", "", false);
+        }
+
+        /** The item has several mods and none was named: "id\tname" of each, for the admin to choose. */
+        public static Fetched choose(List<String> mods) {
+            return new Fetched(null, "", "", "", false, List.copyOf(mods));
         }
     }
 
@@ -121,14 +141,31 @@ public final class ServerCoordinator<C> {
         /** Starts downloading a Workshop item on the server; null when it started, else why not. */
         String fetch(String workshopId);
 
-        /** The downloaded item, or null while Steam is still at it. */
-        Fetched fetched(String workshopId);
+        /**
+         * The downloaded item, or null while Steam is still at it. {@code modId}: the mod in it to
+         * install, "" for the only one (several: {@link Fetched#choose}).
+         */
+        Fetched fetched(String workshopId, String modId);
 
         /**
          * Stops or restarts the world (zombies, time, players) while the network keeps running, like
          * the game's own pause on an empty server; clients are paused with {@code commit}.
          */
         void pauseWorld(boolean paused);
+
+        /** Saves the world and starts copying the save in the background (if snapshots are on). */
+        default void beginSnapshot() {
+        }
+
+        /** Whether the copy {@link #beginSnapshot} started is still running. */
+        default boolean snapshotRunning() {
+            return false;
+        }
+
+        /** The game's Lua checksum on the server ("" when unknown). */
+        default String luaChecksum() {
+            return "";
+        }
     }
 
     /** What an admin can do to a Java mod for everybody. */
@@ -155,21 +192,31 @@ public final class ServerCoordinator<C> {
      */
     private record Update(Action action, String mod, String sha256, String workshopId, boolean java, Object admin, long deadline,
                           Set<Object> expected, Set<Object> ready, Map<Object, String> failed,
-                          boolean committing, long commitDeadline, Set<Object> applied) {
+                          boolean committing, long commitDeadline, Set<Object> applied, boolean urgent, String reason) {
         Update commit(long until) {
             return new Update(action, mod, sha256, workshopId, java, admin, deadline, expected, ready, new LinkedHashMap<>(),
-                    true, until, new LinkedHashSet<>());
+                    true, until, new LinkedHashSet<>(), urgent, reason);
         }
     }
 
     /** How long clients have for phase 2 (the change itself, BiteCheck answered already). */
     public static final long COMMIT_DEADLINE_MS = 60_000;
 
-    /** A Workshop item the server downloads before an install round starts. */
-    private record Download(String workshopId, Object admin, long deadline) {
+    /** Phase 1 of an emergency switch-off: nobody is asked, switching off needs no download. */
+    public static final long URGENT_DEADLINE_MS = 20_000;
+
+    /** How long phase 2 waits for the snapshot after phase 1 is over (the game goes on meanwhile). */
+    public static final long SNAPSHOT_WAIT_MS = 120_000;
+
+    /** A Workshop item the server downloads before an install round starts; {@code mod}: the one to install, or "". */
+    private record Download(String workshopId, String mod, Object admin, long deadline) {
     }
 
     public static final long DOWNLOAD_DEADLINE_MS = 10 * 60_000;
+
+    /** An emergency switch-off waiting for the running round; {@code by}: the admin, or null for the server. */
+    private record Emergency(String mod, Object by, String reason) {
+    }
 
     private final Port<C> port;
     private final long deadlineMs;
@@ -177,6 +224,12 @@ public final class ServerCoordinator<C> {
     private final SecureRandom random = new SecureRandom();
     private Update pending;
     private Download download;
+    private final java.util.ArrayDeque<Emergency> emergencies = new java.util.ArrayDeque<>();
+    /** The running round still has to start its snapshot (from the next tick, the game's own loop). */
+    private boolean snapshotToStart;
+    private long snapshotUntil;
+    /** Clients that did an install or remove: their next hello carries the Lua checksum to compare. */
+    private final Set<C> compareLua = new LinkedHashSet<>();
 
     public ServerCoordinator(Port<C> port, long deadlineMs) {
         this.port = Objects.requireNonNull(port);
@@ -271,6 +324,9 @@ public final class ServerCoordinator<C> {
     public void onCommand(C c, String command, Map<String, String> args, long now) {
         if (command.equals("hello")) {
             welcome(c);
+            if (luaDiffers(c, args.get("lua"))) {
+                return;
+            }
             List<ClientMod> mods = parseClientMods(args.get("mods"));
             if (mods != null && !syncing.containsKey(c)) {
                 joined(c, mods, now);
@@ -284,11 +340,13 @@ public final class ServerCoordinator<C> {
         switch (command) {
             case "change" -> {
                 Action action = Action.of(args.getOrDefault("action", ""));
-                if (action != null) {
+                if (action == Action.OFF && "1".equals(args.get("urgent"))) {
+                    urgentOff(c, args.getOrDefault("mod", ""), now);
+                } else if (action != null) {
                     startChange(c, action, args.getOrDefault("mod", ""), now);
                 }
             }
-            case "install" -> startInstall(c, args.getOrDefault("item", "").strip(), now);
+            case "install" -> startInstall(c, args.getOrDefault("item", "").strip(), args.getOrDefault("mod", "").strip(), now);
             case "ready" -> {
                 if (pending != null && !pending.committing() && pending.mod().equals(args.get("mod"))
                         && pending.sha256().equals(args.get("sha"))) {
@@ -331,6 +389,63 @@ public final class ServerCoordinator<C> {
             return;
         }
         startSync(c, differences(port.manifest(), mods), now);
+    }
+
+    /**
+     * After an install or remove: a client whose Lua checksum differs from the server's is kicked.
+     * Only once, for the clients that did the change (the game compares everybody else at join).
+     */
+    private boolean luaDiffers(C c, String lua) {
+        if (pending != null || !compareLua.remove(c) || lua == null || lua.isEmpty()) {
+            return false;
+        }
+        String mine = nz(port.luaChecksum());
+        if (mine.isEmpty() || mine.equals(lua)) {
+            return false;
+        }
+        port.kick(c, "Jumpstart: the Lua files differ from the server's after the change; please join again");
+        return true;
+    }
+
+    /**
+     * The server switches a running Java mod off for everybody at once (BiteCheck blocked it), after
+     * a round that runs now. Nobody is asked.
+     */
+    public void emergencyOff(String mod, String reason, long now) {
+        if (emergencies.stream().anyMatch(e -> e.mod().equals(mod)) || (pending != null && pending.urgent() && pending.mod().equals(mod))) {
+            return;
+        }
+        emergencies.add(new Emergency(mod, null, reason));
+        startEmergency(now);
+    }
+
+    /** An admin's emergency switch-off: like {@link #emergencyOff}, without the players' consent. */
+    private void urgentOff(C admin, String mod, long now) {
+        if (!port.isAdmin(admin)) {
+            note(admin, "only admins can switch mods in multiplayer");
+            return;
+        }
+        if (pending != null) {
+            note(admin, mod + " goes off for everybody right after the change of " + pending.mod());
+        }
+        emergencies.add(new Emergency(mod, admin, "emergency switch-off by " + port.name(admin)));
+        startEmergency(now);
+    }
+
+    /** Starts the next emergency switch-off when no round runs. */
+    private void startEmergency(long now) {
+        while (pending == null && !emergencies.isEmpty()) {
+            Emergency e = emergencies.poll();
+            ModInfo info = port.manifest().stream().filter(m -> m.id().equals(e.mod())).findFirst().orElse(null);
+            if (info == null || info.lua() || "off".equals(info.state())) {
+                if (e.by() != null) {
+                    note(cast(e.by()), e.mod() + (info == null ? " is not a mod of this server" : info.lua() ? " is a Lua mod" : " is off already"));
+                }
+                continue;
+            }
+            System.out.println("[Jumpstart] multiplayer: " + e.mod() + " goes off for everybody now: " + e.reason());
+            startRound(e.by(), Action.OFF, e.mod(), nz(info.sha256()), nz(info.workshopId()), true, true, e.reason(), now);
+        }
     }
 
     private void startSync(C c, List<Sync> steps, long now) {
@@ -414,7 +529,7 @@ public final class ServerCoordinator<C> {
         port.send(c, "welcome", args);
     }
 
-    private void startInstall(C admin, String item, long now) {
+    private void startInstall(C admin, String item, String mod, long now) {
         if (!port.isAdmin(admin)) {
             note(admin, "only admins can install mods in multiplayer");
             return;
@@ -431,7 +546,7 @@ public final class ServerCoordinator<C> {
             note(admin, "the server cannot download " + item + ": " + problem);
             return;
         }
-        download = new Download(item, admin, now + DOWNLOAD_DEADLINE_MS);
+        download = new Download(item, mod, admin, now + DOWNLOAD_DEADLINE_MS);
         note(admin, "the server downloads Workshop item " + item + " ...");
     }
 
@@ -487,13 +602,17 @@ public final class ServerCoordinator<C> {
             workshop = nz(info.workshopId());
             java = !info.lua();
         }
-        startRound(admin, action, mod, sha, workshop, java, now);
+        startRound(admin, action, mod, sha, workshop, java, false, "", now);
     }
 
-    private void startRound(Object admin, Action action, String mod, String sha, String workshop, boolean java, long now) {
+    private void startRound(Object admin, Action action, String mod, String sha, String workshop, boolean java,
+                            boolean urgent, String reason, long now) {
         Set<Object> expected = new LinkedHashSet<>(port.connections());
-        pending = new Update(action, mod, sha, workshop, java, admin, now + deadlineMs,
-                expected, new LinkedHashSet<>(), new LinkedHashMap<>(), false, 0, new LinkedHashSet<>());
+        long deadline = now + (urgent ? Math.min(deadlineMs, URGENT_DEADLINE_MS) : deadlineMs);
+        pending = new Update(action, mod, sha, workshop, java, admin, deadline,
+                expected, new LinkedHashSet<>(), new LinkedHashMap<>(), false, 0, new LinkedHashSet<>(), urgent, nz(reason));
+        snapshotToStart = !urgent;
+        snapshotUntil = deadline + SNAPSHOT_WAIT_MS;
         for (Object c : expected) {
             sendPrepare(cast(c), pending, now);
         }
@@ -507,27 +626,43 @@ public final class ServerCoordinator<C> {
         args.put("workshop", u.workshopId());
         args.put("java", u.java() ? "1" : "0");
         args.put("seconds", String.valueOf(Math.max(1, (u.deadline() - now) / 1000)));
-        args.put("by", port.name(cast(u.admin())));
-        args.put("yours", c.equals(u.admin()) ? "1" : "0"); // the admin who started it is not asked again
+        args.put("by", u.admin() == null ? "server" : port.name(cast(u.admin())));
+        // the admin who started it is not asked again; nobody is asked in an emergency
+        args.put("yours", u.urgent() || c.equals(u.admin()) ? "1" : "0");
+        if (u.urgent()) {
+            args.put("urgent", "1");
+            args.put("reason", u.reason());
+        }
         port.send(c, "prepare", args);
     }
 
     /** Every server tick: follows a download, finishes a round when everybody answered or the deadline passed. */
     public void tick(long now) {
         followSyncs(now);
-        if (download != null) {
+        startEmergency(now);
+        if (download != null && pending == null) {
             followDownload(now);
         }
         if (pending == null) {
             return;
         }
+        if (snapshotToStart) {
+            snapshotToStart = false;
+            try {
+                port.beginSnapshot();
+            } catch (RuntimeException e) {
+                System.out.println("[Jumpstart] multiplayer: no snapshot: " + e);
+            }
+        }
         List<C> connected = port.connections();
         tokens.keySet().retainAll(connected);
+        compareLua.retainAll(connected);
         if (pending.committing()) {
             pending.ready().retainAll(connected);
             boolean allAnswered = pending.ready().stream().allMatch(c -> pending.applied().contains(c) || pending.failed().containsKey(c));
             if (allAnswered || now >= pending.commitDeadline()) {
                 finishCommit();
+                startEmergency(now); // a switch-off that waited for this round
             }
             return;
         }
@@ -539,6 +674,9 @@ public final class ServerCoordinator<C> {
             }
         }
         if (allAnswered || now >= pending.deadline()) {
+            if (port.snapshotRunning() && now < snapshotUntil) {
+                return; // the copy of the save is not done yet; the game goes on meanwhile
+            }
             commit(now);
         }
     }
@@ -570,6 +708,7 @@ public final class ServerCoordinator<C> {
                 port.send(cast(o), "abort", args);
             }
             afterRound(u.ready());
+            startEmergency(now);
             return;
         }
         pending = u.commit(now + COMMIT_DEADLINE_MS);
@@ -596,6 +735,11 @@ public final class ServerCoordinator<C> {
         port.pauseWorld(false);
         Map<String, String> args = result(u, true, kickedNames.isEmpty() ? "" : "kicked: " + String.join(", ", kickedNames));
         kickedNames.clear();
+        if (u.action() == Action.INSTALL || u.action() == Action.REMOVE) {
+            for (Object o : u.applied()) {
+                compareLua.add(cast(o)); // their hello after done carries the Lua checksum
+            }
+        }
         for (Object o : u.applied()) {
             port.send(cast(o), "done", args);
         }
@@ -623,7 +767,7 @@ public final class ServerCoordinator<C> {
     private void followDownload(long now) {
         Download d = download;
         C admin = cast(d.admin());
-        Fetched f = port.fetched(d.workshopId());
+        Fetched f = port.fetched(d.workshopId(), d.mod());
         if (f == null) {
             if (now >= d.deadline()) {
                 download = null;
@@ -634,6 +778,12 @@ public final class ServerCoordinator<C> {
         download = null;
         if (f.error() != null) {
             note(admin, "Workshop item " + d.workshopId() + ": " + f.error());
+            return;
+        }
+        if (!f.choices().isEmpty()) {
+            if (port.connections().contains(admin)) {
+                port.send(admin, "choose", Map.of("item", d.workshopId(), "mods", String.join("\n", f.choices())));
+            }
             return;
         }
         if ("REFUSE".equals(f.verdict())) {
@@ -647,7 +797,7 @@ public final class ServerCoordinator<C> {
         if (!port.connections().contains(admin)) {
             return; // the admin left while the server downloaded
         }
-        startRound(admin, Action.INSTALL, f.modId(), nz(f.sha256()), d.workshopId(), f.java(), now);
+        startRound(admin, Action.INSTALL, f.modId(), nz(f.sha256()), d.workshopId(), f.java(), false, "", now);
     }
 
     private void note(C c, String text) {

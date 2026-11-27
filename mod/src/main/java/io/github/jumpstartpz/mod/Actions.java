@@ -163,6 +163,18 @@ interface Actions {
         return "";
     }
 
+    // --- multiplayer: after a mod was installed or removed for everybody ---
+
+    /** Takes a removed mod out of the running game's mod list. True if it was in it. */
+    default boolean dropFromModList(String modId) {
+        return false;
+    }
+
+    /** Works the game's Lua checksum out again (it changes with the mods' Lua files); "" if it cannot. */
+    default String recomputeLuaChecksum(String why) {
+        return "";
+    }
+
     // --- save snapshots (single player) ---
 
     /**

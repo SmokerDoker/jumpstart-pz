@@ -66,7 +66,13 @@ or removes a mod for everybody at once. First everybody gets ready while the gam
 has to agree, every client gets exactly the server's jar and BiteCheck checks it on the player's
 computer. Then the server stops its world for a moment, switches first, and the players follow; if the
 server cannot, nobody changes anything. Whoever says no or is not ready in time (3 minutes, adjustable)
-is disconnected. Dedicated servers:
+is disconnected. Before the switch the server copies its save (a snapshot). Players who join later
+get the server's Java mods, and after a live install the game's Lua checksum matches the server's,
+so nobody is turned away for it.
+
+An admin can switch a mod off for everybody at once, without asking (X twice in the Server tab); the
+server does the same by itself when BiteCheck blocks a running mod. A Workshop item with several mods
+(variants like 60 / 80 %) asks the admin which one to install. Dedicated servers:
 [kit/SERVER.md](kit/SERVER.md).
 
 ## Faster start

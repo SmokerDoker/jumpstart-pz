@@ -59,6 +59,7 @@ public final class SecureScreen {
     static final int KEY_N = 78;
     static final int KEY_R = 82;
     static final int KEY_U = 85;
+    static final int KEY_X = 88;
     static final int KEY_Y = 89;
     static final int KEY_LEFT_SHIFT = 340;
     static final int KEY_LEFT_CONTROL = 341;
@@ -191,6 +192,9 @@ public final class SecureScreen {
 
     // multiplayer
     private int serverSelected;
+    /** The server mod whose emergency switch-off waits for the second X; null when none. */
+    private String emergencyConfirm;
+    private int choiceSelected;
     /** Phase 2 of a server change: what this client prepared in phase 1, run on the server's commit. */
     private Runnable serverCommit;
     private boolean lookBusy;
@@ -229,6 +233,7 @@ public final class SecureScreen {
         this.background = background;
         this.session = new ClientSession(link);
         this.session.localMods = this::localModsLine;
+        this.session.luaChecksum = () -> actions.recomputeLuaChecksum("the server's change");
         libraries.put(Tab.JAVA_LIBRARY, new Library(LibraryClient.Kind.JAVA));
         libraries.put(Tab.LUA_LIBRARY, new Library(LibraryClient.Kind.LUA));
     }
@@ -1794,7 +1799,8 @@ public final class SecureScreen {
                 serverCommit = null;
                 ClientSession.Update u = session.update;
                 say(what.equals("sync") ? String.format(Locale.ROOT, texts.get("mp.sync"), actionText(u.action), u.mod)
-                        : String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), true);
+                        : u.urgent ? String.format(Locale.ROOT, texts.get("mp.urgent"), u.mod, u.reason)
+                        : String.format(Locale.ROOT, texts.get("mp.prepare"), u.by, actionText(u.action), u.mod), !u.urgent);
                 if (mode != Mode.CLOSED) {
                     if (mode != Mode.LIST) {
                         pending = null; // a question of the player's own is dropped for the server's
@@ -1842,6 +1848,13 @@ public final class SecureScreen {
             case "synced" -> {
                 say(texts.get("mp.synced"), true);
                 refreshStates();
+            }
+            case "choose" -> {
+                choiceSelected = 0;
+                if (mode == Mode.LIST) {
+                    tab = Tab.SERVER;
+                }
+                say(texts.get("mp.choose.note"), true);
             }
             default -> say(session.lastNote, false);
         }
@@ -1983,6 +1996,10 @@ public final class SecureScreen {
     }
 
     private void onServer(Set<Integer> pressed) {
+        if (session.choice != null) {
+            onChoice(pressed);
+            return;
+        }
         List<ClientSession.ServerMod> list = session.serverMods;
         if (pressed.contains(KEY_UP) && serverSelected > 0) {
             serverSelected--;
@@ -1995,6 +2012,13 @@ public final class SecureScreen {
         }
         boolean enter = pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER);
         boolean remove = pressed.contains(KEY_U);
+        if (pressed.contains(KEY_X) && !list.isEmpty()) {
+            emergency(list.get(Math.min(serverSelected, list.size() - 1)));
+            return;
+        }
+        if (!pressed.isEmpty()) {
+            emergencyConfirm = null;
+        }
         if ((enter || pressed.contains(KEY_A) || remove) && !list.isEmpty() && session.update == null) {
             if (!session.admin) {
                 say(texts.get("mp.notAdmin"), false);
@@ -2009,6 +2033,75 @@ public final class SecureScreen {
                 say(String.format(Locale.ROOT, texts.get("mp.requested"), actionText(action), mod.id()), true);
             }
         }
+    }
+
+    /**
+     * Admins: X twice switches a Java mod off for everybody at once, nobody is asked (a mod that
+     * breaks the game, or one BiteCheck flags). Also while another change runs: it comes right after.
+     */
+    private void emergency(ClientSession.ServerMod mod) {
+        if (!session.admin) {
+            say(texts.get("mp.notAdmin"), false);
+            return;
+        }
+        if (mod.lua() || mod.state().equals("off")) {
+            say(String.format(Locale.ROOT, texts.get("mp.emergencyNot"), mod.id()), false);
+            return;
+        }
+        if (!mod.id().equals(emergencyConfirm)) {
+            emergencyConfirm = mod.id(); // the first X only asks
+            say(String.format(Locale.ROOT, texts.get("mp.emergencyConfirm"), mod.id()), false);
+            return;
+        }
+        emergencyConfirm = null;
+        session.requestEmergencyOff(mod.id());
+        say(String.format(Locale.ROOT, texts.get("mp.emergencyRequested"), mod.id()), true);
+    }
+
+    /** The admin chooses the mod to install from a Workshop item with several; Backspace cancels. */
+    private void onChoice(Set<Integer> pressed) {
+        ClientSession.Choice c = session.choice;
+        if (pressed.contains(KEY_UP) && choiceSelected > 0) {
+            choiceSelected--;
+        }
+        if (pressed.contains(KEY_DOWN) && choiceSelected < c.mods().size() - 1) {
+            choiceSelected++;
+        }
+        if (pressed.contains(KEY_BACKSPACE)) {
+            session.choice = null;
+            say(texts.get("mp.choose.cancelled"), false);
+            return;
+        }
+        if ((pressed.contains(KEY_ENTER) || pressed.contains(KEY_KP_ENTER)) && session.update == null) {
+            String[] mod = c.mods().get(Math.min(choiceSelected, c.mods().size() - 1));
+            session.choice = null;
+            session.requestInstall(c.item(), mod[0]);
+            say(String.format(Locale.ROOT, texts.get("mp.installRequested"), mod[1]), true);
+        }
+    }
+
+    private void drawChoice(int x, int y, int width, int bottom) {
+        ClientSession.Choice c = session.choice;
+        game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.choose.title"), c.item()), 1f, 0.9f, 0.5f, 1f);
+        y += game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        y = wrapped(GameScreen.Font.SMALL, x, y, width, texts.get("mp.choose.text"), 0.85f, 0.85f, 0.85f) + 6;
+        int line = game.fontHeight(GameScreen.Font.MEDIUM) + 8;
+        int rowsBottom = bottom - buttonHeight() - 10;
+        for (int i = 0; i < c.mods().size() && y + line <= rowsBottom; i++) {
+            if (i == choiceSelected) {
+                game.rect(x - 6, y - 3, width + 12, line - 2, 0.25f, 0.45f, 0.3f, 0.6f);
+            }
+            int row = i;
+            hits.add(new Hit(x - 6, y - 3, width + 12, line - 2, 0, () -> choiceSelected = row));
+            String[] m = c.mods().get(i);
+            game.text(GameScreen.Font.MEDIUM, x, y, fit(GameScreen.Font.MEDIUM, m[1], width * 2 / 3), 1f, 1f, 1f, 1f);
+            int w = game.textWidth(GameScreen.Font.SMALL, m[0]);
+            game.text(GameScreen.Font.SMALL, x + width - w, y + 2, m[0], 0.6f, 0.6f, 0.6f, 1f);
+            y += line;
+        }
+        int bx = x;
+        bx += button(bx, rowsBottom + 6, texts.get("btn.chooseInstall"), KEY_ENTER, null, true) + 10;
+        button(bx, rowsBottom + 6, texts.get("btn.chooseCancel"), KEY_BACKSPACE, null, true);
     }
 
     private String actionText(String action) {
@@ -2072,6 +2165,7 @@ public final class SecureScreen {
             result = state.equals("on") ? actions.off(u.mod) : "OK";
             if (result.startsWith("OK")) {
                 actions.unloadLuaForServer(u.mod);
+                actions.dropFromModList(u.mod); // gone from the server's list: out of the Lua checksum too
             }
         } else if (state.equals("not loaded")) {
             result = u.action.equals("off") ? "OK" : "FAILED " + u.mod + " is not loaded here";
@@ -2113,12 +2207,17 @@ public final class SecureScreen {
     }
 
     private void drawServer(int x, int y, int width, int bottom) {
+        if (session.choice != null) {
+            drawChoice(x, y, width, bottom);
+            return;
+        }
         int medium = game.fontHeight(GameScreen.Font.MEDIUM);
         int small = game.fontHeight(GameScreen.Font.SMALL) + 3;
         ClientSession.Update u = session.update;
         if (u != null) {
             game.rect(x - 6, y - 4, width + 12, medium * 2 + small + 16, 0.35f, 0.25f, 0.05f, 1f);
-            game.text(GameScreen.Font.MEDIUM, x, y, String.format(Locale.ROOT, texts.get("mp.banner"), actionText(u.action), u.mod, u.by), 1f, 0.9f, 0.5f, 1f);
+            game.text(GameScreen.Font.MEDIUM, x, y, u.urgent ? String.format(Locale.ROOT, texts.get("mp.urgentBanner"), u.mod, u.reason)
+                    : String.format(Locale.ROOT, texts.get("mp.banner"), actionText(u.action), u.mod, u.by), 1f, 0.9f, 0.5f, 1f);
             long left = Math.max(0, (u.deadline - frameTime) / 1000);
             String status = session.answered() ? texts.get(u.phase == ClientSession.Phase.FAILED ? "mp.line.failed" : "mp.line.ready")
                     : u.status.isEmpty() ? texts.get("mp.getting") : u.status;
@@ -2147,6 +2246,7 @@ public final class SecureScreen {
             bx += button(bx, rowsBottom + 6, texts.get("btn.serverUpdate"), KEY_ENTER, null, true) + 10;
             bx += button(bx, rowsBottom + 6, texts.get("btn.serverToggle"), KEY_A, null, true) + 10;
             bx += button(bx, rowsBottom + 6, texts.get("btn.serverRemove"), KEY_U, null, true) + 10;
+            bx += button(bx, rowsBottom + 6, texts.get("btn.serverEmergency"), KEY_X, null, true) + 10;
         }
         button(bx, rowsBottom + 6, texts.get("btn.refresh"), KEY_R, null, true);
         listArea = new int[] {x - 6, y - 4, width + 12, rowsBottom - y};

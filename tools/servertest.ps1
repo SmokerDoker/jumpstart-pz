@@ -50,12 +50,14 @@ $failures = 0
 Log "servertest $(Get-Date -Format s)"
 $proc = Start-Process cmd.exe -ArgumentList '/c', "`"$t\start-server.cmd`"" -WindowStyle Hidden -PassThru
 $deadline = (Get-Date).AddMinutes($Minutes)
-$want = 'multiplayer: server side ready', 'hooks in zombie.network.GameServer', 'hooks in zombie.network.ServerMap'
+$want = 'multiplayer: server side ready', 'hooks in zombie.network.GameServer', 'hooks in zombie.network.ServerMap',
+    # the first tick works the game's Lua checksum out again; it must come out as the game's own
+    "Lua checksum: worked out again, same as the game's"
 do {
     Start-Sleep 5
     $out = if (Test-Path "$t\server-out.txt") { Get-Content "$t\server-out.txt" -Raw } else { "" }
     $all = $true; foreach ($w in $want) { if ($out -notmatch [regex]::Escape($w)) { $all = $false } }
-} until ($all -or (Get-Date) -gt $deadline -or $out -match 'SERVER STARTED|Exception in thread "main"')
+} until ($all -or (Get-Date) -gt $deadline -or $out -match 'Exception in thread "main"|Lua checksum: worked out again it is')
 Start-Sleep 10
 $out = Get-Content "$t\server-out.txt" -Raw
 Check "ZombieBuddy fork active on the server" ($out -match 'Jumpstart fork')

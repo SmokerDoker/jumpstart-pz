@@ -918,6 +918,81 @@ class SecureScreenTest {
     }
 
     @Test
+    void anEmergencySwitchOffAsksNobody() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "0", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "off", "mod", "Verified", "sha", "s", "workshop", "",
+                "seconds", "20", "by", "server", "yours", "1", "urgent", "1", "reason", "BiteCheck blocks Verified (blocked)"));
+        frame();
+        assertEquals(SecureScreen.Mode.CLOSED, screen.mode(), "no question, the game goes on");
+        assertEquals("ready {mod=Verified, sha=s, token=T}", link.sent.get(link.sent.size() - 1));
+        openScreen();
+        assertTrue(game.drew("Emergency switch-off: Verified (BiteCheck blocks Verified (blocked))"));
+        screen.onServerCommand("commit", Map.of("action", "off", "mod", "Verified", "sha", "s"));
+        frame(); settle();
+        assertEquals("off", actions.states.get("Verified"));
+        assertEquals("applied {mod=Verified, token=T}", link.sent.get(link.sent.size() - 1));
+    }
+
+    @Test
+    void anAdminPressesXTwiceForAnEmergencySwitchOff() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", "Mod\t1\ta\ta\ton\nMinimap\t2\t\t\tlua\n"));
+        openScreen();
+        link.sent.clear();
+        tap(SecureScreen.KEY_X);
+        assertTrue(link.sent.isEmpty(), "the first X only asks");
+        assertTrue(screen.describe().contains("X again: Mod goes off for everybody"), screen.describe());
+        tap(SecureScreen.KEY_X);
+        assertEquals("change {action=off, mod=Mod, token=T, urgent=1}", link.sent.get(link.sent.size() - 1));
+        tap(SecureScreen.KEY_DOWN);
+        link.sent.clear();
+        tap(SecureScreen.KEY_X);
+        tap(SecureScreen.KEY_X);
+        assertTrue(link.sent.isEmpty(), "a Lua mod has nothing to switch off");
+    }
+
+    @Test
+    void theAdminChoosesOneModOfAnItemWithSeveral() {
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        openScreen();
+        screen.onServerCommand("choose", Map.of("item", "789", "mods", "Car60\tCar (60 %)\nCar80\tCar (80 %)"));
+        frame();
+        assertEquals(SecureScreen.Tab.SERVER, screen.tab());
+        assertTrue(game.drew("Workshop item 789 has several mods"));
+        assertTrue(game.drew("Car (80 %)"));
+        tap(SecureScreen.KEY_DOWN);
+        tap(SecureScreen.KEY_ENTER);
+        assertEquals("install {item=789, mod=Car80, token=T}", link.sent.get(link.sent.size() - 1));
+        assertNull(screen.session().choice);
+    }
+
+    @Test
+    void afterARemoveTheNextHelloCarriesTheLuaChecksum() {
+        actions.states.put("Verified", "on");
+        link.connected = true;
+        frame();
+        screen.onServerCommand("welcome", Map.of("token", "T", "admin", "1", "mods", ""));
+        screen.onServerCommand("prepare", Map.of("action", "remove", "mod", "Verified", "sha", "s", "workshop", "",
+                "seconds", "60", "by", "me", "yours", "1"));
+        frame();
+        screen.onServerCommand("commit", Map.of("action", "remove", "mod", "Verified", "sha", "s"));
+        frame(); settle();
+        assertEquals(List.of("Verified"), actions.dropped, "out of the game's mod list, like on the server");
+        assertEquals(0, actions.luaSums, "worked out once the round is over");
+        screen.onServerCommand("done", Map.of("action", "remove", "mod", "Verified", "ok", "1", "message", ""));
+        frame();
+        String hello = link.sent.get(link.sent.size() - 1);
+        assertTrue(hello.startsWith("hello ") && hello.contains("lua=lua-sum"), hello);
+        assertEquals(1, actions.luaSums);
+    }
+
+    @Test
     void inMultiplayerNobodySwitchesAlone() {
         actions.states.put("Verified", "on");
         link.connected = true;
@@ -1348,6 +1423,21 @@ class SecureScreenTest {
         @Override
         public String refreshIndex() {
             return "refreshed";
+        }
+
+        final List<String> dropped = new ArrayList<>();
+        int luaSums;
+
+        @Override
+        public boolean dropFromModList(String modId) {
+            dropped.add(modId);
+            return true;
+        }
+
+        @Override
+        public String recomputeLuaChecksum(String why) {
+            luaSums++;
+            return "lua-sum";
         }
 
         // marketplace

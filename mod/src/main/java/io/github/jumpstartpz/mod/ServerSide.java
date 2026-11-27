@@ -20,7 +20,11 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
     private final GameActions actions;
     private final ServerCoordinator<Object> coordinator;
     /** The hash each Java mod had when the server loaded it (or Jumpstart updated it). */
-    private final Map<String, String> loadedSha = new HashMap<>();
+    private final Map<String, String> loadedSha = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Mods BiteCheck blocks now (from the index watcher's thread), for the server thread to switch off. */
+    private final java.util.Queue<String[]> blocked = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    /** How often the server fetches BiteCheck's index again to find running mods it blocks now. */
+    static final long INDEX_WATCH_MS = 15 * 60_000;
     /** Workshop items being downloaded for an install, and the mod each brought. */
     private final Map<String, Long> downloading = new HashMap<>();
     private final Map<String, Downloaded> downloaded = new HashMap<>();
@@ -61,9 +65,73 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
         dropOldModEntry();
         ServerSide side = new ServerSide(actions);
         Net.onServer((who, args) -> side.coordinator.onCommand(connectionOf(who[0]), (String) who[1], args, System.currentTimeMillis()),
-                () -> side.coordinator.tick(System.currentTimeMillis()));
+                side::tick);
+        side.watchIndex();
         System.out.println("[Jumpstart] multiplayer: server side ready; Java mods for the clients: " + side.loadedSha.keySet());
     }
+
+    private void tick() {
+        long now = System.currentTimeMillis();
+        if (!luaChecked) {
+            luaChecked = true;
+            LuaChecksum.selfTest();
+        }
+        for (String[] b; (b = blocked.poll()) != null; ) {
+            if (actions.stateOf(b[0]).equals("on")) {
+                coordinator.emergencyOff(b[0], b[1], now);
+            }
+        }
+        coordinator.tick(now);
+    }
+
+    /**
+     * Every {@link #INDEX_WATCH_MS}: BiteCheck's index again; a running Java mod it blocks now (its
+     * key was revoked, it was found to be malware) goes off for everybody at once. Flagged ones are
+     * only written to the log: an admin decides.
+     */
+    private void watchIndex() {
+        Thread watcher = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(INDEX_WATCH_MS);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                actions.refreshIndexQuietly();
+                for (Map.Entry<String, String> e : Map.copyOf(loadedSha).entrySet()) {
+                    if (e.getValue().isEmpty()) {
+                        continue;
+                    }
+                    io.github.bitecheckpz.core.Verifier.Status status = actions.indexStatus(e.getValue());
+                    if (status == io.github.bitecheckpz.core.Verifier.Status.BLOCKED || status == io.github.bitecheckpz.core.Verifier.Status.INVALID) {
+                        blocked.add(new String[] {e.getKey(), "BiteCheck blocks " + e.getKey() + " (" + status.name().toLowerCase(java.util.Locale.ROOT) + ")"});
+                    } else if (status == io.github.bitecheckpz.core.Verifier.Status.FLAGGED) {
+                        System.out.println("[Jumpstart] multiplayer: BiteCheck flags " + e.getKey() + "; an admin can switch it off for everybody (X in the Server tab)");
+                    }
+                }
+            }
+        }, "Jumpstart index watch");
+        watcher.setDaemon(true);
+        watcher.start();
+    }
+
+    @Override
+    public void beginSnapshot() {
+        actions.beginServerSnapshot();
+    }
+
+    @Override
+    public boolean snapshotRunning() {
+        return actions.serverSnapshotRunning();
+    }
+
+    @Override
+    public String luaChecksum() {
+        return luaChecked && LuaChecksum.trusted() ? LuaChecksum.current() : "";
+    }
+
+    /** The Lua checksum self test ran (on the first tick: the game has worked out its own by then). */
+    private boolean luaChecked;
 
     private static Object connectionOf(Object player) {
         try {
@@ -196,7 +264,7 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
     }
 
     @Override
-    public ServerCoordinator.Fetched fetched(String workshopId) {
+    public ServerCoordinator.Fetched fetched(String workshopId, String wanted) {
         if (!downloading.containsKey(workshopId)) {
             return ServerCoordinator.Fetched.failed("not downloading");
         }
@@ -211,15 +279,26 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
         }
         downloading.remove(workshopId);
         List<Actions.FolderMod> found = actions.modsInFolder(folder);
-        Actions.FolderMod mod = found.stream().filter(m -> m.java() != null).findFirst()
-                .orElse(found.isEmpty() ? null : found.get(0));
-        if (mod == null) {
+        if (found.isEmpty()) {
             return ServerCoordinator.Fetched.failed("no mod for this game version in it");
         }
-        downloaded.put(mod.id(), new Downloaded(workshopId, folder, mod));
-        if (found.size() > 1) {
-            System.out.println("[Jumpstart] multiplayer: item " + workshopId + " has " + found.size() + " mods; installing " + mod.id());
+        Actions.FolderMod mod;
+        if (wanted != null && !wanted.isEmpty()) {
+            mod = found.stream().filter(m -> m.id().equals(wanted)).findFirst().orElse(null);
+            if (mod == null) {
+                return ServerCoordinator.Fetched.failed("no mod " + wanted + " in it");
+            }
+        } else if (found.size() > 1) {
+            // variants (60/70/80 %) or a mod with its add-ons: the admin chooses
+            List<String> choices = new ArrayList<>();
+            for (Actions.FolderMod m : found) {
+                choices.add(m.id() + "\t" + m.name().replace('\t', ' ').replace('\n', ' ') + (m.java() != null ? " (Java)" : ""));
+            }
+            return ServerCoordinator.Fetched.choose(choices);
+        } else {
+            mod = found.get(0);
         }
+        downloaded.put(mod.id(), new Downloaded(workshopId, folder, mod));
         if (mod.java() == null) {
             return new ServerCoordinator.Fetched(null, mod.id(), "", "", false);
         }
@@ -253,6 +332,7 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
         LuaLive.Result lua = actions.loadLuaForServer(modId);
         System.out.println("[Jumpstart] multiplayer: " + modId + " installed on the server; Lua " + lua);
         String problem = changeServerLists(modId, d.item(), true);
+        actions.recomputeLuaChecksum("installing " + modId); // so players who join later match the server
         return problem;
     }
 
@@ -275,7 +355,10 @@ final class ServerSide implements ServerCoordinator.Port<Object> {
                 itemStillUsed = true;
             }
         }
-        return changeServerLists(modId, item > 0 && !itemStillUsed ? Long.toString(item) : null, false);
+        String problem = changeServerLists(modId, item > 0 && !itemStillUsed ? Long.toString(item) : null, false);
+        actions.dropFromModList(modId);
+        actions.recomputeLuaChecksum("removing " + modId);
+        return problem;
     }
 
     /**

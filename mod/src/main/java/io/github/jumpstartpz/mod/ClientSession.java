@@ -47,6 +47,9 @@ final class ClientSession {
          * already, so the change is made as soon as it is ready, without a commit.
          */
         boolean solo;
+        /** An emergency switch-off: nobody is asked; {@code reason} says why. */
+        boolean urgent;
+        String reason = "";
         Phase phase = Phase.GETTING;
         boolean downloadRequested;
         long nextLook;
@@ -67,6 +70,16 @@ final class ClientSession {
     private final ServerLink link;
     /** This client's Java mods for hello, "id\thash\tstate" lines (see ServerCoordinator.ClientMod). */
     java.util.function.Supplier<String> localMods = () -> null;
+    /** Works the game's Lua checksum out again (after an install or remove for everybody). */
+    java.util.function.Supplier<String> luaChecksum = () -> "";
+    /** The next hello carries the Lua checksum, for the server to compare. */
+    private boolean sendLua;
+
+    /** A Workshop item of the server's with several mods: the admin chooses which one to install. */
+    record Choice(String item, List<String[]> mods) {
+    }
+
+    Choice choice;
 
     /** In a multiplayer game (with or without Jumpstart on the server): nobody switches mods alone. */
     boolean inMultiplayer() {
@@ -94,6 +107,8 @@ final class ClientSession {
                 helloSent = false;
                 token = null;
                 serverMods = List.of();
+                choice = null;
+                sendLua = false;
                 if (update != null) {
                     update = null;
                     link.pause(false);
@@ -121,6 +136,10 @@ final class ClientSession {
         if (mods != null && update == null) {
             args.put("mods", mods); // not in the middle of a change: the server would compare half of it
         }
+        if (sendLua && update == null) {
+            sendLua = false;
+            args.put("lua", luaChecksum.get());
+        }
         link.send("hello", args);
     }
 
@@ -147,6 +166,8 @@ final class ClientSession {
                         args.getOrDefault("workshop", ""), args.getOrDefault("by", "?"), now + seconds * 1000);
                 update.since = now;
                 update.java = !"0".equals(args.get("java"));
+                update.urgent = "1".equals(args.get("urgent"));
+                update.reason = args.getOrDefault("reason", "");
                 return "prepare"; // the game goes on while everybody gets ready
             }
             case "sync" -> {
@@ -183,10 +204,23 @@ final class ClientSession {
             }
             case "done" -> {
                 update = null;
+                String action = args.getOrDefault("action", "");
+                sendLua = "1".equals(args.get("ok")) && (action.equals("install") || action.equals("remove"));
                 link.pause(false);
                 lastNote = "1".equals(args.get("ok")) ? args.getOrDefault("message", "") : args.getOrDefault("message", "failed");
                 refresh();
                 return "done";
+            }
+            case "choose" -> {
+                List<String[]> mods = new ArrayList<>();
+                for (String line : args.getOrDefault("mods", "").split("\n")) {
+                    String[] f = line.split("\t", 2);
+                    if (!f[0].isBlank()) {
+                        mods.add(new String[] {f[0], f.length > 1 ? f[1] : f[0]});
+                    }
+                }
+                choice = mods.isEmpty() ? null : new Choice(args.getOrDefault("item", ""), List.copyOf(mods));
+                return choice == null ? null : "choose";
             }
             case "note" -> {
                 lastNote = args.getOrDefault("text", "");
@@ -200,8 +234,21 @@ final class ClientSession {
 
     /** Admins: install a Steam Workshop item for everybody (the server downloads it first). */
     void requestInstall(long workshopId) {
+        requestInstall(Long.toString(workshopId), "");
+    }
+
+    /** Admins: install one mod of a Workshop item with several (after {@code choose}). */
+    void requestInstall(String workshopId, String mod) {
         if (token != null) {
-            link.send("install", Map.of("token", token, "item", Long.toString(workshopId)));
+            link.send("install", mod.isEmpty() ? Map.of("token", token, "item", workshopId)
+                    : Map.of("token", token, "item", workshopId, "mod", mod));
+        }
+    }
+
+    /** Admins: switch a mod off for everybody at once, without asking the players. */
+    void requestEmergencyOff(String mod) {
+        if (token != null) {
+            link.send("change", Map.of("token", token, "action", "off", "mod", mod, "urgent", "1"));
         }
     }
 

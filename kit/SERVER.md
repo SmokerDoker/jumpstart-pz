@@ -52,6 +52,25 @@ Before every start it installs a newer **signed** Jumpstart release (if there is
 game update through SteamCMD replaced the file. The `-` in front keeps the server starting if anything
 goes wrong (for example no network). If SteamCMD runs in `ExecStartPre` too, put this line after it.
 
+The setup writes this drop-in itself with `--systemd <unit>` (as root; it runs
+`systemctl daemon-reload`): `/etc/systemd/system/<unit>.service.d/jumpstart.conf`, with the same
+options as the install. systemd runs drop-in lines after the unit's own `ExecStartPre`, so after a
+SteamCMD update there.
+
+### A game update through SteamCMD
+
+SteamCMD replaces the game's start files with every game update (`ProjectZomboid64.json` on Linux,
+`StartServer64.bat` on Windows); Jumpstart's `-javaagent` is gone then, and the server starts without
+Jumpstart. Every install and `--update` therefore also writes a start script of Jumpstart's own next
+to the game's, which SteamCMD leaves alone:
+
+- Linux: `start-server-jumpstart.sh` (runs the setup with `--update`, then `./start-server.sh "$@"`)
+- Windows: `StartServer64-Jumpstart.bat` (the same, then `StartServer64.bat %*`)
+
+Start the server with that script instead of the game's, or use the systemd drop-in above. A start
+script of your own (or a wrapper like a wake-on-connect service) can run the same `--update` line
+first instead.
+
 ### Windows
 
 In PowerShell, in the server folder (`...\steamapps\common\Project Zomboid Dedicated Server`):
@@ -61,8 +80,8 @@ Invoke-WebRequest -UseBasicParsing https://github.com/SmokerDoker/jumpstart-pz/r
 .\jre64\bin\java.exe -jar JumpstartSetup.jar --server . --name servertest
 ```
 
-Updates and repair: run the same line with `--update` before starting the server (for example as the
-first line of your own start script). On Windows the jar does not replace itself; download it again
+Updates and repair: start the server with `StartServer64-Jumpstart.bat` (see above), or run the same
+line with `--update` before starting it. On Windows the jar does not replace itself; download it again
 for a new installer version.
 
 ### After installing
@@ -71,8 +90,11 @@ for a new installer version.
 2. The log shows `[Jumpstart] multiplayer: server side ready; Java mods for the clients: [...]`.
 3. Give yourself admin rights (`setaccesslevel <name> admin` in the server console). Only admins switch
    Java mods in multiplayer: in the game, Ctrl+Shift+J, tab **Server**, Enter = load/update for
-   everybody, A = off/on for everybody, U = remove. Every other player has to agree; whoever says no or
-   is not ready within 3 minutes is disconnected.
+   everybody, A = off/on for everybody, U = remove, X twice = off now for everybody (emergency, see
+   below). Every other player has to agree; whoever says no or is not ready within 3 minutes is
+   disconnected. Install: from the Java or Lua library tab (Enter); the server downloads the item first.
+   A Workshop item with several mods (variants like 60 / 80 %, or a mod with add-ons) shows its mods
+   in the Server tab: choose the one to install (Enter), Backspace cancels.
 
 ### Joining
 
@@ -96,5 +118,32 @@ part in it, or is compared right after it.
 The time for step 1 is 3 minutes. To change it (30 to 900 seconds), put
 `server_countdown_seconds = 120` into BiteCheck's `config.toml` on the server, or start the server
 with `-Djumpstart.countdown=120`. The world never stays stopped longer than 3 minutes.
+
+After an install or a remove, every player's game works out the game's Lua checksum again and the
+server compares it with its own (whose differs is disconnected; the game would turn them away at their
+next join anyway). The server works its own out again too, so players who join later are not turned
+away with "Lua checksum" for a mod installed live. At its start the server checks that it works the
+checksum out exactly as the game does (log: `Lua checksum: worked out again, same as the game's`); if
+not, it leaves the game's alone, and after a live install a restart is the safe way for later players.
+Item scripts and animations of a live-installed mod still load only with the next start of the server
+(the game checks their checksums too: restart the server after installing such a mod).
+
+### Snapshots
+
+At the start of every change for everybody (not an emergency switch-off), the server saves its world
+and copies the save into `<data folder>/jumpstart/snapshots/Multiplayer_<servername>/<time>.zip` (the
+last 5), while the game goes on; step 2 waits for the copy (at most 2 minutes more). Setting:
+`snapshots=auto|on|off` in `<data folder>/jumpstart/settings.properties`; `auto` (the default) skips
+saves of 500 MB or more. To go back: stop the server, move `Saves/Multiplayer/<servername>` away, and
+unzip the snapshot into `Saves/` (the zip holds `Multiplayer/<servername>/...`).
+
+### Emergency switch-off
+
+A mod that breaks the game, or that BiteCheck blocks, has to go now. An admin presses X twice on it in
+the Server tab: everybody switches it off within 20 seconds, nobody is asked, no snapshot; whoever
+cannot is disconnected. A change that runs already finishes first. The server does the same by itself:
+every 15 minutes it fetches BiteCheck's index again, and a running Java mod that is blocked now (its key
+revoked, found to be malware) goes off for everybody. A mod that is only flagged is written to the log;
+an admin decides.
 
 Remove: the same line with `--uninstall` instead of `--headless --update`.
