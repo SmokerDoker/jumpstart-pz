@@ -1105,6 +1105,16 @@ final class GameActions implements Actions {
     }
 
     @Override
+    public long callsWhileOff(String modId) {
+        String r = zombieBuddy.callsWhileOff(modId);
+        try {
+            return r == null || r.isBlank() ? 0 : Long.parseLong(r.strip());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    @Override
     public String crashReport() {
         StringBuilder mods = new StringBuilder("id\tkind\tstate\tworkshop\tjar sha256 (running)\tBiteCheck\tcrash protection\tjar\n");
         for (InstalledMod m : installedMods()) {

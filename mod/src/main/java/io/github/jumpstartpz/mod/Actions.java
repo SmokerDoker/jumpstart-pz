@@ -176,6 +176,14 @@ interface Actions {
         return List.of();
     }
 
+    /**
+     * How often a switched-off Java mod's code was called since (the trip wire in each of its methods
+     * returned at once): more than 0 means something still holds it. 0 when unknown.
+     */
+    default long callsWhileOff(String modId) {
+        return 0;
+    }
+
     /** Writes a report zip (logs, mods, crash protection, system); "OK path" or what went wrong. */
     default String crashReport() {
         return "not in the game";

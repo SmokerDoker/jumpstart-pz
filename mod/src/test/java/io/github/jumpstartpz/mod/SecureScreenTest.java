@@ -423,6 +423,25 @@ class SecureScreenTest {
     }
 
     @Test
+    void anOffModWhoseCodeIsStillCalledSaysSo() {
+        actions.states.put("Verified", "off");
+        actions.held.put("Verified", 7L);
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        frame();
+        assertTrue(game.drew("Off, but something still calls its Java code (7 times since"));
+        actions.states.put("Verified", "on");
+        tap(SecureScreen.KEY_ESCAPE);
+        openScreen();
+        settle();
+        selectInstalled("Verified");
+        game.drawn.clear();
+        frame();
+        assertFalse(game.drew("something still calls"), "only for a mod that is off");
+    }
+
+    @Test
     void leftAndRightSortTheLibrary() {
         openScreen();
         tap(SecureScreen.KEY_TAB);
@@ -1582,6 +1601,8 @@ class SecureScreenTest {
         boolean verifiedOnly;
 
         @Override public boolean updateReady(ModEntry mod) { return updates.contains(mod.id()); }
+        final Map<String, Long> held = new HashMap<>();
+        @Override public long callsWhileOff(String modId) { return held.getOrDefault(modId, 0L); }
 
         @Override
         public List<String[]> versions(ModEntry mod) {

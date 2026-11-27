@@ -106,6 +106,14 @@ public final class ZombieBuddyFork implements HotswapBackend {
         return callStrings("guardStatus", modId);
     }
 
+    /**
+     * Calls into a switched-off mod's code since (the trip wire in every method returns at once and
+     * counts): "0" when nothing holds it, "" for an unknown mod, null when this ZombieBuddy cannot tell.
+     */
+    public String callsWhileOff(String modId) {
+        return callStrings("callsWhileOff", modId);
+    }
+
     /** After uninstalling: the fork drops what it recorded for the mod (its journal). */
     public String forget(String modId) {
         return callStrings("forget", modId);
