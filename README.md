@@ -41,7 +41,8 @@ Press **Ctrl+Shift+J** in the game (main menu or a running save) to open Jumpsta
   load live too; parts the game reads only while a save loads (maps, sandbox options, sounds, 3D models,
   ...) follow with the next load of the save, and the screen says so; in single player L loads the save
   again by itself (it saves, goes to the main menu and continues the save). Items of a mod that is off
-  are not lost when the save loads without it: they wait in their container and come back with the mod.
+  are not lost when the save loads without it: a red game piece named after the item waits in its place
+  and turns back into the item when the mod is on again.
 - **Performance per mod.** P measures 10 seconds of play: every mod's milliseconds per frame on the
   main thread, its Java and its Lua, in the mod's details. Costs nothing while it does not measure.
 - **Crash protection.** If a mod's Java patch throws, the game keeps running; after repeated errors

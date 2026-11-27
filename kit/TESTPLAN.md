@@ -104,10 +104,11 @@ zwar eine Sicherung an, siehe Reiter **Sicherungen** im Hauptmenü). Die Test-Mo
    Spielstand nach etwa einer Sekunde von selbst wieder, ohne Klick.
 3. Danach ist die Mod ganz an (bzw. ganz aus). In `console.txt`: `[Jumpstart] load the save again: …`.
 4. Items einer Mod, die aus ist: Vorher ein Item der Mod in eine Kiste legen und eins ins Inventar (gern
-   mehrere gleiche). Mod aus, **L**: Die Items sind weg (das Spiel kennt sie nicht), in `console.txt` steht
-   `items of a missing mod wait in the save: …`. Speichern, Mod wieder an, **L**: Alle Items sind wieder
-   da, in der Kiste und im Inventar, mit Zustand und Anzahl (`… are in their place again`). Am Boden
-   liegende Items und Fahrzeugteile kommen nicht zurück.
+   mehrere gleiche). Mod aus, **L**: An ihrer Stelle liegt je eine rote Spielfigur „Mod fehlt (…): …“
+   (bei mehreren gleichen mit `x3`), in `console.txt` steht `items of a missing mod wait in the save: …`.
+   Eine Spielfigur in eine andere Kiste legen. Speichern, Mod wieder an, **L**: Alle Items sind wieder da,
+   auch in der anderen Kiste, mit Zustand und Anzahl, die Spielfiguren sind weg (`… are in their place
+   again`). Am Boden liegende Items und Fahrzeugteile kommen nicht zurück.
 
 Im Multiplayer dasselbe über **Lua-Bibliothek → für alle installieren** mit einer Workshop-Mod, die
 Items bringt: alle müssen das Item danach haben; wer danach beitritt, darf nicht mit „checksum“

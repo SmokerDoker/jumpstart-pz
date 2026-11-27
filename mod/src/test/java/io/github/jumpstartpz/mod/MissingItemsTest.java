@@ -26,12 +26,17 @@ class MissingItemsTest {
         }
     }
 
+    /** A placeholder the fake game made: the name it shows, what it carries. */
+    private record Holder(String name, MissingItems.Kept kept) {
+    }
+
     private static final class FakeGame implements MissingItems.Game {
+        boolean placeholders = true;
         final Map<Short, String[]> types = new HashMap<>();
         final Map<String, Short> loadedTypes = new HashMap<>();
         final Map<Object, Object> owners = new IdentityHashMap<>();
         final Map<Object, List<MissingItems.Kept>> modData = new IdentityHashMap<>();
-        final Map<Object, List<Item>> contents = new IdentityHashMap<>();
+        final Map<Object, List<Object>> contents = new IdentityHashMap<>();
         boolean client;
 
         @Override public String[] typeOf(short id) { return types.get(id); }
@@ -44,7 +49,7 @@ class MissingItemsTest {
             return new Item(b);
         }
 
-        @Override public void add(Object container, Object item) { contents.computeIfAbsent(container, c -> new ArrayList<>()).add((Item) item); }
+        @Override public void add(Object container, Object item) { contents.computeIfAbsent(container, c -> new ArrayList<>()).add(item); }
         @Override public void setId(Object item, int id) { ((Item) item).id = id; }
         @Override public Object ownerOf(Object container) { return owners.get(container); }
         @Override public List<MissingItems.Kept> read(Object owner) { return modData.getOrDefault(owner, List.of()); }
@@ -59,6 +64,11 @@ class MissingItemsTest {
         }
 
         @Override public boolean multiplayerClient() { return client; }
+        @Override public Object placeholder(MissingItems.Kept kept, String name) { return placeholders ? new Holder(name, kept) : null; }
+        @Override public MissingItems.Kept keptIn(Object item) { return item instanceof Holder h ? h.kept() : null; }
+        @Override public List<Object> items(Object container) { return new ArrayList<>(contents.getOrDefault(container, List.of())); }
+        @Override public void remove(Object container, Object item) { contents.get(container).remove(item); }
+        @Override public String language() { return "DE"; }
     }
 
     private final FakeGame game = new FakeGame();
@@ -104,7 +114,38 @@ class MissingItemsTest {
     }
 
     @Test
-    void anItemOfAMissingModWaitsInItsOwnersDataWithItsCopies() {
+    void aPlaceholderTakesTheMissingItemsPlaceAndCarriesItsCopies() {
+        ByteBuffer b = containerWith(3, (short) 812, 1001, 1002);
+        MissingItems.containerEnter(crate);
+        b.getInt(); // the count
+        loadUnknownItem(b);
+        MissingItems.containerExit(crate);
+        assertTrue(game.contents.isEmpty(), "a moment later, on the main thread");
+        settle();
+
+        assertEquals(1, game.contents.get(crate).size());
+        Holder holder = (Holder) game.contents.get(crate).get(0);
+        assertEquals("Mod fehlt (SwordMod): Katana x3", holder.name());
+        assertArrayEquals(new int[] {1001, 1002}, holder.kept().copyIds());
+        assertTrue(game.modData.isEmpty(), "nothing invisible with the owner");
+
+        // the placeholder moved to the player's bag; the mod is back; the bag loads
+        Object bag = new Object();
+        game.contents.get(crate).clear();
+        game.contents.computeIfAbsent(bag, c -> new ArrayList<>()).add(holder);
+        game.loadedTypes.put("SwordMod.Katana", (short) 40);
+        MissingItems.containerEnter(bag);
+        MissingItems.containerExit(bag);
+        settle();
+        List<Object> items = game.contents.get(bag);
+        assertEquals(3, items.size(), "the item and both copies; the placeholder is gone");
+        assertEquals(List.of(0, 1001, 1002), items.stream().map(i -> ((Item) i).id).toList());
+        assertEquals(40, ByteBuffer.wrap(((Item) items.get(0)).bytes).getShort(4), "the registry id of this save");
+    }
+
+    @Test
+    void withoutAPlaceholderItWaitsInItsOwnersDataWithItsCopies() {
+        game.placeholders = false;
         ByteBuffer b = containerWith(3, (short) 812, 1001, 1002);
         MissingItems.containerEnter(crate);
         b.getInt(); // the count
@@ -136,10 +177,10 @@ class MissingItemsTest {
         MissingItems.containerEnter(crate);
         MissingItems.containerExit(crate);
         settle();
-        List<Item> items = game.contents.get(crate);
+        List<Object> items = game.contents.get(crate);
         assertEquals(3, items.size());
-        assertEquals(40, ByteBuffer.wrap(items.get(0).bytes).getShort(4), "the registry id of this save");
-        assertEquals(List.of(0, 1001, 1002), items.stream().map(i -> i.id).toList(), "the copies keep their own ids");
+        assertEquals(40, ByteBuffer.wrap(((Item) items.get(0)).bytes).getShort(4), "the registry id of this save");
+        assertEquals(List.of(0, 1001, 1002), items.stream().map(i -> ((Item) i).id).toList(), "the copies keep their own ids");
         assertTrue(!game.modData.containsKey(crateObject), "nothing left waiting");
     }
 
@@ -152,7 +193,20 @@ class MissingItemsTest {
     }
 
     @Test
+    void aPlaceholderWaitsWhileTheModIsStillOff() {
+        Holder holder = new Holder("x", new MissingItems.Kept("SwordMod.Katana", "SwordMod", 219, false, containerBytes(), new int[0]));
+        game.contents.computeIfAbsent(crate, c -> new ArrayList<>()).add(holder);
+        MissingItems.containerEnter(crate);
+        MissingItems.containerExit(crate);
+        settle();
+        assertEquals(List.of(holder), game.contents.get(crate));
+        assertEquals("Missing mod (?): Katana", MissingItems.placeholderName(
+                new MissingItems.Kept("SwordMod.Katana", "", 219, false, new byte[0], new int[0]), "EN"));
+    }
+
+    @Test
     void anItemInsideAnotherItemHasNoCopies() {
+        game.placeholders = false;
         ByteBuffer b = containerWith(3, (short) 812, 1001, 1002);
         MissingItems.containerEnter(crate);
         b.getInt();
@@ -166,6 +220,7 @@ class MissingItemsTest {
 
     @Test
     void notInAContainerOrInMultiplayerNothingIsKept() {
+        game.placeholders = false;
         ByteBuffer b = containerWith(1, (short) 812);
         b.getInt();
         loadUnknownItem(b); // a floor item: no container around it
@@ -184,6 +239,7 @@ class MissingItemsTest {
 
     @Test
     void anItemTheGameLoadsIsLeftAlone() {
+        game.placeholders = false;
         ByteBuffer b = containerWith(1, (short) 812);
         MissingItems.containerEnter(crate);
         b.getInt();
