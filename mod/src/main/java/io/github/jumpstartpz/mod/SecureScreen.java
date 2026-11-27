@@ -2705,6 +2705,10 @@ public final class SecureScreen {
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("mod") + mod.id()
                     + (mod.workshopId() > 0 ? "   Workshop " + mod.workshopId() : ""), 0.65f, 0.65f, 0.65f);
             y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get("file") + shorten(mod.java().jar().toString(), 90), 0.55f, 0.55f, 0.55f);
+            long held = stateOf(mod.id()).startsWith("off") ? actions.callsWhileOff(mod.id()) : 0;
+            if (held > 0) {
+                y = wrapped(GameScreen.Font.SMALL, tx, y, tw, String.format(Locale.ROOT, texts.get("java.held"), held), 1f, 0.8f, 0.3f);
+            }
             if (!mod.id().equals(SELF) && actions.updateReady(mod.java())) {
                 y = wrapped(GameScreen.Font.SMALL, tx, y, tw, texts.get(actions.verifiedUpdatesOnly() ? "updates.readyVerified" : "updates.ready"),
                         0.5f, 0.8f, 1f);

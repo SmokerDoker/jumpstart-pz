@@ -47,14 +47,14 @@ in-process restart of the game's start phases) or *restart*.
 - [ ] A trial run before a mod is switched on
 - [x] Crash report as a zip (C in the installed tab: console log, the mods with state, hash and BiteCheck's word, what the crash protection caught, system, the JVM's crash files; written to `Zomboid/jumpstart/reports/`, sent nowhere)
 - [x] After switching off: Lua functions from the mod's files still reachable from the globals are named (Lua side)
-- [ ] The same check for the Java side (classes of the mod still referenced after it is off: needs the fork)
+- [x] The same check for the Java side: every call into a switched-off mod's code is caught by the trip wire and counted; the details say when something still calls it
 - [ ] Move structural class changes out (nestmates, invokedynamic)
 - [x] Registration journal: entries a mod adds to the game's tables while it loads live (a key binding in `keyBinding`, list and lookup entries) go when it is switched off; lists close up (`table.remove`), the entry comes back at the end
 - [ ] Registrations a mod made in a save it came with (no record from before it loaded), and values it changed in existing entries
 - [x] Files a mod created wait in `Zomboid/jumpstart/parked/<mod>/` while it is off and come back when it is on (never over a new file); uninstalling archives them
 - [ ] Java writes into instance fields (today static fields only)
 - [ ] ModData on single objects; placeholder items for items of a removed mod
-- [ ] Trip wire in every mod method, not only at the start of each patch
+- [x] Trip wire in every method of a mod's own classes, not only at the start of each patch; switching off trips it (not in constructors, equals/hashCode/toString, delegation patches, libraries a mod ships under their own name)
 
 ## 3. Marketplace and updates
 
