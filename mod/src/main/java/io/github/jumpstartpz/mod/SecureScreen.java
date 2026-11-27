@@ -273,6 +273,7 @@ public final class SecureScreen {
     public static void onRender() {
         LuaStartJournal.onFrame(); // the first frame after the game loaded its Lua ends that record
         SaveReload.onFrame(System.currentTimeMillis()); // back in the main menu: continue the save
+        MissingItems.onFrame(System.currentTimeMillis()); // items of missing mods: kept, or back in place
         SecureScreen screen = current;
         if (screen == null) {
             return;
