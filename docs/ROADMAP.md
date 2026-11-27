@@ -60,7 +60,7 @@ in-process restart of the game's start phases) or *restart*.
 - [x] Registrations a mod made in a save it came with, and values it changed in existing entries (live and with the save): the start record keeps what a mod's running code writes into a global table; lists count by value, so an entry inserted at the front goes and the entries it moved stay; a value the game changed again since stays without a word. Not covered: a registration a game function makes for the mod (the innermost Lua function counts), entries two tables down
 - [x] Files a mod created wait in `Zomboid/jumpstart/parked/<mod>/` while it is off and come back when it is on (never over a new file); uninstalling archives them
 - [x] Java writes into instance fields of game objects go back when the mod is switched off (per object, only where the field still holds the mod's value; not in the mod's constructors)
-- [ ] Placeholder items for items of a removed mod (section 5)
+- [x] Items of a mod that is not loaded wait in the save instead of being lost (section 5)
 - Decided: ModData a mod put on single objects (items, players) stays in the save; the game ignores keys nobody reads, and taking them out would mean going through every chunk of the save
 - [x] Trip wire in every method of a mod's own classes, not only at the start of each patch; switching off trips it (not in constructors, equals/hashCode/toString, delegation patches, libraries a mod ships under their own name)
 
@@ -104,7 +104,8 @@ in-process restart of the game's start phases) or *restart*.
 ## 5. More
 
 - [ ] Native libraries in a helper process
-- [ ] Placeholder items in saves
+- [x] Items of a missing mod in saves (single player): the game drops an item whose type it does not know while it loads a container; Jumpstart keeps its bytes (identical copies too) in the ModData of the container's owner (crate, player, bag), and once the mod is back the item is loaded from them and is in its place again, exactly as it was. Invisible while the mod is off. Not covered: items on the floor, vehicle parts, multiplayer (the server owns the containers). Untested in the game
+- [ ] The same on servers, and a visible placeholder (a "missing item" the player can see) instead of an invisible one
 - [ ] Performance measurement per mod
 - [x] Lean main menu: it loads only ZombieBuddy, the mods load once with the game (saves 2 to 3 minutes at start with many mods)
 - [x] Jumpstart's Lua recording reports its own time in the log ("recording took ... ms")

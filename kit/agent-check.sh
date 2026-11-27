@@ -81,6 +81,15 @@ public class LoadGameClasses {
             // loading the save again (GameActions.reloadSave, SaveReload)
             "zombie.iso.IsoWorld#instance", "zombie.iso.IsoWorld.getWorld()", "zombie.core.Core.getInstance()", "zombie.core.Core.quit()",
             "zombie.GameWindow#states", "zombie.gameStates.GameStateMachine#current",
+            // items of missing mods (MissingItems; its hooks: InventoryItem.loadItem with 4 arguments, ItemContainer.load)
+            "zombie.inventory.InventoryItem.loadItem(java.nio.ByteBuffer,int,boolean,zombie.inventory.InventoryItem)",
+            "zombie.inventory.ItemContainer.load(java.nio.ByteBuffer,int)",
+            "zombie.world.WorldDictionary.getItemTypeFromID(short)", "zombie.world.WorldDictionary.getItemModID(short)",
+            "zombie.world.WorldDictionary.getItemRegistryID(java.lang.String)", "zombie.scripting.ScriptManager.getItem(java.lang.String)",
+            "zombie.inventory.InventoryItem.loadItem(java.nio.ByteBuffer,int)", "zombie.inventory.InventoryItem.setID(int)",
+            "zombie.inventory.ItemContainer.AddItem(zombie.inventory.InventoryItem)", "zombie.inventory.ItemContainer#containingItem",
+            "zombie.inventory.ItemContainer#parent", "zombie.network.GameClient#client", "zombie.Lua.LuaManager#platform",
+            "zombie.iso.IsoObject.hasModData()", "zombie.inventory.InventoryItem.hasModData()",
         };
         ClassLoader cl = LoadGameClasses.class.getClassLoader();
         java.util.List<String> missing = new java.util.ArrayList<>();

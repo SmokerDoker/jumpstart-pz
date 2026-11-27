@@ -52,6 +52,7 @@ final class GameHooks {
         checkVisible(FileJournal.class);
         checkVisible(ModDataJournal.class);
         checkVisible(LuaStartJournal.class);
+        checkVisible(MissingItems.class);
         run(instrumentation, new AgentBuilder.Default()
                 .disableClassFormatChanges()
                 .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
@@ -91,6 +92,13 @@ final class GameHooks {
                                 .method(named("rawset").and(takesArguments(Object.class, Object.class)),
                                         (t, m, mv, c, p, w, r) -> callOnEntry(mv, START, "onSet",
                                                 "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V", 0, 1, 2))))
+                // items of a mod that is not loaded: kept in the save instead of dropped (MissingItems)
+                .type(named("zombie.inventory.InventoryItem")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("loadItem").and(takesArguments(4)), (t, m, mv, c, p, w, r) -> itemLoad(mv))))
+                .type(named("zombie.inventory.ItemContainer")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("load").and(takesArguments(2)), (t, m, mv, c, p, w, r) -> containerLoad(mv))))
                 .type(named("zombie.world.moddata.GlobalModData")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .method(named("getOrCreate").and(takesArguments(String.class))
@@ -102,6 +110,67 @@ final class GameHooks {
     private static final String FILES = "io/github/jumpstartpz/mod/FileJournal";
     private static final String MODDATA = "io/github/jumpstartpz/mod/ModDataJournal";
     private static final String START = "io/github/jumpstartpz/mod/LuaStartJournal";
+    private static final String MISSING = "io/github/jumpstartpz/mod/MissingItems";
+
+    /**
+     * InventoryItem.loadItem(ByteBuffer, int, boolean, InventoryItem), static: MissingItems.itemEnter(buffer)
+     * at the start, itemExit(result, buffer, version) before each return, itemAbort() before each throw.
+     * No jumps added, so no new stack map frames.
+     */
+    private static MethodVisitor itemLoad(MethodVisitor mv) {
+        return new MethodVisitor(Opcodes.ASM9, mv) {
+            @Override
+            public void visitCode() {
+                super.visitCode();
+                super.visitVarInsn(Opcodes.ALOAD, 0);
+                super.visitMethodInsn(Opcodes.INVOKESTATIC, MISSING, "itemEnter", "(Ljava/nio/ByteBuffer;)V", false);
+            }
+
+            @Override
+            public void visitInsn(int opcode) {
+                if (opcode == Opcodes.ARETURN) {
+                    super.visitInsn(Opcodes.DUP);
+                    super.visitVarInsn(Opcodes.ALOAD, 0);
+                    super.visitVarInsn(Opcodes.ILOAD, 1);
+                    super.visitMethodInsn(Opcodes.INVOKESTATIC, MISSING, "itemExit", "(Ljava/lang/Object;Ljava/nio/ByteBuffer;I)V", false);
+                } else if (opcode == Opcodes.ATHROW) {
+                    super.visitMethodInsn(Opcodes.INVOKESTATIC, MISSING, "itemAbort", "()V", false);
+                }
+                super.visitInsn(opcode);
+            }
+
+            @Override
+            public void visitMaxs(int maxStack, int maxLocals) {
+                super.visitMaxs(maxStack + 3, maxLocals);
+            }
+        };
+    }
+
+    /** ItemContainer.load(ByteBuffer, int): MissingItems.containerEnter(this) at the start, containerExit(this) before each return or throw. */
+    private static MethodVisitor containerLoad(MethodVisitor mv) {
+        return new MethodVisitor(Opcodes.ASM9, mv) {
+            @Override
+            public void visitCode() {
+                super.visitCode();
+                super.visitVarInsn(Opcodes.ALOAD, 0);
+                super.visitMethodInsn(Opcodes.INVOKESTATIC, MISSING, "containerEnter", "(Ljava/lang/Object;)V", false);
+            }
+
+            @Override
+            public void visitInsn(int opcode) {
+                if (opcode == Opcodes.ARETURN || opcode == Opcodes.ATHROW) {
+                    super.visitVarInsn(Opcodes.ALOAD, 0);
+                    super.visitMethodInsn(Opcodes.INVOKESTATIC, MISSING, "containerExit", "(Ljava/lang/Object;)V", false);
+                }
+                super.visitInsn(opcode);
+            }
+
+            @Override
+            public void visitMaxs(int maxStack, int maxLocals) {
+                super.visitMaxs(maxStack + 1, maxLocals);
+            }
+        };
+    }
 
     /** At the method's start: target(the given reference arguments). No jump, so no new stack map frame. */
     private static MethodVisitor callOnEntry(MethodVisitor mv, String owner, String name, String descriptor, int... slots) {
