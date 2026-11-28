@@ -197,9 +197,18 @@ final class GameHooks {
      */
     static void installServer(Instrumentation instrumentation) {
         checkVisible(io.github.jumpstartpz.mod.net.Net.class);
+        checkVisible(MissingItems.class);
         run(instrumentation, new AgentBuilder.Default()
                 .disableClassFormatChanges()
                 .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
+                // items of a mod that is not loaded: the server loads the world's containers and the
+                // players' inventories (it keeps them), so it keeps their items too (MissingItems)
+                .type(named("zombie.inventory.InventoryItem")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("loadItem").and(takesArguments(4)), (t, m, mv, c, p, w, r) -> itemLoad(mv))))
+                .type(named("zombie.inventory.ItemContainer")).transform((builder, type, loader, module, domain) -> builder.visit(
+                        new AsmVisitorWrapper.ForDeclaredMethods()
+                                .method(named("load").and(takesArguments(2)), (t, m, mv, c, p, w, r) -> containerLoad(mv))))
                 .type(named("zombie.network.GameServer")).transform((builder, type, loader, module, domain) -> builder.visit(
                         new AsmVisitorWrapper.ForDeclaredMethods()
                                 .method(named("receiveClientCommand"), (t, m, mv, c, p, w, r) -> redirect(mv, TRIGGER4, "serverEvent"))))
