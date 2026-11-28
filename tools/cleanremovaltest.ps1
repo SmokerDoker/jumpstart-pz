@@ -88,9 +88,15 @@ Check "game and Lua server up" $ping ($ping -eq "pong")
 
 # a new game without a click: the menu's New Game through Lua (tools\lua\new-game.lua); only if that
 # does not work, a person starts one in the game window
-$menuReady = (Get-Date).AddMinutes(2)
-do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
-$newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+# with the lean main menu the first answer is RESET, or an error as Lua resets under the request
+# (its New Game loads the mods first): then again
+$newGame = ""
+for ($try = 0; $try -lt 2 -and $newGame -notlike "OK*"; $try++) {
+    $menuReady = (Get-Date).AddMinutes(3)
+    do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil and JST_NewGameClicked == nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
+    $newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+    if ($newGame -notlike "OK*") { Log "     new game: $newGame" }
+}
 Log "     new game: $newGame"
 if ($newGame -notlike "OK*") {
     Write-Host "Start a NEW single player game in the game window now (any settings). Waiting up to $WaitForSaveMinutes minutes..."
