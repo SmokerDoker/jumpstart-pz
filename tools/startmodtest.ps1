@@ -7,8 +7,10 @@
   Isolated like cleanremovaltest.ps1 (own -cachedir, ZombieBuddy config, BiteCheck folder); nothing of
   your own setup changes. Uses Jumpstart.jar built on the fork's test jar (Lua server on port 4444).
   The test mod tools\testmods\JSTCleanTest is in the mod list BEFORE the game starts, so the new game
-  loads it with the save (not live). The script starts the game and WAITS until you start a new
-  single player game (any settings). Then:
+  loads it with the save (not live). The fork's ZombieBuddy mod folder is in the list too, as
+  Jumpstart's installer puts it there: the main menu is lean (only ZombieBuddy loaded), and the menu's
+  New Game loads the list first (its Lua). The script starts a new game through the menu's New Game
+  (tools\lua\new-game.lua); only if that fails it WAITS until you start one. Then:
   - on: JST_Marker, JSTCleanTest, its luautils.stringStarts, window and OnTick handler are there
   - A switches it off: its globals are nil, the game's luautils.stringStarts is back, the window is
     closed, the handler is stopped, and the screen says "off" (not "off, fully with the next load")
@@ -19,6 +21,8 @@ param(
     [string]$GameDir = "C:\Program Files (x86)\Steam\steamapps\common\ProjectZomboid",
     [string]$AgentJar = (Join-Path $PSScriptRoot "..\mod\build\agent\Jumpstart.jar"),
     [string]$TestMod = (Join-Path $PSScriptRoot "testmods\JSTCleanTest"),
+    # the fork's checkout: its ZombieBuddy mod folder (42, common) goes into the test's mods
+    [string]$ZombieBuddyFork = (Join-Path $PSScriptRoot "..\third_party\zombiebuddy-jumpstart"),
     [string]$TestDir = "$env:USERPROFILE\Zomboid-jumpstart-start-test",
     [int]$WaitForSaveMinutes = 10,
     # the main menu loads all mods of its list (ZombieBuddy's lean menu off)
@@ -68,13 +72,19 @@ if (GameProcess) { throw "Project Zomboid is already running; close it first" }
 
 New-Item -ItemType Directory -Force "$t\mods", "$t\.zombie_buddy", "$t\.bitecheck", "$t\jumpstart" | Out-Null
 Remove-Item $result -ErrorAction SilentlyContinue
-foreach ($old in "$t\mods\JSTCleanTest", "$t\Saves", "$t\Lua\jstcleantest.txt") {
+foreach ($old in "$t\mods\JSTCleanTest", "$t\mods\ZombieBuddy", "$t\Saves", "$t\Lua\jstcleantest.txt") {
     if (Test-Path $old) { Remove-Item $old -Recurse -Force }
 }
 Copy-Item (Resolve-Path $TestMod) "$t\mods\JSTCleanTest" -Recurse
+# the fork's ZombieBuddy mod folder as kit/zombiebuddy-mod.sh builds it (Lua, no jar)
+$zb = "$t\mods\ZombieBuddy"
+New-Item -ItemType Directory -Force $zb | Out-Null
+Copy-Item (Join-Path (Resolve-Path $ZombieBuddyFork) "42") "$zb\42" -Recurse
+Copy-Item (Join-Path (Resolve-Path $ZombieBuddyFork) "common") "$zb\common" -Recurse
+[IO.File]::WriteAllLines("$zb\42\mod.info", [string[]](Get-Content "$zb\42\mod.info" | Where-Object { $_ -notmatch '^java(JarFile|PkgName)=' }))
 Copy-Item (Resolve-Path $AgentJar) "$t\Jumpstart.jar" -Force
 # the mod is on before the game starts: a new game loads it with the save
-[IO.File]::WriteAllText("$t\mods\default.txt", "VERSION = 1,`r`n`r`nmods`r`n{`r`n    mod = JSTCleanTest,`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n")
+[IO.File]::WriteAllText("$t\mods\default.txt", "VERSION = 1,`r`n`r`nmods`r`n{`r`n    mod = ZombieBuddy,`r`n    mod = JSTCleanTest,`r`n}`r`n`r`nmaps`r`n{`r`n}`r`n")
 [IO.File]::WriteAllText("$t\jumpstart\settings.properties", "snapshots=off`r`n")
 [IO.File]::WriteAllText("$t\.zombie_buddy\mod_approvals.json", '{"formatVersion": 2, "mods": []}')
 
@@ -91,10 +101,21 @@ Check "game and Lua server up" $ping ($ping -eq "pong")
 
 # a new game without a click: the menu's New Game through Lua (tools\lua\new-game.lua); only if that
 # does not work, a person starts one in the game window
-$menuReady = (Get-Date).AddMinutes(2)
-do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
-$newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+# with the lean main menu the first answer is RESET, or an error as Lua resets under the request
+# (its New Game loads the mods first): then again
+$newGame = ""
+for ($try = 0; $try -lt 2 -and $newGame -notlike "OK*"; $try++) {
+    $menuReady = (Get-Date).AddMinutes(3)
+    do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil and JST_NewGameClicked == nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
+    $newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+    if ($newGame -notlike "OK*") { Log "     new game: $newGame" }
+}
 Log "     new game: $newGame"
+if (-not $FullMenu) {
+    $out = Get-Content "$t\game-out.txt" -Raw
+    Check "the main menu was lean (ZombieBuddy of 2 mods)" "" ($out -match 'lean main menu: loading 1 of 2 mods')
+    Check "the menu's New Game loaded the mods first" "" ($out -match "lean main menu: New Game loads the mods of the list first")
+}
 if ($newGame -notlike "OK*") {
     Write-Host "Start a NEW single player game in the game window now (any settings). Waiting up to $WaitForSaveMinutes minutes..."
 }
@@ -107,8 +128,10 @@ Unpause # into the game: past "click to start"
 # --- on, with the save ------------------------------------------------------------------------------
 $r = Lua "return tostring(JST_Marker) .. ' ' .. type(JSTCleanTest)"
 Check "with the save: its globals are there" $r ($r -eq "true table")
-Lua "JST_TableRef = JSTCleanTest; JST_Game = JSTCleanTest.gameStringStarts; JST_Mod = luautils.stringStarts; JST_PanelRef = JSTCleanTest.panel and JSTCleanTest.panel.javaObject; return 1" | Out-Null
-$r = Lua "return tostring(JST_Mod ~= JST_Game)"
+# the test keeps the mod's function two tables deep: Jumpstart looks one deep for what still holds the
+# mod's functions, and the test's own reference is no leftover of the mod
+Lua "JST_TableRef = JSTCleanTest; JST_Game = JSTCleanTest.gameStringStarts; JST_Keep = { t = { mod = luautils.stringStarts } }; JST_PanelRef = JSTCleanTest.panel and JSTCleanTest.panel.javaObject; return 1" | Out-Null
+$r = Lua "return tostring(JST_Keep.t.mod ~= JST_Game)"
 Check "with the save: luautils.stringStarts is the mod's" $r ($r -eq "true")
 # the test mod opens its window in OnGameStart; with a new game that is not always on screen yet
 $r = Lua "return tostring(JST_PanelRef ~= nil and UIManager.getUI():contains(JST_PanelRef))"
@@ -146,7 +169,7 @@ $s = Screen
 Check "the screen says on" $s ($s -match 'state=lua:on(?!,)')
 Key esc
 Start-Sleep 2
-$r = Lua "return tostring(JST_Marker) .. ' ' .. tostring(luautils.stringStarts == JST_Mod)"
+$r = Lua "return tostring(JST_Marker) .. ' ' .. tostring(luautils.stringStarts == JST_Keep.t.mod)"
 Check "on again: its globals and function are back" $r ($r -eq "true true")
 $tk = Ticks
 Check "on again: its OnTick handler runs" "$($tk[0]) -> $($tk[1])" ($tk[0] -ne $tk[1])

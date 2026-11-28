@@ -93,7 +93,8 @@ server does the same by itself when BiteCheck blocks a running mod. A Workshop i
 
 The game loads every mod of the main menu's list at start, and then again for the game you start or
 join, which loads its own list (a server's, a save's, a new game's). With Jumpstart the main menu loads
-only ZombieBuddy; the list itself stays as it is, and your mods load once, with the game. Mod options
+only ZombieBuddy; the list itself stays as it is, and your mods load once, with the game. New Game
+loads them first (a short reload, as after changing the mod list) and then opens as usual. Mod options
 of mods that are not loaded are not in the main menu's options then; they are in the game. To load all
 of them in the main menu again: add `-Dzombiebuddy.fullMenu=true` to the game's launch options.
 

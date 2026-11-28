@@ -114,9 +114,15 @@ $deadline = (Get-Date).AddMinutes(4)
 do { Start-Sleep 5; $ping = Lua "return 'pong'" } until ($ping -eq "pong" -or (Get-Date) -gt $deadline)
 Check "game and Lua server up" $ping ($ping -eq "pong")
 
-$menuReady = (Get-Date).AddMinutes(2)
-do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
-$newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+# with the lean main menu the first answer is RESET, or an error as Lua resets under the request
+# (its New Game loads the mods first): then again
+$newGame = ""
+for ($try = 0; $try -lt 2 -and $newGame -notlike "OK*"; $try++) {
+    $menuReady = (Get-Date).AddMinutes(3)
+    do { Start-Sleep 3; $menu = Lua "return tostring(MainScreen ~= nil and MainScreen.instance ~= nil and MainScreen.instance.desc ~= nil and JST_NewGameClicked == nil)" } until ($menu -eq "true" -or (Get-Date) -gt $menuReady)
+    $newGame = Lua (Get-Content (Join-Path $PSScriptRoot "lua\new-game.lua") -Raw)
+    if ($newGame -notlike "OK*") { Log "     new game: $newGame" }
+}
 Check "a new game starts by itself" $newGame ($newGame -like "OK*")
 $player = WaitForPlayer 5
 Check "a single player game runs" $player ($player -eq "true")

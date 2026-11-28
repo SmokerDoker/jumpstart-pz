@@ -7,7 +7,18 @@ if getPlayer() then return "in a game already" end
 if not ms.desc then ms.desc = SurvivorFactory.CreateSurvivor() end
 
 -- the mods of the new game: the menu's default list, as the menu's Solo button does
-ActiveMods.getById("currentGame"):copyFrom(ActiveMods.getById("default"))
+local current = ActiveMods.getById("currentGame")
+current:copyFrom(ActiveMods.getById("default"))
+-- with the lean main menu they are not loaded yet: the menu's Solo button loads them first (a Lua
+-- reset; the fork's LeanMenu). Answers RESET: call again once the menu is back. The global
+-- below goes with the reset, so finding it still set means the button did not load them.
+if getCore():getOptionModsEnabled() and ActiveMods.requiresResetLua(current) then
+    if JST_NewGameClicked then return "the menu's New Game did not load the mods" end
+    JST_NewGameClicked = true
+    MainScreen.onMenuItemMouseDownMainMenu(ms.survivalOption, 0, 0)
+    return "RESET the menu's New Game loads the mods"
+end
+if ms.soloScreen and ms.soloScreen:isVisible() then ms.soloScreen:setVisible(false) end
 
 getWorld():setGameMode(GameMode.SANDBOX)
 ms:setDefaultSandboxVars()
