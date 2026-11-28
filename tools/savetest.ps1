@@ -13,7 +13,10 @@
   - A switches it off, L twice: the game saves, goes to the main menu and continues the save by itself;
     the tokens are gone and one placeholder (Base.GamePieceRed, "... TestToken x3") carries them
   - A switches it on, L twice: the three tokens are back, the placeholder is gone
+  - its craft recipe is there after the live load, and the game's own recipes are all still there
+    with their inputs (the live load must not reset them)
   - P measures 10 seconds of play; the screen shows the summary when it opens again
+  - C writes a crash report (a zip in Zomboid\jumpstart\reports)
   Results: <TestDir>\savetest-result.txt; exit code = failed checks.
 #>
 param(
@@ -44,8 +47,11 @@ function SelectMod($id) {
     for ($i = 0; $i -lt 80; $i++) { $s = Screen; if ($s -like "* selected=$id *") { return $s }; Key down }
     return Screen
 }
-# a game waits paused for its first click ("click to start"): no ticks run until then
+# a loaded game waits on "click to start" (GameLoadingState): the test clicks it; then the game runs
 function Unpause() {
+    $deadline = (Get-Date).AddSeconds(90)
+    do { $c = Lua "return Jumpstart.testClickToStart()"; if ($c -ne "not loading") { Start-Sleep 2 } } until ($c -eq "not loading" -or (Get-Date) -gt $deadline)
+    if ($c -ne "not loading") { Log "     click to start: $c" }
     $s = Lua "if getGameSpeed() == 0 then setGameSpeed(1) end return tostring(getGameSpeed())"
     if ($s -ne "1") { Log "     game speed: $s" }
     Start-Sleep 1
@@ -73,8 +79,7 @@ function WaitForReload($minutes) {
 }
 $tokens = "local n = 0 local items = getPlayer():getInventory():getItems() for i = 0, items:size() - 1 do if items:get(i):getFullType() == 'JSTItemTest.TestToken' then n = n + 1 end end return tostring(n)"
 $holders = "local names = {} local items = getPlayer():getInventory():getItems() for i = 0, items:size() - 1 do local it = items:get(i) if it:getFullType() == 'Base.GamePieceRed' and it:hasModData() and it:getModData().jumpstartMissing then table.insert(names, it:getName()) end end return #names .. ' ' .. table.concat(names, '; ')"
-# the inventory every 3 s until it holds what is expected (the work runs some seconds after the load,
-# while the game still waits for its first click), at most $seconds
+# the inventory every 3 s until it holds what is expected, at most $seconds
 function Watch($label, $seconds, $wantTokens, $wantHolders) {
     for ($i = 0; $i -lt $seconds; $i += 3) {
         $n = Lua $tokens
@@ -90,7 +95,7 @@ if (GameProcess) { throw "Project Zomboid is already running; close it first" }
 
 New-Item -ItemType Directory -Force "$t\mods", "$t\.zombie_buddy", "$t\.bitecheck", "$t\jumpstart" | Out-Null
 Remove-Item $result -ErrorAction SilentlyContinue
-foreach ($old in "$t\mods\JSTItemTest", "$t\Saves", "$t\mods\default.txt", "$t\jumpstart\snapshots") {
+foreach ($old in "$t\mods\JSTItemTest", "$t\Saves", "$t\mods\default.txt", "$t\jumpstart\snapshots", "$t\jumpstart\reports") {
     if (Test-Path $old) { Remove-Item $old -Recurse -Force }
 }
 Copy-Item (Resolve-Path $TestMod) "$t\mods\JSTItemTest" -Recurse
@@ -119,6 +124,10 @@ Start-Sleep 5
 Unpause
 
 # --- the mod on, three of its items ------------------------------------------------------------------
+# the game's own recipes before: how many, and the inputs of each (a live load must leave them as they are)
+$recipeSum = "local list = getScriptManager():getAllCraftRecipes() local n = 0 for i = 0, list:size() - 1 do n = n + list:get(i):getInputs():size() end return list:size() .. ' recipes, ' .. n .. ' inputs'"
+$recipesBefore = Lua $recipeSum
+Log "     recipes before: $recipesBefore"
 Key open
 $r = SelectMod "JSTItemTest"
 Check "select the test mod" $r ($r -like "*selected=JSTItemTest *")
@@ -127,6 +136,14 @@ Start-Sleep 3
 Key esc
 $r = Lua "return tostring(getScriptManager():getItem('JSTItemTest.TestToken') ~= nil)"
 Check "on: its item exists" $r ($r -eq "true")
+$r = Lua "local list = getScriptManager():getAllCraftRecipes() for i = 0, list:size() - 1 do local c = list:get(i) if c:getName() == 'MakeTestToken' then return 'found, ' .. c:getInputs():size() .. ' input' end end return 'missing'"
+Check "on: its recipe is there" $r ($r -like "found*")
+$recipesAfter = Lua $recipeSum
+$before = [int]($recipesBefore -split ' ')[0]
+$inputsBefore = [int]($recipesBefore -split ' ')[2]
+$after = [int]($recipesAfter -split ' ')[0]
+$inputsAfter = [int]($recipesAfter -split ' ')[2]
+Check "on: the game's recipes are all still there, with their inputs" "$recipesBefore -> $recipesAfter" ($after -eq $before + 1 -and $inputsAfter -ge $inputsBefore + 1)
 Lua "for i = 1, 3 do getPlayer():getInventory():AddItem('JSTItemTest.TestToken') end return 1" | Out-Null
 $r = Lua $tokens
 Check "three tokens in the inventory" $r ($r -eq "3")
@@ -143,8 +160,8 @@ $asked = ReloadSave
 Check "L asks first" $asked ($asked -like "*L*")
 $player = WaitForReload 5
 Check "the save is loaded again by itself" $player ($player -eq "true")
+Unpause # the work runs once the game does: right after "click to start"
 Watch "off" 60 "0" "1 "
-Unpause
 Start-Sleep 3
 $r = Lua "return tostring(getScriptManager():getItem('JSTItemTest.TestToken') ~= nil)"
 Check "off after the load: its item type is gone" $r ($r -eq "false")
@@ -163,8 +180,8 @@ Key esc
 ReloadSave | Out-Null
 $player = WaitForReload 5
 Check "the save is loaded again by itself (2)" $player ($player -eq "true")
+Unpause # the work runs once the game does: right after "click to start"
 Watch "on" 60 "3" "0"
-Unpause
 Start-Sleep 3
 $r = Lua $tokens
 Check "on: the three tokens are back" $r ($r -eq "3")
@@ -181,6 +198,19 @@ Key open
 Start-Sleep 1
 $r = Screen
 Check "P: the summary is shown" $r ($r -like "*Measured*" -or $r -like "*Gemessen*")
+
+# --- C: crash report --------------------------------------------------------------------------------
+Key c
+$deadline = (Get-Date).AddSeconds(60)
+do { Start-Sleep 2; $zip = Get-ChildItem "$t\jumpstart\reports" -Filter *.zip -ErrorAction SilentlyContinue | Select-Object -First 1 } until ($zip -or (Get-Date) -gt $deadline)
+Check "C: a crash report was written" "$($zip.FullName)" ($null -ne $zip)
+if ($zip) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $z = [IO.Compression.ZipFile]::OpenRead($zip.FullName)
+    $names = ($z.Entries | ForEach-Object { $_.FullName }) -join ', '
+    $z.Dispose()
+    Check "C: it holds the console log and the mod list" $names ($names -like "*console*" -and $names -like "*mods*")
+}
 Key esc
 
 $errors = @(Select-String -Path "$t\game-out.txt" -Pattern 'secure screen error|items of missing mods: ' -ErrorAction SilentlyContinue)

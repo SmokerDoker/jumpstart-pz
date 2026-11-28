@@ -67,7 +67,10 @@ final class CrashReport {
             if (gameDir != null && Files.isDirectory(gameDir)) {
                 List<Path> crashes = new ArrayList<>();
                 try (Stream<Path> files = Files.list(gameDir)) {
-                    files.filter(f -> f.getFileName().toString().matches("(hs_err_pid|replay_pid)\\d+\\.log")).forEach(crashes::add);
+                    long since = System.currentTimeMillis() - JVM_CRASH_DAYS * 86_400_000L;
+                    // the last week only: an old crash of the JVM says nothing about this one
+                    files.filter(f -> f.getFileName().toString().matches("(hs_err_pid|replay_pid)\\d+\\.log") && modified(f) > since)
+                            .forEach(crashes::add);
                 }
                 crashes.sort(Comparator.comparing(CrashReport::modified).reversed());
                 for (Path f : crashes.subList(0, Math.min(3, crashes.size()))) {
@@ -81,6 +84,9 @@ final class CrashReport {
         Files.move(tmp, zip);
         return zip;
     }
+
+    /** JVM crash files older than this many days stay out of the report. */
+    static final long JVM_CRASH_DAYS = 7;
 
     private static long modified(Path f) {
         try {

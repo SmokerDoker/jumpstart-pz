@@ -110,6 +110,7 @@ in-process restart of the game's start phases) or *restart*.
 - [x] The same on servers: the server loads the containers, its tick puts the placeholders in and the items back, and the clients near a container are told (`GameServer.sendAddItemToContainer`, `sendRemoveItemFromContainer`); a client changes nothing. Not covered: a client that gets a chunk from the server's files before the server saved it again sees the placeholder only after that save; inventories a client loads itself. Untested in the game
 - [x] Performance measurement per mod (P in the installed tab, in a game): for 10 seconds of play a helper thread looks at the main thread every 3 ms and credits each look to the mod whose code runs (the innermost frame of a mod's Java package; inside Lua the mod whose folder holds the running Lua file, so a Lua mod's calls into the game count for it), else to the game. The details show each mod's milliseconds per frame and share of the main thread (Java and Lua), the screen a summary. Costs nothing while it does not measure. A statistical picture: a patch's advice runs inside game methods without a frame of its own and counts for the game; a library a mod got its own copy of (`jslibN.`) counts for the code that called it. Not on a dedicated server (no frames there). Untested in the game
 - [x] Lean main menu: it loads only ZombieBuddy, the mods load once with the game (saves 2 to 3 minutes at start with many mods)
+- [ ] **Bug (found 2026-11-28 by the in-game tests):** a new single player game started from the menu runs its first session without the menu's mods. The game's own New Game never reloads Lua (the full menu had loaded the mods already); with the lean menu they were never loaded. Continuing the save loads them (the menu's Continue resets Lua). Multiplayer joins are not affected (they load the server's list). Java mods in the menu's list are not loaded in the menu either. Fix to decide: load the menu's list when New Game is chosen (a Lua reset like the menu's mod screen does), or no lean menu for single player
 - [x] Jumpstart's Lua recording reports its own time in the log ("recording took ... ms")
 - [ ] Join: skip the game's second load of all mods when the menu already has the server's list (research; deep in the game's loading)
 - [ ] Slow PCs lose the connection while the game loads its tiles on join (game side)
@@ -119,14 +120,15 @@ in-process restart of the game's start phases) or *restart*.
 
 ## Tests in the real game still to do
 
-- [ ] Crash protection and clean removal with real mods in a normal save
+- [ ] Crash protection and clean removal with real mods in a normal save (with the test mods: done 2026-11-28, see below)
+- [x] By the in-game tests, 2026-11-28, all OK: `gametest.ps1` (secure screen, BiteCheck's real index, a Java mod loaded, off, on, reloaded; libraries; sharing) and with `-CrashMod -FullMenu` the crash protection (a throwing patch: banner, switched off, the game runs on); `startmodtest.ps1 -FullMenu` (a Lua mod that came with the save completely off and on again); `cleanremovaltest.ps1`; `savetest.ps1` (live items with their recipe, the game's 965 recipes and their inputs unchanged, placeholders, L, P, C)
 - [ ] Dependencies (e.g. a library and the car mods that need it)
 - [ ] Busy notice and download progress
 - [ ] Restoring a snapshot; static Java values restored
 - [x] Switching a mod off and on for everybody on a real server (Linux, 0.5.5)
 - [ ] Install, update and remove for everybody on a real server
-- [ ] `tools\startmodtest.ps1` after its last fix; `tools\gametest.ps1` with the current build
-- [ ] Items live (0.5.12): `tools/testmods/JSTItemTest` loads live in the game now (savetest.ps1, after the two fixes); still to see: its recipe, and that vanilla recipes still work after it
+- [x] `tools\startmodtest.ps1` after its last fix; `tools\gametest.ps1` with the current build (both need `-FullMenu` until the lean menu bug above is fixed)
+- [x] Items live (0.5.12): `tools/testmods/JSTItemTest` loads live with its recipe, and the game's recipes keep their inputs (savetest.ps1, after the two fixes)
 - [ ] Marketplace keys (0.5.12): sorting, N/V/H, a conflict shown, a version loaded back, "verified updates only"
 - [ ] Multiplayer (0.5.11): emergency switch-off (X twice), a snapshot during a round, choosing a mod of an item,
   a player who joins after a live install is not turned away for a checksum

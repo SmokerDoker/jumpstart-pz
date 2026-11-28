@@ -25,6 +25,8 @@ class CrashReportTest {
         Path game = Files.createDirectories(tmp.resolve("game"));
         Files.writeString(game.resolve("hs_err_pid123.log"), "# A fatal error has been detected");
         Files.writeString(game.resolve("readme.log"), "not a crash file");
+        Path old = Files.writeString(game.resolve("hs_err_pid99.log"), "# a crash months ago");
+        Files.setLastModifiedTime(old, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() - 30L * 86_400_000L));
 
         Path zip = CrashReport.write(zomboid, game, "Guns\tJAVA\ton\n", "");
 

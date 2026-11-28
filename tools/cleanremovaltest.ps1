@@ -50,8 +50,11 @@ function SelectMod($id) {
     for ($i = 0; $i -lt 80; $i++) { $s = Screen; if ($s -like "* selected=$id *") { return $s }; Key down }
     return Screen
 }
-# a new game waits paused for its first click ("click to start"): no ticks run until then
+# a loaded game waits on "click to start" (GameLoadingState): the test clicks it; then the game runs
 function Unpause() {
+    $deadline = (Get-Date).AddSeconds(90)
+    do { $c = Lua "return Jumpstart.testClickToStart()"; if ($c -ne "not loading") { Start-Sleep 2 } } until ($c -eq "not loading" -or (Get-Date) -gt $deadline)
+    if ($c -ne "not loading") { Log "     click to start: $c" }
     $s = Lua "if getGameSpeed() == 0 then setGameSpeed(1) end return tostring(getGameSpeed())"
     if ($s -ne "1") { Log "     game speed: $s" }
     Start-Sleep 1
@@ -96,6 +99,7 @@ $deadline = (Get-Date).AddMinutes($WaitForSaveMinutes)
 do { Start-Sleep 5; $player = Lua "return tostring(getPlayer() ~= nil)" } until ($player -eq "true" -or (Get-Date) -gt $deadline)
 Check "a single player game runs" $player ($player -eq "true")
 Start-Sleep 5
+Unpause # into the game: past "click to start"
 $gameFn = Lua "return tostring(luautils.stringStarts)"
 
 # --- snapshot before the first switch ------------------------------------------------------------
